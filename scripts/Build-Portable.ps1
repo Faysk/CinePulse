@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '1.0.0-rc.2',
+    [string]$Version = '1.0.0-rc.3',
     [string]$Repository = ''
 )
 
@@ -24,7 +24,7 @@ New-Item -ItemType Directory -Path $Dist -Force | Out-Null
 
 $Files = @(
     '.env.example', '.gitattributes', '.gitignore', 'CHANGELOG.md', 'CONTRIBUTING.md',
-    'CinePulse.cmd', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
+    'CinePulse.cmd', 'Install-CinePulse.cmd', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
     'pyproject.toml', 'requirements.lock'
 )
 $Directories = @('assets', 'docs', 'installer', 'src')

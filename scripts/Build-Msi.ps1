@@ -1,11 +1,12 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '1.0.0-rc.2'
+    [string]$Version = '1.0.0-rc.3',
+    [string]$Repository = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-& (Join-Path $PSScriptRoot 'Build-Portable.ps1') -Version $Version
+& (Join-Path $PSScriptRoot 'Build-Portable.ps1') -Version $Version -Repository $Repository
 if (-not $?) { throw 'O pacote-base do MSI falhou.' }
 
 $RuntimeRoot = Join-Path $ProjectRoot '.runtime'

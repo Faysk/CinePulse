@@ -1,4 +1,4 @@
-# Validação da versão 1.0.0-rc.2
+# Validação da versão 1.0.0-rc.3
 
 Data: 2026-08-04  
 Ambiente: Windows 11, Python portátil 3.13.7, FFmpeg 8.1.2/9.0, RTX 4070 Laptop 8 GB, 28 threads de CPU.
@@ -66,7 +66,9 @@ A confirmação por frequência demonstra que o áudio original de 440 Hz do cli
 - banco Windows Installer validado, com as exceções documentadas do harvest per-user;
 - extração administrativa real aprovada;
 - launcher e manifesto de instalação encontrados dentro do MSI;
-- atalho do Menu Iniciar incluído e instalação completa acionada automaticamente após o MSI;
+- atalhos do Menu Iniciar e da Área de Trabalho incluídos;
+- instalação completa acionada automaticamente em janela visível após o MSI, usando PowerShell 7 quando disponível e registrando log permanente;
+- instalação portátil validada em `G:\CinePulse`, com atalho real apontando para `G:\CinePulse\CinePulse.cmd`;
 - extração administrativa não aciona downloads, preservando cenários corporativos de implantação.
 
 O SHA-256 definitivo de cada artefato fica no manifesto externo criado ao lado do pacote, evitando inserir no próprio arquivo um hash circular e inevitavelmente desatualizado.

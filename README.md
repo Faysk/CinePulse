@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.0.0-rc.2`. O produto está tecnicamente fechado como candidato à versão estável. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal; os demais modelos detectados são extensões futuras e não são anunciados como funções prontas.
+> Estado: `1.0.0-rc.3`. O produto está tecnicamente fechado como candidato à versão estável. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal; os demais modelos detectados são extensões futuras e não são anunciados como funções prontas.
 
 ## O que já funciona
 
@@ -26,9 +26,9 @@ CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora ví
 
 ## Início rápido no Windows
 
-1. Execute `CinePulse.cmd` ou instale o MSI.
-2. Na primeira abertura, aguarde o instalador baixar e verificar o núcleo, FFmpeg e as IAs utilizadas.
-3. A interface só abre quando os componentes obrigatórios estiverem prontos.
+1. Para a experiência mais simples, instale o MSI. Ele cria atalhos no Menu Iniciar e na Área de Trabalho e abre uma janela visível para preparar todos os componentes.
+2. No pacote portátil, extraia o ZIP e execute `Install-CinePulse.cmd` uma vez. A janela mostra as etapas, grava `data/logs/installer.log` e cria o atalho da Área de Trabalho.
+3. Abra pelo atalho ou por `CinePulse.cmd`. A interface só abre quando os componentes obrigatórios estiverem prontos.
 
 Para reutilizar os componentes da instalação de desenvolvimento existente, sem copiá-los para o Git:
 

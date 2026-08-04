@@ -18,6 +18,21 @@ $PortableMarker = Join-Path $ProjectRoot '.cinepulse-portable'
 $InstallState = Join-Path $RuntimeRoot 'install-state.txt'
 $BootstrapManifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap-manifest.json') -Raw | ConvertFrom-Json
 $UvExe = $null
+$TranscriptStarted = $false
+
+if ($InstallOnly) {
+    try { $Host.UI.RawUI.WindowTitle = 'CinePulse - Instalando componentes locais' } catch { }
+    $InstallerLog = Join-Path $ProjectRoot 'data\logs\installer.log'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $InstallerLog) -Force | Out-Null
+    try {
+        Start-Transcript -LiteralPath $InstallerLog -Append | Out-Null
+        $TranscriptStarted = $true
+    } catch {
+        Write-Warning "Não foi possível iniciar o log permanente: $($_.Exception.Message)"
+    }
+    Write-Host 'CINEPULSE_INSTALL_START modo=completo'
+    Write-Host "Pasta do programa: $ProjectRoot"
+}
 
 function Apply-PendingUpdate {
     $PendingFile = Join-Path $RuntimeRoot 'pending-update.json'
@@ -42,7 +57,7 @@ function Apply-PendingUpdate {
     New-Item -ItemType Directory -Path $Backup -Force | Out-Null
     $RootFiles = @(
         '.env.example', '.gitattributes', '.gitignore', 'CHANGELOG.md', 'CONTRIBUTING.md',
-        'CinePulse.cmd', 'cinepulse-files.json', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
+        'CinePulse.cmd', 'Install-CinePulse.cmd', 'cinepulse-files.json', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
         'pyproject.toml', 'requirements.lock'
     )
     $Directories = @('assets', 'docs', 'installer', 'src')
@@ -105,6 +120,20 @@ function Find-SystemPython {
         if ($Command) { return $Command.Source }
     }
     return $null
+}
+
+function Install-DesktopShortcut {
+    if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot 'cinepulse-files.json'))) { return }
+    $Desktop = [Environment]::GetFolderPath('DesktopDirectory')
+    if (-not $Desktop) { return }
+    $ShortcutPath = Join-Path $Desktop 'CinePulse.lnk'
+    $Shell = New-Object -ComObject WScript.Shell
+    $Shortcut = $Shell.CreateShortcut($ShortcutPath)
+    $Shortcut.TargetPath = Join-Path $ProjectRoot 'CinePulse.cmd'
+    $Shortcut.WorkingDirectory = $ProjectRoot
+    $Shortcut.Description = 'CinePulse - estúdio local de vídeo e visuais musicais'
+    $Shortcut.Save()
+    Write-Host "Atalho criado: $ShortcutPath"
 }
 
 function Get-PortableUv {
@@ -347,6 +376,7 @@ if ($Repair -and (Test-Path -LiteralPath $VenvRoot)) {
     Remove-Item -LiteralPath $ResolvedVenv -Recurse -Force
 }
 
+if ($InstallOnly) { Write-Host '[1/4] Preparando o ambiente Python privado...' }
 if (-not (Test-Path -LiteralPath $PythonExe)) {
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
     $SystemPython = if ($ForcePortableRuntime) { $null } else { Find-SystemPython }
@@ -372,6 +402,7 @@ $ProjectHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ProjectR
 $LockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ProjectRoot 'requirements.lock')).Hash
 $ExpectedState = "$ProjectHash`n$LockHash"
 $CurrentState = if (Test-Path -LiteralPath $InstallState) { Get-Content -LiteralPath $InstallState -Raw } else { '' }
+if ($InstallOnly) { Write-Host '[2/4] Verificando dependências do CinePulse...' }
 if ($Repair -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
     & $PythonExe -m pip --version *> $null
     if ($LASTEXITCODE -eq 0) {
@@ -390,12 +421,19 @@ if ($Repair -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
 }
 
 # A build portátil fixada garante os mesmos codecs, HDR e libvmaf em qualquer computador.
+if ($InstallOnly) { Write-Host '[3/4] Verificando FFmpeg, codecs, HDR e VMAF...' }
 Install-PortableFfmpeg
 
 if (-not $CoreOnly) {
+    if ($InstallOnly) { Write-Host '[4/4] Verificando Real-ESRGAN, RIFE, PyTorch e Demucs...' }
     Install-CompleteComponents
 }
-if ($InstallOnly) { exit 0 }
+if ($InstallOnly) {
+    Install-DesktopShortcut
+    Write-Host 'CINEPULSE_INSTALL_COMPLETE status=OK'
+    if ($TranscriptStarted) { Stop-Transcript | Out-Null }
+    exit 0
+}
 
 if ($Diagnostics) {
     & $PythonExe -m cinepulse.diagnostics

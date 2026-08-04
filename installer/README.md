@@ -1,10 +1,11 @@
 # Inicialização portátil
 
-Execute `CinePulse.cmd`. Na primeira abertura, o instalador prepara tudo antes de liberar a interface: Python privado, FFmpeg completo, Real-ESRGAN, RIFE, PyTorch CUDA, Demucs e os quatro pesos `htdemucs_ft`. Todos os downloads possuem versão fixa e hash; uma falha interrompe a abertura em vez de deixar um programa parcialmente funcional.
+No pacote portátil, execute `Install-CinePulse.cmd` uma vez. Ele seleciona PowerShell 7 quando disponível, mantém uma janela visível com o resultado, grava `data\logs\installer.log` e cria um atalho na Área de Trabalho. A instalação prepara Python privado, FFmpeg completo, Real-ESRGAN, RIFE, PyTorch CUDA, Demucs e os quatro pesos `htdemucs_ft`. Todos os downloads possuem versão fixa e hash; uma falha interrompe a instalação em vez de deixar um programa parcialmente funcional.
 
 O primeiro preparo baixa aproximadamente 3,5 GB e pode ocupar mais espaço durante a instalação. As próximas aberturas apenas verificam os marcadores e arquivos obrigatórios.
 
 - `CinePulse.cmd`: inicialização normal e portátil.
+- `Install-CinePulse.cmd`: instalação completa visível, com log, resultado final e atalho.
 - `installer\Start-CinePulse.ps1 -Repair`: recria apenas o ambiente interno.
 - `installer\Start-CinePulse.ps1 -Diagnostics`: gera um diagnóstico local sem listar projetos ou nomes de mídia.
 - `installer\Start-CinePulse.ps1 -NonPortable`: guarda dados em `%LOCALAPPDATA%\CinePulse`.
@@ -17,7 +18,7 @@ O CinePulse usa sua própria build FFmpeg 9.0 mesmo se houver outra no sistema, 
 
 ## MSI para Windows
 
-`scripts\Build-Msi.ps1` gera um MSI x64 validado e um manifesto SHA-256. O MSI instala o núcleo no perfil do usuário, cria o atalho no Menu Iniciar e abre automaticamente a instalação completa dos componentes. Essa janela pode continuar por alguns minutos depois que o assistente do MSI fechar. O SDK .NET e o WiX usados para compilar ficam apenas em `.runtime` do desenvolvedor e não entram no pacote final.
+`scripts\Build-Msi.ps1` gera um MSI x64 validado e um manifesto SHA-256. O MSI instala o núcleo no perfil do usuário, cria atalhos no Menu Iniciar e na Área de Trabalho e abre automaticamente a instalação completa dos componentes em uma janela dedicada. Essa janela exibe as etapas e permanece aberta para informar sucesso ou erro. O SDK .NET e o WiX usados para compilar ficam apenas em `.runtime` do desenvolvedor e não entram no pacote final.
 
 ## Atualizações
 

@@ -54,7 +54,7 @@ def main() -> int:
     require(bool(re.fullmatch(r"[0-9a-f]{128}", str(sdk.get("sha512", "")).lower())), "SHA-512 inválido para SDK .NET", failures)
 
     required = (
-        "CinePulse.cmd", "LICENSE", "README.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
+        "CinePulse.cmd", "Install-CinePulse.cmd", "LICENSE", "README.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
         "requirements.lock", "installer/Start-CinePulse.ps1", "installer/wix/Product.wxs",
         "scripts/Build-Msi.ps1", "docs/VALIDATION.md",
     )

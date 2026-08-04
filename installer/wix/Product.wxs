@@ -38,17 +38,36 @@
       </Directory>
     </StandardDirectory>
 
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="12D2C630-8E04-4A32-AD1B-B49D592A6F4B">
+        <Shortcut
+          Id="CinePulseDesktopShortcut"
+          Name="CinePulse"
+          Description="Estúdio local de vídeo e visuais musicais"
+          Target="[INSTALLFOLDER]CinePulse.cmd"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\CinePulse"
+          Name="DesktopShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
     <Feature Id="MainFeature" Title="CinePulse" Level="1">
       <Files Directory="INSTALLFOLDER" Include="!(bindpath.Payload)\**">
         <Exclude Files="!(bindpath.Payload)\.cinepulse-portable" />
       </Files>
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
     <CustomAction
       Id="LaunchCompleteSetup"
       Directory="INSTALLFOLDER"
-      ExeCommand="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]installer\Start-CinePulse.ps1&quot; -InstallOnly"
+      ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /D /C start &quot;&quot; &quot;[INSTALLFOLDER]Install-CinePulse.cmd&quot;"
       Execute="immediate"
       Impersonate="yes"
       Return="asyncNoWait" />

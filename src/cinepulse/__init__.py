@@ -1,3 +1,3 @@
 """CinePulse - estúdio local de vídeo e visuais musicais."""
 
-__version__ = "1.0.0-rc.2"
+__version__ = "1.0.0-rc.3"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.3 — 2026-08-04
+
+- instalação completa agora abre uma janela visível, mantém o resultado na tela e grava `data/logs/installer.log`;
+- PowerShell 7 é selecionado automaticamente quando instalado, com fallback seguro para Windows PowerShell;
+- MSI e pacote portátil criam um atalho do CinePulse na Área de Trabalho;
+- MSI inicia o provisionamento completo por um instalador dedicado, com etapas e indicação clara de sucesso ou erro.
+
 ## 1.0.0-rc.2 — 2026-08-04
 
 - instalação completa antes da primeira abertura, incluindo Real-ESRGAN, RIFE, Demucs e seus modelos;
