@@ -66,7 +66,8 @@ A confirmação por frequência demonstra que o áudio original de 440 Hz do cli
 - banco Windows Installer validado, com as exceções documentadas do harvest per-user;
 - extração administrativa real aprovada;
 - launcher e manifesto de instalação encontrados dentro do MSI;
-- atalho do Menu Iniciar incluído; o primeiro início executa o instalador completo antes da interface.
+- atalho do Menu Iniciar incluído e instalação completa acionada automaticamente após o MSI;
+- extração administrativa não aciona downloads, preservando cenários corporativos de implantação.
 
 O SHA-256 definitivo de cada artefato fica no manifesto externo criado ao lado do pacote, evitando inserir no próprio arquivo um hash circular e inevitavelmente desatualizado.
 

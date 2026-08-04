@@ -44,5 +44,16 @@
       </Files>
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
+
+    <CustomAction
+      Id="LaunchCompleteSetup"
+      Directory="INSTALLFOLDER"
+      ExeCommand="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]installer\Start-CinePulse.ps1&quot; -InstallOnly"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="asyncNoWait" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchCompleteSetup" After="InstallFinalize" Condition="NOT Installed AND ACTION &lt;&gt; &quot;ADMIN&quot;" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>

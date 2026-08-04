@@ -17,7 +17,7 @@ O CinePulse usa sua própria build FFmpeg 9.0 mesmo se houver outra no sistema, 
 
 ## MSI para Windows
 
-`scripts\Build-Msi.ps1` gera um MSI x64 validado e um manifesto SHA-256. O MSI instala o núcleo no perfil do usuário e cria o atalho no Menu Iniciar; ao abrir pela primeira vez, o mesmo instalador completo termina os componentes antes da interface. O SDK .NET e o WiX usados para compilar ficam apenas em `.runtime` do desenvolvedor e não entram no pacote final.
+`scripts\Build-Msi.ps1` gera um MSI x64 validado e um manifesto SHA-256. O MSI instala o núcleo no perfil do usuário, cria o atalho no Menu Iniciar e abre automaticamente a instalação completa dos componentes. Essa janela pode continuar por alguns minutos depois que o assistente do MSI fechar. O SDK .NET e o WiX usados para compilar ficam apenas em `.runtime` do desenvolvedor e não entram no pacote final.
 
 ## Atualizações
 
