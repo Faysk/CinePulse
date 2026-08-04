@@ -1,0 +1,26 @@
+[CmdletBinding()]
+param(
+    [string]$Version = '1.0.0-rc.2'
+)
+
+$ErrorActionPreference = 'Stop'
+$ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$RuntimeRoot = [IO.Path]::GetFullPath((Join-Path $ProjectRoot '.runtime'))
+$SmokeRoot = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot 'msi-smoke'))
+if (-not $SmokeRoot.StartsWith($RuntimeRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Destino de teste fora do ambiente privado.'
+}
+$Msi = Join-Path $ProjectRoot "dist\CinePulse-$Version-Setup.msi"
+if (-not (Test-Path -LiteralPath $Msi)) { throw 'MSI não encontrado.' }
+if (Test-Path -LiteralPath $SmokeRoot) { Remove-Item -LiteralPath $SmokeRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $SmokeRoot -Force | Out-Null
+try {
+    $Process = Start-Process msiexec.exe -ArgumentList @('/a', "`"$Msi`"", '/qn', "TARGETDIR=`"$SmokeRoot`"") -Wait -PassThru
+    if ($Process.ExitCode -ne 0) { throw "A extração administrativa do MSI falhou: $($Process.ExitCode)." }
+    $Launcher = Get-ChildItem -LiteralPath $SmokeRoot -Recurse -File -Filter 'CinePulse.cmd' | Select-Object -First 1
+    $Bootstrap = Get-ChildItem -LiteralPath $SmokeRoot -Recurse -File -Filter 'bootstrap-manifest.json' | Select-Object -First 1
+    if (-not $Launcher -or -not $Bootstrap) { throw 'O MSI não contém o launcher e o manifesto de instalação.' }
+    Write-Host 'CINEPULSE_MSI_SMOKE_OK launcher=present bootstrap=present'
+} finally {
+    if (Test-Path -LiteralPath $SmokeRoot) { Remove-Item -LiteralPath $SmokeRoot -Recurse -Force }
+}

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+import os
+import shutil
+import subprocess
 
 from .paths import PATHS, component_path
 
@@ -20,10 +24,11 @@ class AiModule:
     purpose: str
     required: tuple[Path, ...]
     activation: str = "Aguardando validação"
+    detector: Callable[[], bool] | None = None
 
     @property
     def installed(self) -> bool:
-        return all(path.exists() for path in self.required)
+        return self.detector() if self.detector else all(path.exists() for path in self.required)
 
     @property
     def size_bytes(self) -> int:
@@ -38,6 +43,23 @@ RIFE_DIR = MODELS / "rife" / "portable" / "rife-ncnn-vulkan-20221029-windows"
 RIFE_EXE = RIFE_DIR / "rife-ncnn-vulkan.exe"
 RIFE_PYTHON_MODEL = MODELS / "rife" / "practical-rife-4.25" / "train_log" / "flownet.pkl"
 RIFE_SCRIPT = REPOS / "practical-rife" / "inference_video.py"
+RIFE_NCNN_MODEL = RIFE_DIR / "rife-v4.6"
+
+
+def _vmaf_available() -> bool:
+    ffmpeg = PATHS.components / "ffmpeg" / "bin" / "ffmpeg.exe"
+    executable = str(ffmpeg) if ffmpeg.is_file() else shutil.which("ffmpeg")
+    if not executable:
+        return False
+    try:
+        result = subprocess.run(
+            [executable, "-hide_banner", "-filters"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=8,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        return result.returncode == 0 and "libvmaf" in result.stdout.lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 MODULES = (
     AiModule(
@@ -50,7 +72,7 @@ MODULES = (
     ),
     AiModule(
         "rife", "RIFE 4.6 NCNN / 4.25", "Interpolação neural de quadros para 60/120 fps",
-        (VENV_PYTHON, RIFE_SCRIPT, RIFE_PYTHON_MODEL, RIFE_EXE),
+        (RIFE_EXE, RIFE_NCNN_MODEL / "flownet.bin", RIFE_NCNN_MODEL / "flownet.param"),
         "Integrado, validado e com fallback FFmpeg",
     ),
     AiModule(
@@ -60,7 +82,7 @@ MODULES = (
     ),
     AiModule(
         "demucs", "Hybrid Transformer Demucs", "Separação de voz, bateria, baixo e instrumentos",
-        tuple(MODELS / "demucs" / name for name in (
+        (VENV_PYTHON,) + tuple(MODELS / "demucs" / "local_repo" / name for name in (
             "f7e0c4bc-ba3fe64a.th", "d12395a8-e57c48e6.th",
             "92cfc3b6-ef3bcb9c.th", "04573f0d-f3cf25b2.th",
         )), "Integrado e validado para condução dos VFX",
@@ -90,8 +112,7 @@ MODULES = (
     ),
     AiModule(
         "vmaf", "Netflix VMAF", "Medição perceptiva e comparação de qualidade",
-        (REPOS / "vmaf", AI_ROOT / "runtime" / "ffmpeg-vmaf"),
-        "Integrado e validado em amostra perceptiva",
+        (), "Integrado e validado em amostra perceptiva", _vmaf_available,
     ),
     AiModule(
         "ltx2", "LTX-2.3", "Geração local opcional de áudio e vídeo",

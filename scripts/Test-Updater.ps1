@@ -8,7 +8,7 @@ $SmokeRoot = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot 'updater-smoke'))
 if (-not $SmokeRoot.StartsWith($RuntimeRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Destino de teste fora do ambiente privado.'
 }
-$Archive = Join-Path $ProjectRoot 'dist\CinePulse-1.0.0-rc.1-windows-portable.zip'
+$Archive = Join-Path $ProjectRoot 'dist\CinePulse-1.0.0-rc.2-windows-portable.zip'
 if (-not (Test-Path -LiteralPath $Archive)) { throw 'Monte o pacote antes do teste do atualizador.' }
 if (Test-Path -LiteralPath $SmokeRoot) { Remove-Item -LiteralPath $SmokeRoot -Recurse -Force }
 
@@ -19,13 +19,13 @@ try {
     Expand-Archive -LiteralPath $Archive -DestinationPath $IncomingParent
     $Target = Join-Path $TargetParent 'CinePulse'
     $IncomingOriginal = Join-Path $IncomingParent 'CinePulse'
-    $Stage = Join-Path $Target '.runtime\updates\1.0.0-rc.1\extracted\CinePulse'
+    $Stage = Join-Path $Target '.runtime\updates\1.0.0-rc.2\extracted\CinePulse'
     New-Item -ItemType Directory -Path (Split-Path -Parent $Stage) -Force | Out-Null
     Move-Item -LiteralPath $IncomingOriginal -Destination $Stage
     New-Item -ItemType Directory -Path (Join-Path $Target 'data') -Force | Out-Null
     New-Item -ItemType File -Path (Join-Path $Target 'data\preserve-me.txt') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Target '.runtime') -Force | Out-Null
-    @{ schema = 1; version = '1.0.0-rc.1'; source = $Stage } | ConvertTo-Json |
+    @{ schema = 1; version = '1.0.0-rc.2'; source = $Stage } | ConvertTo-Json |
         Set-Content -LiteralPath (Join-Path $Target '.runtime\pending-update.json') -Encoding UTF8
 
     & (Join-Path $Target 'installer\Start-CinePulse.ps1') -ApplyUpdateOnly

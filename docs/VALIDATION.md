@@ -1,4 +1,4 @@
-# Validação da versão 1.0.0-rc.1
+# Validação da versão 1.0.0-rc.2
 
 Data: 2026-08-04  
 Ambiente: Windows 11, Python portátil 3.13.7, FFmpeg 8.1.2/9.0, RTX 4070 Laptop 8 GB, 28 threads de CPU.
@@ -48,7 +48,27 @@ A confirmação por frequência demonstra que o áudio original de 440 Hz do cli
 - atualizador preparado para baixar, verificar, instalar no reinício e restaurar a versão anterior em caso de falha;
 - manifesto interno permite detectar arquivos ausentes ou alterados.
 
-Artefato RC atual: `CinePulse-1.0.0-rc.1-windows-portable.zip`. O SHA-256 definitivo fica no manifesto externo criado ao lado do ZIP, evitando inserir no próprio pacote um hash circular e inevitavelmente desatualizado.
+## Instalação completa RC2
+
+- instalação limpa executada em `G:\CinePulse` sem reutilizar os componentes legados;
+- Real-ESRGAN e RIFE baixados das releases oficiais e promovidos somente após SHA-256;
+- PyTorch 2.11.0 CUDA 12.6 e torchaudio instalados no ambiente privado do Demucs;
+- quatro pesos `htdemucs_ft` baixados e validados pelo hash completo;
+- CUDA confirmada na NVIDIA GeForce RTX 4070 Laptop GPU;
+- FFmpeg 9.0 privado confirmou o filtro `libvmaf`;
+- diagnóstico final confirmou Real-ESRGAN, RIFE, Demucs e VMAF como instalados;
+- integridade final: 55 arquivos do núcleo conferidos, nenhum ausente ou alterado;
+- segunda execução concluiu em poucos segundos sem baixar novamente os componentes.
+
+## MSI
+
+- MSI x64 compilado com WiX 6.0.2 usando SDK .NET privado e verificado;
+- banco Windows Installer validado, com as exceções documentadas do harvest per-user;
+- extração administrativa real aprovada;
+- launcher e manifesto de instalação encontrados dentro do MSI;
+- atalho do Menu Iniciar incluído; o primeiro início executa o instalador completo antes da interface.
+
+O SHA-256 definitivo de cada artefato fica no manifesto externo criado ao lado do pacote, evitando inserir no próprio arquivo um hash circular e inevitavelmente desatualizado.
 
 ## Limites desta validação
 

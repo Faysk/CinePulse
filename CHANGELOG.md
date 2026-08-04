@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.2 — 2026-08-04
+
+- instalação completa antes da primeira abertura, incluindo Real-ESRGAN, RIFE, Demucs e seus modelos;
+- downloads oficiais fixados e conferidos por SHA-256, com troca atômica dos componentes;
+- ambiente privado CUDA/PyTorch para Demucs, sem depender do Python do usuário;
+- preset adaptado automaticamente quando uma instalação antiga estiver incompleta;
+- comando de reparo/instalação acessível pela interface e preparação de pacote MSI.
+
 ## 1.0.0-rc.1 — 2026-08-04
 
 - pré-verificação separada para disco de saída e temporários, teste de escrita e proteção das mídias de entrada;

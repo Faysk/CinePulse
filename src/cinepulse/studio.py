@@ -510,6 +510,26 @@ class VideoOptimizerStudio:
             self.status.set("Real-ESRGAN selecionado: GPU automática reativada.")
         self._update_summary()
 
+    def _ensure_available_features(self) -> None:
+        missing: list[str] = []
+        if self.enhancement.get() == ENHANCE_AI and not REAL_ESRGAN.is_file():
+            self.enhancement.set(ENHANCE_SIMPLE)
+            missing.append("Real-ESRGAN")
+        if self.interpolation.get() == RIFE_OPTION and not RIFE_EXE.is_file():
+            self.interpolation.set("Movimento suave — FFmpeg")
+            missing.append("RIFE")
+        demucs_ready = ai_suite.VENV_PYTHON.is_file() and (
+            ai_suite.MODELS / "demucs" / "local_repo" / "htdemucs_ft.yaml"
+        ).is_file()
+        if self.use_stems.get() and not demucs_ready:
+            self.use_stems.set(False)
+            missing.append("Demucs")
+        if missing:
+            self.status.set(
+                "Preset adaptado porque faltam componentes: " + ", ".join(missing) + ". Use ‘Instalar componentes’."
+            )
+        self._update_summary()
+
     def _visual_scale_changed(self, _value=None) -> None:
         self.intensity_text.set(f"{self.intensity.get():.0f}%")
         self.occupancy_text.set(f"{self.occupancy.get():.0f}%")
@@ -689,6 +709,7 @@ class VideoOptimizerStudio:
         self._visual_scale_changed()
         self._update_mode()
         self.status.set(f"Preset aplicado: {self.preset_name.get()}")
+        self._ensure_available_features()
 
     def _save_new_preset(self) -> None:
         name = simpledialog.askstring(APP_TITLE, "Nome do novo preset:", parent=self.root)
@@ -853,6 +874,7 @@ class VideoOptimizerStudio:
         actions = ttk.Frame(parent)
         actions.grid(row=4, column=0, sticky="w", pady=(14, 0))
         ttk.Button(actions, text="Criar diagnóstico", command=self._create_diagnostics).pack(side="left")
+        ttk.Button(actions, text="Instalar componentes", command=self._install_components).pack(side="left", padx=(8, 0))
         self.update_button = ttk.Button(actions, text="Verificar atualizações", command=self._check_updates)
         self.update_button.pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Abrir dados do CinePulse", command=lambda: os.startfile(PATHS.data)).pack(side="left", padx=(8, 0))
@@ -2534,6 +2556,28 @@ class VideoOptimizerStudio:
         except Exception as exc:
             self._log(f"Falha ao criar diagnóstico: {exc}")
             messagebox.showerror(APP_TITLE, f"Não foi possível criar o diagnóstico.\n\n{exc}")
+
+    def _install_components(self) -> None:
+        installer = APP_DIR / "installer" / "Start-CinePulse.ps1"
+        if not installer.is_file():
+            messagebox.showerror(APP_TITLE, "O instalador de componentes não foi encontrado.")
+            return
+        try:
+            subprocess.Popen(
+                [
+                    "powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(installer), "-InstallOnly",
+                ],
+                cwd=str(APP_DIR),
+                creationflags=0x00000010 if os.name == "nt" else 0,
+            )
+            messagebox.showinfo(
+                APP_TITLE,
+                "A instalação completa foi aberta em uma janela separada.\n\n"
+                "Quando ela terminar, reinicie o CinePulse para ativar os componentes.",
+            )
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"Não foi possível abrir o instalador.\n\n{exc}")
 
     def _check_updates(self) -> None:
         feed = update_manager.configured_feed()

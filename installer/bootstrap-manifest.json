@@ -13,5 +13,45 @@
     "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0/ffmpeg-9.0-full_build.zip",
     "sha256": "f42f0c4b04eae3ac918707ff66e3e0ff0cee527bfa6d322624d4bc1160d5055e",
     "license": "GPL-3.0"
+  },
+  "real_esrgan": {
+    "version": "0.2.5.0-ncnn-20220424",
+    "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip",
+    "sha256": "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d",
+    "license": "BSD-3-Clause"
+  },
+  "rife": {
+    "version": "ncnn-20221029",
+    "url": "https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-windows.zip",
+    "sha256": "d8e4d772d26cd8006ef0ad0bc82eb191b53c68677d1ae2f42506d74cbbbea606",
+    "license": "MIT"
+  },
+  "demucs": {
+    "version": "4.1.0",
+    "torch_version": "2.11.0+cu126",
+    "torchaudio_version": "2.11.0+cu126",
+    "torch_index": "https://download.pytorch.org/whl/cu126",
+    "weights": [
+      {
+        "file": "f7e0c4bc-ba3fe64a.th",
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+        "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066"
+      },
+      {
+        "file": "d12395a8-e57c48e6.th",
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+        "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6"
+      },
+      {
+        "file": "92cfc3b6-ef3bcb9c.th",
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+        "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2"
+      },
+      {
+        "file": "04573f0d-f3cf25b2.th",
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49"
+      }
+    ]
   }
 }

@@ -17,7 +17,8 @@ O repositório do CinePulse contém integração, mas não deve conter binários
 | VMAF | avaliação perceptiva | não | biblioteca, modelos e build do FFmpeg |
 | LTX | geração experimental | não | código e checkpoint são avaliados separadamente |
 
+O instalador RC2 baixa diretamente das fontes oficiais versões fixadas de Real-ESRGAN NCNN, RIFE NCNN e Demucs. PyTorch e torchaudio vêm do índice CUDA oficial do projeto PyTorch. O FFmpeg completo utilizado atualmente é GPL-3.0. Nenhum desses binários ou pesos é relicenciado pela licença MIT do CinePulse.
+
 Antes de uma release, fixe a versão, URL oficial, SHA-256, licença e permissão de redistribuição de cada artefato em `src/cinepulse/resources/components.catalog.json`. Se a redistribuição não estiver claramente permitida, o instalador deve direcionar o usuário à fonte oficial ou fazer download sob solicitação, sem espelhar o arquivo.
 
 Este documento organiza o projeto; não substitui aconselhamento jurídico.
-

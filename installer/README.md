@@ -1,6 +1,8 @@
 # Inicialização portátil
 
-Execute `CinePulse.cmd`. Na primeira abertura, o iniciador cria um ambiente Python dentro de `.runtime`, instala somente as dependências do aplicativo e mantém configurações em `data`. Se Python não existir, baixa o inicializador `uv` em versão fixada, confere SHA-256 e instala Python portátil na própria pasta.
+Execute `CinePulse.cmd`. Na primeira abertura, o instalador prepara tudo antes de liberar a interface: Python privado, FFmpeg completo, Real-ESRGAN, RIFE, PyTorch CUDA, Demucs e os quatro pesos `htdemucs_ft`. Todos os downloads possuem versão fixa e hash; uma falha interrompe a abertura em vez de deixar um programa parcialmente funcional.
+
+O primeiro preparo baixa aproximadamente 3,5 GB e pode ocupar mais espaço durante a instalação. As próximas aberturas apenas verificam os marcadores e arquivos obrigatórios.
 
 - `CinePulse.cmd`: inicialização normal e portátil.
 - `installer\Start-CinePulse.ps1 -Repair`: recria apenas o ambiente interno.
@@ -8,8 +10,14 @@ Execute `CinePulse.cmd`. Na primeira abertura, o iniciador cria um ambiente Pyth
 - `installer\Start-CinePulse.ps1 -NonPortable`: guarda dados em `%LOCALAPPDATA%\CinePulse`.
 - `installer\Start-CinePulse.ps1 -ForcePortableRuntime`: força o Python gerenciado pelo CinePulse, útil para validar o pacote final.
 - `installer\Start-CinePulse.ps1 -ApplyUpdateOnly`: aplica uma atualização já verificada sem abrir a interface, útil para manutenção e testes.
+- `installer\Start-CinePulse.ps1 -InstallOnly`: instala ou repara componentes e encerra sem abrir a interface.
+- `installer\Start-CinePulse.ps1 -CoreOnly`: instala somente o núcleo e FFmpeg; recursos de IA ficam desativados.
 
-Se FFmpeg/FFprobe não estiverem no sistema, o iniciador baixa a build completa 9.0 em versão fixada, confere SHA-256 e instala em `components\ffmpeg`. Essa build é GPL-3.0 e permanece fora do repositório. Modelos e demais ferramentas também ficam em `components`.
+O CinePulse usa sua própria build FFmpeg 9.0 mesmo se houver outra no sistema, garantindo codecs, HDR e libvmaf consistentes. Essa build é GPL-3.0 e permanece fora do repositório. Modelos e ferramentas também ficam em `components`.
+
+## MSI para Windows
+
+`scripts\Build-Msi.ps1` gera um MSI x64 validado e um manifesto SHA-256. O MSI instala o núcleo no perfil do usuário e cria o atalho no Menu Iniciar; ao abrir pela primeira vez, o mesmo instalador completo termina os componentes antes da interface. O SDK .NET e o WiX usados para compilar ficam apenas em `.runtime` do desenvolvedor e não entram no pacote final.
 
 ## Atualizações
 

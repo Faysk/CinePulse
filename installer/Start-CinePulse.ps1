@@ -4,7 +4,9 @@ param(
     [switch]$Diagnostics,
     [switch]$NonPortable,
     [switch]$ForcePortableRuntime,
-    [switch]$ApplyUpdateOnly
+    [switch]$ApplyUpdateOnly,
+    [switch]$CoreOnly,
+    [switch]$InstallOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -139,13 +141,8 @@ function Install-PortableFfmpeg {
     $Archive = Join-Path $StagingRoot 'ffmpeg.zip.part'
     $Extracted = Join-Path $StagingRoot 'extracted'
     New-Item -ItemType Directory -Path $StagingRoot -Force | Out-Null
-    Write-Host "Baixando FFmpeg portátil $($BootstrapManifest.ffmpeg.version)..."
-    Invoke-WebRequest -UseBasicParsing -Uri $BootstrapManifest.ffmpeg.url -OutFile $Archive
-    $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-    if ($ActualHash -ne $BootstrapManifest.ffmpeg.sha256.ToLowerInvariant()) {
-        Remove-Item -LiteralPath $Archive -Force
-        throw 'O download do FFmpeg não passou na verificação SHA-256.'
-    }
+    Get-VerifiedDownload -Name "FFmpeg portátil $($BootstrapManifest.ffmpeg.version)" `
+        -Url $BootstrapManifest.ffmpeg.url -Sha256 $BootstrapManifest.ffmpeg.sha256 -Destination $Archive
     if (Test-Path -LiteralPath $Extracted) { Remove-Item -LiteralPath $Extracted -Recurse -Force }
     Expand-Archive -LiteralPath $Archive -DestinationPath $Extracted -Force
     $FoundFfmpeg = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'ffmpeg.exe' | Select-Object -First 1
@@ -168,6 +165,177 @@ function Install-PortableFfmpeg {
     }
     if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
     Remove-Item -LiteralPath $StagingRoot -Recurse -Force
+}
+
+function Get-VerifiedDownload {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$Sha256,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    $Expected = $Sha256.ToLowerInvariant()
+    if (Test-Path -LiteralPath $Destination) {
+        $Existing = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash.ToLowerInvariant()
+        if ($Existing -eq $Expected) { return }
+        Remove-Item -LiteralPath $Destination -Force
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+    $Partial = "$Destination.part"
+    if (Test-Path -LiteralPath $Partial) { Remove-Item -LiteralPath $Partial -Force }
+    Write-Host "Baixando $Name..."
+    Add-Type -AssemblyName System.Net.Http
+    $Client = [Net.Http.HttpClient]::new()
+    $Response = $null
+    $Input = $null
+    $Output = $null
+    try {
+        $Response = $Client.GetAsync($Url, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        [void]$Response.EnsureSuccessStatusCode()
+        $Total = $Response.Content.Headers.ContentLength
+        $Input = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $Output = [IO.File]::Open($Partial, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $Buffer = New-Object byte[] (1024 * 1024)
+        [long]$Received = 0
+        while (($Read = $Input.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+            $Output.Write($Buffer, 0, $Read)
+            $Received += $Read
+            $Megabytes = $Received / 1MB
+            if ($Total -and $Total -gt 0) {
+                $Percent = [Math]::Min(100, [Math]::Floor($Received * 100 / $Total))
+                Write-Progress -Activity "Baixando $Name" -Status ("{0:N1} de {1:N1} MB" -f $Megabytes, ($Total / 1MB)) -PercentComplete $Percent
+            } else {
+                Write-Progress -Activity "Baixando $Name" -Status ("{0:N1} MB" -f $Megabytes)
+            }
+        }
+        Write-Progress -Activity "Baixando $Name" -Completed
+    } finally {
+        if ($Output) { $Output.Dispose() }
+        if ($Input) { $Input.Dispose() }
+        if ($Response) { $Response.Dispose() }
+        $Client.Dispose()
+    }
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Partial).Hash.ToLowerInvariant()
+    if ($Actual -ne $Expected) {
+        Remove-Item -LiteralPath $Partial -Force
+        throw "$Name não passou na verificação SHA-256. Nada foi instalado."
+    }
+    Move-Item -LiteralPath $Partial -Destination $Destination -Force
+}
+
+function Install-VerifiedArchive {
+    param(
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][object]$Manifest,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string[]]$RequiredFiles,
+        [switch]$UseSingleRoot
+    )
+    $Marker = Join-Path $Destination '.cinepulse-component.json'
+    if (Test-Path -LiteralPath $Marker) {
+        try {
+            $State = Get-Content -LiteralPath $Marker -Raw | ConvertFrom-Json
+            $Complete = $true
+            foreach ($RequiredFile in $RequiredFiles) {
+                if (-not (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile))) { $Complete = $false }
+            }
+            if ($State.version -eq $Manifest.version -and $Complete) { return }
+        } catch { }
+    }
+    $StagingRoot = Join-Path $ProjectRoot "components\.staging\$Key"
+    $Archive = Join-Path $StagingRoot "$Key.zip"
+    $Extracted = Join-Path $StagingRoot 'extracted'
+    if (Test-Path -LiteralPath $StagingRoot) { Remove-Item -LiteralPath $StagingRoot -Recurse -Force }
+    New-Item -ItemType Directory -Path $StagingRoot -Force | Out-Null
+    Get-VerifiedDownload -Name $Name -Url $Manifest.url -Sha256 $Manifest.sha256 -Destination $Archive
+    Write-Host "Instalando $Name..."
+    Expand-Archive -LiteralPath $Archive -DestinationPath $Extracted -Force
+    $Incoming = $Extracted
+    if ($UseSingleRoot) {
+        $Roots = @(Get-ChildItem -LiteralPath $Extracted -Directory)
+        if ($Roots.Count -ne 1) { throw "O pacote de $Name não possui a estrutura esperada." }
+        $Incoming = $Roots[0].FullName
+    }
+    $Previous = "$Destination.previous"
+    if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
+    if (Test-Path -LiteralPath $Destination) { Move-Item -LiteralPath $Destination -Destination $Previous }
+    try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+        Move-Item -LiteralPath $Incoming -Destination $Destination
+        @{ schema = 1; key = $Key; version = $Manifest.version; sha256 = $Manifest.sha256 } |
+            ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
+    } catch {
+        if ((Test-Path -LiteralPath $Previous) -and -not (Test-Path -LiteralPath $Destination)) {
+            Move-Item -LiteralPath $Previous -Destination $Destination
+        }
+        throw
+    }
+    if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
+    if (Test-Path -LiteralPath $StagingRoot) { Remove-Item -LiteralPath $StagingRoot -Recurse -Force }
+}
+
+function Install-Demucs {
+    $AiRoot = Join-Path $ProjectRoot 'components\ai'
+    $AiVenv = Join-Path $AiRoot 'venv'
+    $AiPython = Join-Path $AiVenv 'Scripts\python.exe'
+    $ModelRepo = Join-Path $AiRoot 'models\demucs\local_repo'
+    $DemucsState = Join-Path $AiRoot 'demucs-install-state.json'
+    $Ready = $false
+    if ((Test-Path -LiteralPath $AiPython) -and (Test-Path -LiteralPath $DemucsState)) {
+        try {
+            $State = Get-Content -LiteralPath $DemucsState -Raw | ConvertFrom-Json
+            if ($State.demucs -eq $BootstrapManifest.demucs.version -and $State.torch -eq $BootstrapManifest.demucs.torch_version) {
+                & $AiPython -c "import demucs, torch; raise SystemExit(0 if torch.__version__ else 1)" *> $null
+                $Ready = $LASTEXITCODE -eq 0
+            }
+        } catch { $Ready = $false }
+    }
+    if (-not $Ready) {
+        Write-Host "Preparando ambiente de IA para Demucs $($BootstrapManifest.demucs.version)..."
+        if (Test-Path -LiteralPath $AiVenv) { Remove-Item -LiteralPath $AiVenv -Recurse -Force }
+        & $PythonExe -m venv $AiVenv
+        if ($LASTEXITCODE -ne 0) { throw 'Não foi possível criar o ambiente privado do Demucs.' }
+        if (-not $UvExe) { $script:UvExe = Get-PortableUv }
+        & $UvExe pip install --python $AiPython --index-url $BootstrapManifest.demucs.torch_index `
+            "torch==$($BootstrapManifest.demucs.torch_version)" `
+            "torchaudio==$($BootstrapManifest.demucs.torchaudio_version)"
+        if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar a aceleração PyTorch do Demucs.' }
+        & $UvExe pip install --python $AiPython --index-url 'https://pypi.org/simple' `
+            "demucs==$($BootstrapManifest.demucs.version)" soundfile
+        if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar o Demucs.' }
+    }
+    New-Item -ItemType Directory -Path $ModelRepo -Force | Out-Null
+    foreach ($Weight in $BootstrapManifest.demucs.weights) {
+        Get-VerifiedDownload -Name "modelo Demucs $($Weight.file)" -Url $Weight.url -Sha256 $Weight.sha256 `
+            -Destination (Join-Path $ModelRepo $Weight.file)
+    }
+    @"
+models: ['f7e0c4bc', 'd12395a8', '92cfc3b6', '04573f0d']
+weights:
+  [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]]
+"@ | Set-Content -LiteralPath (Join-Path $ModelRepo 'htdemucs_ft.yaml') -Encoding UTF8
+    @{ schema = 1; demucs = $BootstrapManifest.demucs.version; torch = $BootstrapManifest.demucs.torch_version } |
+        ConvertTo-Json | Set-Content -LiteralPath $DemucsState -Encoding UTF8
+}
+
+function Install-CompleteComponents {
+    $RealDestination = Join-Path $ProjectRoot 'components\real-esrgan'
+    $RifeDestination = Join-Path $ProjectRoot 'components\ai\models\rife\portable\rife-ncnn-vulkan-20221029-windows'
+    Install-VerifiedArchive -Key 'real-esrgan' -Name 'Real-ESRGAN' `
+        -Manifest $BootstrapManifest.real_esrgan -Destination $RealDestination `
+        -RequiredFiles @('realesrgan-ncnn-vulkan.exe', 'models\realesr-animevideov3-x2.bin', 'models\realesr-animevideov3-x2.param')
+    Install-VerifiedArchive -Key 'rife' -Name 'RIFE' `
+        -Manifest $BootstrapManifest.rife -Destination $RifeDestination `
+        -RequiredFiles @('rife-ncnn-vulkan.exe', 'rife-v4.6\flownet.bin', 'rife-v4.6\flownet.param') -UseSingleRoot
+    Install-Demucs
+    if (-not (Test-Path -LiteralPath (Join-Path $RealDestination 'realesrgan-ncnn-vulkan.exe'))) {
+        throw 'A instalação do Real-ESRGAN ficou incompleta.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $RifeDestination 'rife-ncnn-vulkan.exe'))) {
+        throw 'A instalação do RIFE ficou incompleta.'
+    }
+    Write-Host 'CINEPULSE_COMPONENTS_READY FFmpeg=OK Real-ESRGAN=OK RIFE=OK Demucs=OK'
 }
 
 if ($Repair -and (Test-Path -LiteralPath $VenvRoot)) {
@@ -221,14 +389,13 @@ if ($Repair -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
     Set-Content -LiteralPath $InstallState -Value $ExpectedState -Encoding UTF8
 }
 
-$PortableFfmpeg = Join-Path $ProjectRoot 'components\ffmpeg\bin\ffmpeg.exe'
-$PortableFfprobe = Join-Path $ProjectRoot 'components\ffmpeg\bin\ffprobe.exe'
-$SystemFfmpeg = Get-Command 'ffmpeg' -ErrorAction SilentlyContinue
-$SystemFfprobe = Get-Command 'ffprobe' -ErrorAction SilentlyContinue
-if ((-not $SystemFfmpeg -or -not $SystemFfprobe) -and
-    (-not (Test-Path -LiteralPath $PortableFfmpeg) -or -not (Test-Path -LiteralPath $PortableFfprobe))) {
-    Install-PortableFfmpeg
+# A build portátil fixada garante os mesmos codecs, HDR e libvmaf em qualquer computador.
+Install-PortableFfmpeg
+
+if (-not $CoreOnly) {
+    Install-CompleteComponents
 }
+if ($InstallOnly) { exit 0 }
 
 if ($Diagnostics) {
     & $PythonExe -m cinepulse.diagnostics

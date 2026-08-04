@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.0.0-rc.1`. O produto está tecnicamente fechado como candidato à versão estável. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal; os demais modelos detectados são extensões futuras e não são anunciados como funções prontas.
+> Estado: `1.0.0-rc.2`. O produto está tecnicamente fechado como candidato à versão estável. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal; os demais modelos detectados são extensões futuras e não são anunciados como funções prontas.
 
 ## O que já funciona
 
@@ -26,9 +26,9 @@ CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora ví
 
 ## Início rápido no Windows
 
-1. Instale Python 3.11 ou superior e FFmpeg.
-2. Execute `CinePulse.cmd`.
-3. Na primeira abertura, o ambiente privado será criado em `.runtime`.
+1. Execute `CinePulse.cmd` ou instale o MSI.
+2. Na primeira abertura, aguarde o instalador baixar e verificar o núcleo, FFmpeg e as IAs utilizadas.
+3. A interface só abre quando os componentes obrigatórios estiverem prontos.
 
 Para reutilizar os componentes da instalação de desenvolvimento existente, sem copiá-los para o Git:
 
@@ -67,7 +67,13 @@ Para montar o ZIP portátil reproduzível, depois de abrir o CinePulse ao menos 
 .\scripts\Build-Portable.ps1
 ```
 
-O pacote não inclui modelos. Na primeira abertura, baixa Python e FFmpeg somente se estiverem ausentes, sempre em versões fixadas e verificadas por SHA-256.
+O pacote-base não embute modelos. Na primeira abertura, baixa Python, FFmpeg, Real-ESRGAN, RIFE, PyTorch/Demucs e os pesos usados, sempre em versões fixadas e verificadas antes de liberar a interface.
+
+Para gerar também o instalador Windows:
+
+```powershell
+.\scripts\Build-Msi.ps1
+```
 
 Ao publicar no GitHub, use `-Repository 'dono/CinePulse'`; isso ativa no pacote o canal de atualização verificado. O código não presume o nome da sua conta antes da publicação.
 

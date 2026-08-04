@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "dotnet_sdk": {
+    "version": "8.0.423",
+    "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/8.0.423/dotnet-sdk-8.0.423-win-x64.zip",
+    "sha512": "063fcc35c136277e6fd767c66579f3b92db22a078a7f0c7177b6af1edb2c9afae1613f6cfdc01acf7421773d9ac77f0ef73a7fd8b37f469e7e3505e5c1361ba0"
+  },
+  "wix": {
+    "version": "6.0.2"
+  }
+}
