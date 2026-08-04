@@ -1,0 +1,39 @@
+name: Relatar um problema
+description: Falha reproduzível no CinePulse
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Não envie mídia pessoal, chaves ou logs sem revisá-los.
+  - type: input
+    id: version
+    attributes:
+      label: Versão do CinePulse
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Fluxo
+      options:
+        - Loop musical
+        - Melhoria de vídeo original
+        - Preview
+        - Fila
+        - Instalação ou atualização
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: O que aconteceu?
+      description: Informe o esperado, o resultado e passos mínimos.
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware e componentes
+      description: CPU, GPU, RAM, Windows, codec e IA selecionada.
+

@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "notice": "URLs e hashes devem ser fixados por versão antes de habilitar downloads automáticos.",
+  "components": [
+    {
+      "key": "ffmpeg",
+      "name": "FFmpeg + FFprobe",
+      "category": "essencial",
+      "license": "LGPL-2.1-or-later/GPL-2.0-or-later conforme a build",
+      "homepage": "https://ffmpeg.org/",
+      "relative_path": "ffmpeg"
+    },
+    {
+      "key": "real-esrgan",
+      "name": "Real-ESRGAN NCNN Vulkan",
+      "category": "upscale",
+      "license": "BSD-3-Clause",
+      "homepage": "https://github.com/xinntao/Real-ESRGAN",
+      "relative_path": "real-esrgan"
+    },
+    {
+      "key": "rife",
+      "name": "RIFE",
+      "category": "interpolação",
+      "license": "Consulte a versão selecionada",
+      "homepage": "https://github.com/hzwer/ECCV2022-RIFE",
+      "relative_path": "ai/models/rife"
+    },
+    {
+      "key": "demucs",
+      "name": "Demucs",
+      "category": "áudio",
+      "license": "MIT; pesos podem ter termos adicionais",
+      "homepage": "https://github.com/facebookresearch/demucs",
+      "relative_path": "ai/models/demucs"
+    },
+    {
+      "key": "basicvsrpp",
+      "name": "BasicVSR++",
+      "category": "restauração temporal",
+      "license": "Consulte código e checkpoint selecionados",
+      "homepage": "https://github.com/open-mmlab/mmagic",
+      "relative_path": "ai/models/basicvsrpp"
+    },
+    {
+      "key": "vfx-ai",
+      "name": "Depth + SAM 2 + CoTracker",
+      "category": "VFX inteligente",
+      "license": "Licenças independentes; verificar antes do uso comercial",
+      "homepage": "https://github.com/facebookresearch/sam2",
+      "relative_path": "ai/models"
+    }
+  ]
+}
+

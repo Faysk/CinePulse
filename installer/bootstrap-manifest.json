@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "python": {
+    "version": "3.13.7"
+  },
+  "uv": {
+    "version": "0.12.1",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.12.1/uv-x86_64-pc-windows-msvc.zip",
+    "sha256": "8fcb0cb46e1229065e344758980924e569bef5882ef45f46fada8fb24e06b74a"
+  },
+  "ffmpeg": {
+    "version": "9.0",
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0/ffmpeg-9.0-full_build.zip",
+    "sha256": "f42f0c4b04eae3ac918707ff66e3e0ff0cee527bfa6d322624d4bc1160d5055e",
+    "license": "GPL-3.0"
+  }
+}

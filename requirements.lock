@@ -1,0 +1,3 @@
+# Dependências diretas reproduzíveis da versão alpha.
+numpy==2.4.4
+

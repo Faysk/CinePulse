@@ -1,0 +1,67 @@
+# CinePulse runtime and portable payloads
+/.runtime/
+/components/
+/data/
+/.cinepulse-portable
+
+# User projects, media and generated outputs
+/projects/
+/outputs/
+/previews/
+/reports/
+*.mp3
+*.wav
+*.flac
+*.aac
+*.m4a
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.ass
+*.srt
+
+# AI weights and large binary artifacts
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+*.pkl
+*.bin
+*.engine
+*.ncnn
+*.param
+*.zip
+*.7z
+*.tar
+*.gz
+
+# Python/build/editor state
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Local configuration, logs and secrets
+.env
+.env.*
+!.env.example
+*.log
+queue.json
+presets.json
+diagnostico-cinepulse.json
+
+# Operating system
+Thumbs.db
+Desktop.ini
+.DS_Store
+

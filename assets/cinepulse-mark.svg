@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">CinePulse</title>
+  <desc id="desc">Pulso de áudio luminoso dentro de uma lente cinematográfica</desc>
+  <defs>
+    <radialGradient id="bg" cx="36%" cy="28%" r="86%">
+      <stop offset="0" stop-color="#243A62"/>
+      <stop offset="0.54" stop-color="#111827"/>
+      <stop offset="1" stop-color="#080B12"/>
+    </radialGradient>
+    <linearGradient id="pulse" x1="72" y1="256" x2="440" y2="256">
+      <stop stop-color="#8B5CF6"/>
+      <stop offset="0.52" stop-color="#42D8FF"/>
+      <stop offset="1" stop-color="#37F5B0"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-80%" width="180%" height="260%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="164" fill="none" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="22"/>
+  <circle cx="256" cy="256" r="134" fill="none" stroke="#42D8FF" stroke-opacity=".17" stroke-width="2"/>
+  <path d="M72 264h58l24-54 38 120 43-186 43 224 42-166 34 104 23-42h63"
+        fill="none" stroke="url(#pulse)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  <path d="M82 396c78 42 270 54 348-4" fill="none" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="8" stroke-linecap="round"/>
+</svg>
+

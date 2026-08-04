@@ -1,0 +1,26 @@
+name: Sugerir melhoria
+description: Nova capacidade ou melhoria de experiência
+title: "[Ideia]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Qual problema isso resolve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Como deveria funcionar?
+    validations:
+      required: true
+  - type: dropdown
+    id: processing
+    attributes:
+      label: Pode funcionar totalmente local?
+      options:
+        - Sim
+        - Não
+        - Não sei
+
