@@ -30,6 +30,7 @@ from tkinter import ttk
 
 import numpy as np
 from . import ai_suite
+from . import experimental_components
 from . import vfx
 from .loop_engine import (
     CREATE_NO_WINDOW,
@@ -383,6 +384,7 @@ class VideoOptimizerStudio:
         self.time_text = StringVar(value="Decorrido 00:00:00  •  Restante --:--:--")
         self.summary = StringVar()
         self.preset_name = StringVar(value="Meu padrão — 8K 120 fps Aurora")
+        self.experimental_downloads = BooleanVar(value=False)
 
         self._events: queue.Queue = queue.Queue()
         self._process: subprocess.Popen | None = None
@@ -403,6 +405,8 @@ class VideoOptimizerStudio:
         self._queue_serial = 0
         self._queue_running = False
         self._active_queue_id: int | None = None
+        self._ai_selected: set[str] = set()
+        self._ai_installing = False
 
         PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
         WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -1184,25 +1188,26 @@ class VideoOptimizerStudio:
         parent.rowconfigure(1, weight=1)
         parent.columnconfigure(0, weight=1)
         installed, total = ai_suite.installed_count()
-        ttk.Label(
+        self.ai_title = ttk.Label(
             parent,
             text=f"Suíte de máxima qualidade: {installed}/{total} módulos encontrados",
             font=("Segoe UI", 12, "bold"),
-        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
-        columns = ("modulo", "funcao", "estado")
+        )
+        self.ai_title.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        columns = ("selecionar", "modulo", "funcao", "estado")
         tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse")
+        tree.heading("selecionar", text="Baixar")
         tree.heading("modulo", text="Módulo")
         tree.heading("funcao", text="O que melhora")
         tree.heading("estado", text="Estado")
+        tree.column("selecionar", width=65, minwidth=65, stretch=False, anchor="center")
         tree.column("modulo", width=180, anchor="w")
         tree.column("funcao", width=430, anchor="w")
         tree.column("estado", width=210, anchor="w")
-        for item in ai_suite.inventory():
-            if item["installed"]:
-                state = "Instalado • " + item["activation"].lower()
-            else:
-                state = "Arquivos incompletos"
-            tree.insert("", "end", values=(item["name"], item["purpose"], state))
+        self.ai_tree = tree
+        self._refresh_ai_tree()
+        tree.bind("<Button-1>", self._toggle_ai_component)
+        tree.bind("<space>", self._toggle_focused_ai_component)
         tree.grid(row=1, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
         scrollbar.grid(row=1, column=1, sticky="ns")
@@ -1215,15 +1220,194 @@ class VideoOptimizerStudio:
             text="Ler instalação e ativação",
             command=lambda: os.startfile(APP_DIR / "docs" / "AI_COMPONENTS.md"),
         ).pack(side="left", padx=(8, 0))
+        self.ai_select_missing_button = ttk.Button(
+            actions, text="Selecionar faltantes", command=self._select_missing_ai_components,
+        )
+        self.ai_select_missing_button.pack(side="left", padx=(8, 0))
+        self.ai_install_selected_button = ttk.Button(
+            actions, text="Instalar selecionados", style="Primary.TButton", command=self._install_selected_ai_components,
+        )
+        self.ai_install_selected_button.pack(side="right")
+        self.ai_install_all_button = ttk.Button(
+            actions, text="Instalar tudo disponível", command=self._install_all_ai_components,
+        )
+        self.ai_install_all_button.pack(side="right", padx=(0, 8))
+        ttk.Checkbutton(
+            parent,
+            text="Permitir componentes experimentais — assumo licenças, espaço e compatibilidade",
+            variable=self.experimental_downloads,
+            command=self._experimental_download_mode_changed,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
         ttk.Label(
             parent,
             text=(
-                "Os novos motores permanecem fora do render principal até a primeira validação. "
-                "Isso impede que uma instalação ainda não conferida comprometa um vídeo longo."
+                "Marque os componentes na primeira coluna. Downloads experimentais têm origem e hash fixados, "
+                "mas permanecem fora do render até a integração e validação funcional."
             ),
             wraplength=820,
             foreground="#555555",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    def _refresh_ai_tree(self) -> None:
+        if not hasattr(self, "ai_tree"):
+            return
+        items = ai_suite.inventory()
+        known = {item["key"] for item in items}
+        self._ai_selected.intersection_update(known)
+        for row in self.ai_tree.get_children():
+            self.ai_tree.delete(row)
+        for item in items:
+            if item["installed"]:
+                state = "Instalado • " + item["activation"].lower()
+            elif item["installable"]:
+                if item["experimental"]:
+                    state = "Experimental • " + ("disponível para instalar" if self.experimental_downloads.get() else "ative a opção abaixo")
+                else:
+                    state = "Disponível para baixar e instalar"
+            else:
+                state = "Ainda não disponível nesta versão"
+            allowed = item["installable"] and (not item["experimental"] or self.experimental_downloads.get())
+            marker = "☑" if item["key"] in self._ai_selected else ("☐" if allowed and not item["installed"] else "—")
+            self.ai_tree.insert("", "end", iid=item["key"], values=(marker, item["name"], item["purpose"], state))
+        installed = sum(item["installed"] for item in items)
+        self.ai_title.configure(text=f"Suíte de máxima qualidade: {installed}/{len(items)} módulos encontrados")
+
+    def _toggle_ai_key(self, key: str) -> None:
+        item = next((entry for entry in ai_suite.inventory() if entry["key"] == key), None)
+        if not item or item["installed"] or not item["installable"] or self._ai_installing:
+            return
+        if item["experimental"] and not self.experimental_downloads.get():
+            messagebox.showinfo(APP_TITLE, "Ative a opção de componentes experimentais para selecionar este módulo.")
+            return
+        if key in self._ai_selected:
+            self._ai_selected.remove(key)
+        else:
+            self._ai_selected.add(key)
+        self._refresh_ai_tree()
+
+    def _toggle_ai_component(self, event) -> None:
+        if self.ai_tree.identify_column(event.x) != "#1":
+            return
+        key = self.ai_tree.identify_row(event.y)
+        if key:
+            self._toggle_ai_key(key)
+
+    def _toggle_focused_ai_component(self, _event=None) -> str:
+        key = self.ai_tree.focus()
+        if key:
+            self._toggle_ai_key(key)
+        return "break"
+
+    def _select_missing_ai_components(self) -> None:
+        self._ai_selected = {
+            item["key"] for item in ai_suite.inventory()
+            if item["installable"] and not item["installed"] and (not item["experimental"] or self.experimental_downloads.get())
+        }
+        self._refresh_ai_tree()
+
+    def _experimental_download_mode_changed(self) -> None:
+        if not self.experimental_downloads.get():
+            self._ai_selected = {
+                key for key in self._ai_selected
+                if not next((item["experimental"] for item in ai_suite.inventory() if item["key"] == key), False)
+            }
+        self._refresh_ai_tree()
+
+    def _install_selected_ai_components(self) -> None:
+        self._start_ai_component_install(set(self._ai_selected))
+
+    def _install_all_ai_components(self) -> None:
+        keys = {
+            item["key"] for item in ai_suite.inventory()
+            if item["installable"] and not item["installed"] and (not item["experimental"] or self.experimental_downloads.get())
+        }
+        self._start_ai_component_install(keys)
+
+    def _start_ai_component_install(self, keys: set[str]) -> None:
+        if self._busy or self._ai_installing:
+            messagebox.showinfo(APP_TITLE, "Aguarde o processamento atual terminar antes de instalar componentes.")
+            return
+        items = {item["key"]: item for item in ai_suite.inventory()}
+        selected = [
+            items[key] for key in sorted(keys)
+            if key in items and items[key]["installable"] and not items[key]["installed"]
+            and (not items[key]["experimental"] or self.experimental_downloads.get())
+        ]
+        if not selected:
+            messagebox.showinfo(APP_TITLE, "Não há componentes instaláveis faltando nessa seleção.")
+            return
+        total_bytes = sum(item["download_bytes"] for item in selected)
+        names = "\n".join(
+            f"• {item['name']}" + (f" — EXPERIMENTAL — {item['license']}" if item["experimental"] else "")
+            for item in selected
+        )
+        warning = ""
+        if any(item["experimental"] for item in selected):
+            warning = (
+                "\n\nATENÇÃO: os itens experimentais não participam do render atual. "
+                "Ao continuar, você declara que revisará e cumprirá as licenças e assume espaço, compatibilidade e uso."
+            )
+        if not messagebox.askyesno(APP_TITLE, f"Baixar, verificar e instalar estes componentes?\n\n{names}\n\nDownload aproximado: {total_bytes / (1024**3):.2f} GB.{warning}"):
+            return
+        installer = APP_DIR / "installer" / "Start-CinePulse.ps1"
+        if not installer.is_file():
+            messagebox.showerror(APP_TITLE, "O instalador de componentes não foi encontrado.")
+            return
+        components = sorted({item["installer_component"] for item in selected if not item["experimental"]})
+        experimental_keys = sorted({item["installer_component"] for item in selected if item["experimental"]})
+        self._ai_installing = True
+        self._ai_selected.clear()
+        for button in (self.ai_select_missing_button, self.ai_install_selected_button, self.ai_install_all_button):
+            button.configure(state="disabled")
+        for button in (self.render_button, self.preview_button, self.add_queue_button):
+            button.configure(state="disabled")
+        self.bar.configure(mode="indeterminate")
+        self.bar.start(12)
+        self.stage.set("Instalando IA local")
+        self.status.set("Baixando e verificando os componentes selecionados… acompanhe em ‘Ver log’.")
+
+        def worker() -> None:
+            shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
+            recent: deque[str] = deque(maxlen=30)
+            try:
+                if components:
+                    command = [
+                        shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(installer),
+                        "-InstallOnly", "-ComponentsCsv", ",".join(components),
+                    ]
+                    process = subprocess.Popen(
+                        command, cwd=str(APP_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW,
+                    )
+                    assert process.stdout is not None
+                    for line in process.stdout:
+                        clean = line.strip()
+                        if clean:
+                            recent.append(clean)
+                            self._log(clean)
+                    code = process.wait()
+                    if code:
+                        raise RuntimeError("\n".join(recent) or f"O instalador terminou com o código {code}.")
+                if experimental_keys:
+                    experimental_components.install(experimental_keys, self._log)
+                self._events.put(("ai_install_done", [item["name"] for item in selected]))
+            except Exception as exc:
+                self._events.put(("ai_install_error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_ai_component_install(self) -> None:
+        self._ai_installing = False
+        self.bar.stop()
+        self.bar.configure(mode="determinate")
+        self.bar["value"] = 0
+        self.progress_text.set("0%")
+        for button in (self.ai_select_missing_button, self.ai_install_selected_button, self.ai_install_all_button):
+            button.configure(state="normal")
+        if not self._busy:
+            for button in (self.render_button, self.preview_button, self.add_queue_button):
+                button.configure(state="normal")
+        self._refresh_ai_tree()
 
     def _file_row(self, parent, row: int, label: str, variable: StringVar, command) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=7)
@@ -2710,6 +2894,16 @@ class VideoOptimizerStudio:
                     self.update_button.configure(state="normal")
                     self.status.set("Não foi possível verificar ou preparar a atualização.")
                     messagebox.showerror(APP_TITLE, f"A atualização foi cancelada com segurança.\n\n{event[1]}")
+                elif kind == "ai_install_done":
+                    self._finish_ai_component_install()
+                    self.stage.set("Componentes prontos")
+                    self.status.set("Instalação concluída; a suíte de IA foi atualizada.")
+                    messagebox.showinfo(APP_TITLE, "Instalação concluída e verificada:\n\n" + "\n".join(f"• {name}" for name in event[1]))
+                elif kind == "ai_install_error":
+                    self._finish_ai_component_install()
+                    self.stage.set("Erro na instalação")
+                    self.status.set("A instalação foi interrompida com segurança. Consulte ‘Ver log’.")
+                    messagebox.showerror(APP_TITLE, f"Não foi possível instalar os componentes.\n\n{event[1]}")
                 elif kind == "done":
                     _, path, preview, size, report_path = event
                     self._finish_busy(); self.bar["value"] = 100; self.progress_text.set("100%")

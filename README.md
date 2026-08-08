@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.0.0-rc.3`. O produto está tecnicamente fechado como candidato à versão estável. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal; os demais modelos detectados são extensões futuras e não são anunciados como funções prontas.
+> Estado: `1.0.0-rc.4`. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
 
 ## O que já funciona
 
@@ -23,6 +23,7 @@ CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora ví
 - transições de loop, presets, fila, estimativa de espaço, progresso e relatório final;
 - dados, cache, componentes e previews isolados do código-fonte.
 - render atômico, recuperação após interrupção e normalização LUFS em duas passagens.
+- gerenciador de IA local com seleção individual, instalação do que falta e modo experimental opcional.
 
 ## Início rápido no Windows
 

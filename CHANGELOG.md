@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.4 — 2026-08-08
+
+- tela IA local transformada em gerenciador com seleção individual, instalação dos selecionados e instalação de tudo que falta;
+- componentes integrados são instalados em segundo plano com PowerShell 7, log em tempo real e atualização automática do inventário;
+- modo avançado permite baixar componentes experimentais após aceite explícito de licenças, espaço e compatibilidade;
+- downloads experimentais usam fontes oficiais, arquivos temporários e verificação SHA-256 antes da instalação;
+- BasicVSR++, CLAP, Video Depth Anything, SAM 2.1, CoTracker 3, CodeFormer e código-base LTX-2.3 permanecem claramente marcados como não integrados ao render.
+
 ## 1.0.0-rc.3 — 2026-08-04
 
 - instalação completa agora abre uma janela visível, mantém o resultado na tela e grava `data/logs/installer.log`;

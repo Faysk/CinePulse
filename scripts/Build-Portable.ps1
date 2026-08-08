@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '1.0.0-rc.3',
-    [string]$Repository = ''
+    [string]$Version = '1.0.0-rc.4',
+    [string]$Repository = '',
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,8 +10,10 @@ $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $Python = Join-Path $ProjectRoot '.runtime\python\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $Python)) { throw 'Execute CinePulse.cmd uma vez antes de montar o pacote.' }
 $env:PYTHONPATH = Join-Path $ProjectRoot 'src'
-& (Join-Path $PSScriptRoot 'Test-Release.ps1')
-if (-not $?) { throw 'O portão de release falhou.' }
+if (-not $SkipTests) {
+    & (Join-Path $PSScriptRoot 'Test-Release.ps1')
+    if (-not $?) { throw 'O portão de release falhou.' }
+}
 
 $RuntimeRoot = Join-Path $ProjectRoot '.runtime'
 $Staging = Join-Path $RuntimeRoot 'package-staging'

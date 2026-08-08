@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "notice": "Componentes experimentais não fazem parte do render principal. O usuário deve revisar e aceitar cada licença antes do download.",
+  "components": {
+    "basicvsrpp": {
+      "license": "Apache-2.0",
+      "assets": [
+        {"path": "models/basicvsrpp/basicvsrpp_ntire_vsr_x4.pth", "url": "https://download.openmmlab.com/mmediting/restorers/basicvsr_plusplus/basicvsr_plusplus_c128n25_ntire_vsr_20210311-1ff35292.pth", "sha256": "1ff352921112b84cacc79b23df502a2319d5714d6b26730248839a6e4074c285", "bytes": 175232380},
+        {"path": "models/basicvsrpp/basicvsrpp_ntire_decompress.pth", "url": "https://download.openmmlab.com/mmediting/restorers/basicvsr_plusplus/basicvsr_plusplus_c128n25_ntire_decompress_track1_20210223-7b2eba02.pth", "sha256": "7b2eba02a24989bfbf8b2ed4a06c8e6fd5dbeb193b1178ef7171cd1c455ddb0f", "bytes": 176414076}
+      ]
+    },
+    "clap": {
+      "license": "Apache-2.0",
+      "assets": [
+        {"path": "models/clap/clap-htsat-fused/pytorch_model.bin", "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/main/pytorch_model.bin", "sha256": "1ed5d0215d887551ddd0a49ce7311b21429ebdf1e6a129d4e68f743357225253", "bytes": 614596545}
+      ]
+    },
+    "depth": {
+      "license": "Small: Apache-2.0; Large: CC-BY-NC-4.0",
+      "assets": [
+        {"path": "models/video-depth-anything/video_depth_anything_vits.pth", "url": "https://huggingface.co/depth-anything/Video-Depth-Anything-Small/resolve/main/video_depth_anything_vits.pth", "sha256": "13379300b739e659f076a59d52e9801bd8d38c541a7e71f73bbca4dcfb013609", "bytes": 116440756},
+        {"path": "models/video-depth-anything/video_depth_anything_vitl.pth", "url": "https://huggingface.co/depth-anything/Video-Depth-Anything-Large/resolve/main/video_depth_anything_vitl.pth", "sha256": "43df27c6b396042ba34ff7b798ab279f64d204d2e86d7a373968f8fa36d0e6fa", "bytes": 1538392012}
+      ]
+    },
+    "sam2": {
+      "license": "Apache-2.0",
+      "assets": [
+        {"path": "models/sam2/sam2.1_hiera_small.pt", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt", "sha256": "6d1aa6f30de5c92224f8172114de081d104bbd23dd9dc5c58996f0cad5dc4d38", "bytes": 184416285},
+        {"path": "models/sam2/sam2.1_hiera_large.pt", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt", "sha256": "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318", "bytes": 898083611}
+      ]
+    },
+    "cotracker": {
+      "license": "CC-BY-NC-4.0",
+      "assets": [
+        {"path": "models/cotracker/scaled_offline.pth", "url": "https://huggingface.co/facebook/cotracker3/resolve/main/scaled_offline.pth", "sha256": "2670d4562ed69326dda775a26e54883925cd11b6fc9b24cb7aa9f8078bce7834", "bytes": 101890938},
+        {"path": "models/cotracker/scaled_online.pth", "url": "https://huggingface.co/facebook/cotracker3/resolve/main/scaled_online.pth", "sha256": "205d34789f19699d64b22cf93f9b697f15f28d4025240e31532e504109837218", "bytes": 101695610}
+      ]
+    },
+    "codeformer": {
+      "license": "S-Lab License 1.0; uso não comercial",
+      "assets": [
+        {"path": "models/codeformer/codeformer.pth", "url": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth", "sha256": "1009e537e0c2a07d4cabce6355f53cb66767cd4b4297ec7a4a64ca4b8a5684b7", "bytes": 376637898},
+        {"path": "models/codeformer/detection_Resnet50_Final.pth", "url": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/detection_Resnet50_Final.pth", "sha256": "6d1de9c2944f2ccddca5f5e010ea5ae64a39845a86311af6fdf30841b0a5a16d", "bytes": 109497761},
+        {"path": "models/codeformer/parsing_parsenet.pth", "url": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_parsenet.pth", "sha256": "3d558d8d0e42c20224f13cf5a29c79eba2d59913419f945545d8cf7b72920de2", "bytes": 85331193}
+      ]
+    },
+    "ltx2": {
+      "license": "LTX-2 Community License; restrições de uso e comerciais",
+      "assets": [
+        {"path": "models/ltx-2.3/ltx-2.3-22b-distilled-1.1.safetensors", "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-1.1.safetensors", "sha256": "b33b7fe4bbfe084f484be4aaf90b0f1d95dca20d403ac4c0e037eb8c4f0af7cc", "bytes": 46149345334},
+        {"path": "models/ltx-2.3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors", "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors", "sha256": "5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed", "bytes": 995743560}
+      ],
+      "archive": {"destination": "repos/ltx-2", "url": "https://github.com/Lightricks/LTX-2/archive/4f8905737aac86a554637cac86c178877a39c744.zip", "sha256": "9c8250c80597248d68e3945d55678956f7e5e62bf8c33f22979b9e9ccd9660ea", "bytes": 1128355}
+    }
+  }
+}

@@ -6,7 +6,8 @@ param(
     [switch]$ForcePortableRuntime,
     [switch]$ApplyUpdateOnly,
     [switch]$CoreOnly,
-    [switch]$InstallOnly
+    [switch]$InstallOnly,
+    [string]$ComponentsCsv = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,11 @@ $InstallState = Join-Path $RuntimeRoot 'install-state.txt'
 $BootstrapManifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap-manifest.json') -Raw | ConvertFrom-Json
 $UvExe = $null
 $TranscriptStarted = $false
+$RequestedComponents = @($ComponentsCsv.Split(',', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim().ToLowerInvariant() })
+$AllowedComponents = @('ffmpeg', 'real-esrgan', 'rife', 'demucs')
+foreach ($Requested in $RequestedComponents) {
+    if ($Requested -notin $AllowedComponents) { throw "Componente desconhecido: $Requested" }
+}
 
 if ($InstallOnly) {
     try { $Host.UI.RawUI.WindowTitle = 'CinePulse - Instalando componentes locais' } catch { }
@@ -30,7 +36,8 @@ if ($InstallOnly) {
     } catch {
         Write-Warning "Não foi possível iniciar o log permanente: $($_.Exception.Message)"
     }
-    Write-Host 'CINEPULSE_INSTALL_START modo=completo'
+    $InstallMode = if ($RequestedComponents.Count) { $RequestedComponents -join ',' } else { 'completo' }
+    Write-Host "CINEPULSE_INSTALL_START componentes=$InstallMode"
     Write-Host "Pasta do programa: $ProjectRoot"
 }
 
@@ -349,22 +356,27 @@ weights:
 }
 
 function Install-CompleteComponents {
+    param([string[]]$Selected = @('real-esrgan', 'rife', 'demucs'))
     $RealDestination = Join-Path $ProjectRoot 'components\real-esrgan'
     $RifeDestination = Join-Path $ProjectRoot 'components\ai\models\rife\portable\rife-ncnn-vulkan-20221029-windows'
-    Install-VerifiedArchive -Key 'real-esrgan' -Name 'Real-ESRGAN' `
-        -Manifest $BootstrapManifest.real_esrgan -Destination $RealDestination `
-        -RequiredFiles @('realesrgan-ncnn-vulkan.exe', 'models\realesr-animevideov3-x2.bin', 'models\realesr-animevideov3-x2.param')
-    Install-VerifiedArchive -Key 'rife' -Name 'RIFE' `
-        -Manifest $BootstrapManifest.rife -Destination $RifeDestination `
-        -RequiredFiles @('rife-ncnn-vulkan.exe', 'rife-v4.6\flownet.bin', 'rife-v4.6\flownet.param') -UseSingleRoot
-    Install-Demucs
-    if (-not (Test-Path -LiteralPath (Join-Path $RealDestination 'realesrgan-ncnn-vulkan.exe'))) {
-        throw 'A instalação do Real-ESRGAN ficou incompleta.'
+    if ('real-esrgan' -in $Selected) {
+        Install-VerifiedArchive -Key 'real-esrgan' -Name 'Real-ESRGAN' `
+            -Manifest $BootstrapManifest.real_esrgan -Destination $RealDestination `
+            -RequiredFiles @('realesrgan-ncnn-vulkan.exe', 'models\realesr-animevideov3-x2.bin', 'models\realesr-animevideov3-x2.param')
+        if (-not (Test-Path -LiteralPath (Join-Path $RealDestination 'realesrgan-ncnn-vulkan.exe'))) {
+            throw 'A instalação do Real-ESRGAN ficou incompleta.'
+        }
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $RifeDestination 'rife-ncnn-vulkan.exe'))) {
-        throw 'A instalação do RIFE ficou incompleta.'
+    if ('rife' -in $Selected) {
+        Install-VerifiedArchive -Key 'rife' -Name 'RIFE' `
+            -Manifest $BootstrapManifest.rife -Destination $RifeDestination `
+            -RequiredFiles @('rife-ncnn-vulkan.exe', 'rife-v4.6\flownet.bin', 'rife-v4.6\flownet.param') -UseSingleRoot
+        if (-not (Test-Path -LiteralPath (Join-Path $RifeDestination 'rife-ncnn-vulkan.exe'))) {
+            throw 'A instalação do RIFE ficou incompleta.'
+        }
     }
-    Write-Host 'CINEPULSE_COMPONENTS_READY FFmpeg=OK Real-ESRGAN=OK RIFE=OK Demucs=OK'
+    if ('demucs' -in $Selected) { Install-Demucs }
+    Write-Host "CINEPULSE_COMPONENTS_READY selected=$($Selected -join ',')"
 }
 
 if ($Repair -and (Test-Path -LiteralPath $VenvRoot)) {
@@ -422,11 +434,17 @@ if ($Repair -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
 
 # A build portátil fixada garante os mesmos codecs, HDR e libvmaf em qualquer computador.
 if ($InstallOnly) { Write-Host '[3/4] Verificando FFmpeg, codecs, HDR e VMAF...' }
-Install-PortableFfmpeg
+$InstallAll = $RequestedComponents.Count -eq 0
+if ($InstallAll -or 'ffmpeg' -in $RequestedComponents) { Install-PortableFfmpeg }
 
 if (-not $CoreOnly) {
-    if ($InstallOnly) { Write-Host '[4/4] Verificando Real-ESRGAN, RIFE, PyTorch e Demucs...' }
-    Install-CompleteComponents
+    $AiComponents = if ($InstallAll) { @('real-esrgan', 'rife', 'demucs') } else {
+        @($RequestedComponents | Where-Object { $_ -in @('real-esrgan', 'rife', 'demucs') })
+    }
+    if ($AiComponents.Count) {
+        if ($InstallOnly) { Write-Host "[4/4] Verificando componentes de IA: $($AiComponents -join ', ')..." }
+        Install-CompleteComponents -Selected $AiComponents
+    }
 }
 if ($InstallOnly) {
     Install-DesktopShortcut
