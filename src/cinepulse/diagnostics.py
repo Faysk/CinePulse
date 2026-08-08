@@ -53,6 +53,12 @@ def collect() -> dict:
             "ffprobe": _version([ffprobe, "-version"]) if ffprobe else None,
             "nvidia": _version(["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"]),
         },
+        "gpu_policy": {
+            "prefer_dedicated": os.environ.get("CINEPULSE_PREFER_DEDICATED_GPU") == "1",
+            "cuda_device_order": os.environ.get("CUDA_DEVICE_ORDER"),
+            "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "ncnn_gpu": "auto-high-performance",
+        },
         "ai": inventory(),
         "integrity": verify_integrity(),
     }

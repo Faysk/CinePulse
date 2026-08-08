@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.5 — 2026-08-09
+
+- preferência de GPU de alto desempenho registrada no Windows para Python, FFmpeg, Real-ESRGAN e RIFE;
+- ambiente CUDA fixado na primeira GPU NVIDIA dedicada durante todo o processo;
+- removido o `-g 0` que podia selecionar a GPU integrada em notebooks híbridos;
+- Real-ESRGAN e RIFE agora usam a seleção automática de alto desempenho do NCNN, mantendo CPU apenas quando solicitada;
+- diagnóstico e tela inicial informam a política gráfica ativa.
+
 ## 1.0.0-rc.4 — 2026-08-08
 
 - tela IA local transformada em gerenciador com seleção individual, instalação dos selecionados e instalação de tudo que falta;

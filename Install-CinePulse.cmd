@@ -1,5 +1,8 @@
 @echo off
 setlocal EnableExtensions
+set "CUDA_DEVICE_ORDER=PCI_BUS_ID"
+set "CUDA_VISIBLE_DEVICES=0"
+set "CINEPULSE_PREFER_DEDICATED_GPU=1"
 title CinePulse - Instalacao completa
 color 0B
 

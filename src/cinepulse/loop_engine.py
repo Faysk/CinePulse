@@ -639,7 +639,6 @@ class LoopMusicApp:
             "-n", "realesr-animevideov3",
             "-s", "2",
             "-f", "png",
-            "-g", "0",
             "-t", "256",
             "-j", "2:2:2",
         ]

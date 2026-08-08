@@ -862,6 +862,10 @@ class VideoOptimizerStudio:
         ttk.Label(hardware_box, text=f"GPU: {gpu_text} • {vram_text}").pack(anchor="w")
         ttk.Label(hardware_box, text=f"CPU: {self._hardware.cpu_threads} threads • perfil sugerido: {self._hardware.quality_tier}").pack(anchor="w", pady=(4, 0))
         ttk.Label(hardware_box, text=f"FFmpeg: {'pronto' if FFMPEG else 'não encontrado'} • NVIDIA: {'pronta' if self._nvenc else 'fallback por CPU'}").pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            hardware_box,
+            text=("Política gráfica: NVIDIA dedicada preferida durante todo o processo" if self._hardware.gpu else "Política gráfica: seleção automática"),
+        ).pack(anchor="w", pady=(4, 0))
 
         profiles = ttk.LabelFrame(parent, text="Níveis de qualidade", padding=12)
         profiles.grid(row=3, column=0, sticky="ew", pady=(12, 0))
@@ -2348,7 +2352,7 @@ class VideoOptimizerStudio:
         self._set_stage("IA 2/3", f"Real-ESRGAN está recuperando detalhes em {frames} quadros.")
         command = [
             str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
-            "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-g", "0", "-t", "256", "-j", "2:2:2",
+            "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", "2:2:2",
         ]
         self._run_ai(command, outgoing, frames, base + weight * 0.2, weight * 0.6)
         self._set_stage("IA 3/3", "Montando o master aprimorado sem o áudio do vídeo.")

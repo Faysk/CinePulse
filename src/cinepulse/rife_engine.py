@@ -29,14 +29,17 @@ def build_command(
         raise FileNotFoundError("Executável ou modelo RIFE não encontrado.")
     if frames < 2:
         raise ValueError("RIFE requer ao menos dois quadros de saída.")
-    return [
+    command = [
         str(paths.executable),
         "-i", str(incoming),
         "-o", str(outgoing),
         "-n", str(frames),
         "-m", str(paths.model),
-        "-g", "-1" if use_cpu else "0",
+    ]
+    if use_cpu:
+        command += ["-g", "-1"]
+    command += [
         "-j", "1:2:2" if use_cpu else "2:2:2",
         "-f", "%08d.png",
     ]
-
+    return command

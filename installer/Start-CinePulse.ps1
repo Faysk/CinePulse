@@ -143,6 +143,39 @@ function Install-DesktopShortcut {
     Write-Host "Atalho criado: $ShortcutPath"
 }
 
+function Set-DedicatedGpuPreference {
+    $Nvidia = Get-Command 'nvidia-smi.exe' -ErrorAction SilentlyContinue
+    if (-not $Nvidia) {
+        Write-Host 'GPU dedicada NVIDIA não detectada; seleção automática do Windows mantida.'
+        return
+    }
+    $env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'
+    $env:CUDA_VISIBLE_DEVICES = '0'
+    $env:CINEPULSE_PREFER_DEDICATED_GPU = '1'
+    try {
+        $PreferenceKey = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+        New-Item -Path $PreferenceKey -Force | Out-Null
+        $Executables = @(
+            $PythonExe,
+            (Join-Path $VenvRoot 'Scripts\pythonw.exe'),
+            (Join-Path $ProjectRoot 'components\ffmpeg\bin\ffmpeg.exe'),
+            (Join-Path $ProjectRoot 'components\real-esrgan\realesrgan-ncnn-vulkan.exe'),
+            (Join-Path $ProjectRoot 'components\ai\models\rife\portable\rife-ncnn-vulkan-20221029-windows\rife-ncnn-vulkan.exe')
+        )
+        $Configured = 0
+        foreach ($Executable in $Executables) {
+            if (Test-Path -LiteralPath $Executable) {
+                $Resolved = [IO.Path]::GetFullPath($Executable)
+                New-ItemProperty -Path $PreferenceKey -Name $Resolved -PropertyType String -Value 'GpuPreference=2;' -Force | Out-Null
+                $Configured++
+            }
+        }
+        Write-Host "CINEPULSE_DEDICATED_GPU_PREFERRED NVIDIA=OK executables=$Configured"
+    } catch {
+        Write-Warning "O Windows não aceitou a preferência gráfica; CUDA e seleção automática continuam ativas. $($_.Exception.Message)"
+    }
+}
+
 function Get-PortableUv {
     $BootstrapRoot = Join-Path $RuntimeRoot 'bootstrap'
     $UvExe = Join-Path $BootstrapRoot 'uv.exe'
@@ -446,6 +479,7 @@ if (-not $CoreOnly) {
         Install-CompleteComponents -Selected $AiComponents
     }
 }
+Set-DedicatedGpuPreference
 if ($InstallOnly) {
     Install-DesktopShortcut
     Write-Host 'CINEPULSE_INSTALL_COMPLETE status=OK'
