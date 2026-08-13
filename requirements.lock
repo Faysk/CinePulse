@@ -1,3 +1,4 @@
-# Dependências diretas reproduzíveis da versão alpha.
-numpy==2.4.4
-
+# CinePulse Windows x64 runtime lock — Python 3.13.7.
+# Hash pinned to the CPython 3.13 Windows x86-64 wheel.
+numpy==2.4.4 \
+    --hash=sha256:5c70f1cc1c4efbe316a572e2d8b9b9cc44e89b95f79ca3331553fbb63716e2bf

@@ -14,7 +14,7 @@ class SafeOutputTests(unittest.TestCase):
             final.write_bytes(b"old")
             atomic = AtomicOutput.for_path(final, pid=123)
             atomic.prepare().write_bytes(b"new-video")
-            self.assertEqual(final, atomic.commit())
+            self.assertEqual(atomic.final, atomic.commit())
             self.assertEqual(b"new-video", final.read_bytes())
             self.assertFalse(atomic.partial.exists())
             self.assertFalse(atomic.backup.exists())
@@ -38,4 +38,3 @@ class SafeOutputTests(unittest.TestCase):
             self.assertEqual(60, payload["expected"]["fps"])
             journal.clear()
             self.assertIsNone(journal.read())
-

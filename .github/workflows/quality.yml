@@ -2,22 +2,88 @@ name: Quality
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  source:
-    runs-on: windows-latest
+  source-matrix:
+    name: Source · ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: ${{ matrix.python }}
           cache: pip
       - name: Install project
         run: python -m pip install --disable-pip-version-check --editable .
-      - name: Release gate
-        shell: powershell
-        run: .\scripts\Test-Release.ps1
+      - name: Source gate
+        run: python scripts/ci_gate.py --profile source --output artifacts/ci/source-${{ runner.os }}-py${{ matrix.python }}.json
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-${{ runner.os }}-py${{ matrix.python }}
+          path: artifacts/ci/*.json
+          if-no-files-found: error
+
+  cpu-integration:
+    name: CPU integration · Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: System media dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb python3-tk
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: CPU integration gate
+        run: python scripts/ci_gate.py --profile cpu --output artifacts/ci/cpu-linux.json
+      - name: Upload integration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpu-integration-linux
+          path: |
+            artifacts/ci/*.json
+            data/test-runs/**/report.json
+          if-no-files-found: warn
+  media-integration:
+    name: Media integrity · Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: System media dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb python3-tk
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: Media integration gate
+        run: python scripts/ci_gate.py --profile media --output artifacts/ci/media-linux.json
+      - name: Upload media evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: media-integration-linux
+          path: |
+            artifacts/ci/*.json
+            data/test-runs/**/report.json
+          if-no-files-found: warn

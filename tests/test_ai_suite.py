@@ -18,6 +18,11 @@ class AiSuiteTests(unittest.TestCase):
         marked = {module.key for module in ai_suite.MODULES if module.experimental and module.installer_component}
         self.assertEqual(marked, experimental)
 
+    def test_demucs_inventory_checks_the_same_manifest_used_by_stem_engine(self) -> None:
+        module = next(module for module in ai_suite.MODULES if module.key == "demucs")
+        required_names = {path.name for path in module.required}
+        self.assertIn("htdemucs_ft.yaml", required_names)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,16 @@ class SourceHygieneTests(unittest.TestCase):
                 large.append(str(path.relative_to(ROOT)))
         self.assertEqual([], large)
 
+    def test_processing_labels_do_not_claim_all_gpu(self) -> None:
+        paths = [ROOT / "src" / "cinepulse" / "studio.py", ROOT / "src" / "cinepulse" / "ui"]
+        text = []
+        for path in paths:
+            if path.is_file():
+                text.append(path.read_text(encoding="utf-8"))
+            else:
+                text.extend(item.read_text(encoding="utf-8") for item in path.rglob("*.py"))
+        self.assertNotIn("GPU automática", "\n".join(text))
+
 
 if __name__ == "__main__":
     unittest.main()

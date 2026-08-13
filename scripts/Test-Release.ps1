@@ -14,12 +14,8 @@ if (-not (Test-Path -LiteralPath $Python)) {
 & (Join-Path $PSScriptRoot 'Check-Repository.ps1')
 if (-not $?) { throw 'A higiene do repositório falhou.' }
 $env:PYTHONPATH = Join-Path $ProjectRoot 'src'
-& $Python (Join-Path $PSScriptRoot 'release_gate.py')
-if ($LASTEXITCODE -ne 0) { throw 'A consistência da release falhou.' }
-& $Python -m compileall -q (Join-Path $ProjectRoot 'src') (Join-Path $ProjectRoot 'tests')
-if ($LASTEXITCODE -ne 0) { throw 'A compilação dos módulos falhou.' }
-& $Python -m unittest discover -s (Join-Path $ProjectRoot 'tests') -v
-if ($LASTEXITCODE -ne 0) { throw 'Os testes unitários falharam.' }
+& $Python (Join-Path $PSScriptRoot 'ci_gate.py') --profile source --output (Join-Path $ProjectRoot 'artifacts\ci\source-powershell.json')
+if ($LASTEXITCODE -ne 0) { throw 'O portão source da Phase 9 falhou.' }
 
 Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Filter '*.ps1' |
     Where-Object { $_.FullName -notlike '*\.runtime\*' -and $_.FullName -notlike '*\components\*' } |
@@ -30,4 +26,4 @@ Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Filter '*.ps1' |
         if ($Errors.Count) { throw "PowerShell inválido: $($_.FullName): $($Errors[0].Message)" }
     }
 
-Write-Host 'CINEPULSE_RELEASE_TESTS_OK'
+Write-Host 'CINEPULSE_RELEASE_TESTS_OK phase=9'

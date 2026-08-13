@@ -87,10 +87,12 @@ MODULES = (
     ),
     AiModule(
         "demucs", "Hybrid Transformer Demucs", "Separação de voz, bateria, baixo e instrumentos",
-        (VENV_PYTHON,) + tuple(MODELS / "demucs" / "local_repo" / name for name in (
-            "f7e0c4bc-ba3fe64a.th", "d12395a8-e57c48e6.th",
-            "92cfc3b6-ef3bcb9c.th", "04573f0d-f3cf25b2.th",
-        )), "Integrado e validado para condução dos VFX", None, "demucs", download_bytes=3500 * 1024 * 1024,
+        (VENV_PYTHON, MODELS / "demucs" / "local_repo" / "htdemucs_ft.yaml") + tuple(
+            MODELS / "demucs" / "local_repo" / name for name in (
+                "f7e0c4bc-ba3fe64a.th", "d12395a8-e57c48e6.th",
+                "92cfc3b6-ef3bcb9c.th", "04573f0d-f3cf25b2.th",
+            )
+        ), "Integrado e validado para condução dos VFX", None, "demucs", download_bytes=3500 * 1024 * 1024,
     ),
     AiModule(
         "clap", "LAION CLAP HTSAT", "Atmosfera, intenção e direção musical",

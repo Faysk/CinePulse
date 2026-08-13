@@ -1,0 +1,38 @@
+name: GPU Acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-acceptance
+  cancel-in-progress: false
+
+jobs:
+  nvidia-windows:
+    name: NVIDIA target-machine acceptance
+    runs-on: [self-hosted, Windows, X64, cinepulse-gpu]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: GPU inventory
+        shell: pwsh
+        run: nvidia-smi
+      - name: GPU gate
+        run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
+      - name: Upload GPU evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cinepulse-gpu-acceptance
+          path: |
+            artifacts/ci/*.json
+            data/test-runs/**/report.json
+          if-no-files-found: warn

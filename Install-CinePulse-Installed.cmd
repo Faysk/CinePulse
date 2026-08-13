@@ -1,0 +1,10 @@
+@echo off
+setlocal EnableExtensions
+set "CINEPULSE_PORTABLE="
+set "CINEPULSE_INSTALL_MODE=installed"
+set "CINEPULSE_POWERSHELL="
+if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "CINEPULSE_POWERSHELL=%ProgramFiles%\PowerShell\7\pwsh.exe"
+if not defined CINEPULSE_POWERSHELL for /f "delims=" %%P in ('where pwsh.exe 2^>nul') do if not defined CINEPULSE_POWERSHELL set "CINEPULSE_POWERSHELL=%%P"
+if not defined CINEPULSE_POWERSHELL set "CINEPULSE_POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+"%CINEPULSE_POWERSHELL%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\Start-CinePulse.ps1" -NonPortable -InstallOnly %*
+exit /b %errorlevel%

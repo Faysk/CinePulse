@@ -19,6 +19,10 @@ class PreflightTests(unittest.TestCase):
         plan = StoragePlan(4, 3, 5, 20, False, 2)
         self.assertIn("disco de saída", plan.blocking_reasons[0])
 
+    def test_cache_growth_is_counted_when_cache_shares_scratch(self) -> None:
+        plan = StoragePlan(1, 2, 100, 6, False, 2, cache_growth_gb=3, cache_free_gb=6, cache_on_temporary=True)
+        self.assertTrue(any("disco temporário" in reason for reason in plan.blocking_reasons))
+
     def test_output_may_not_overwrite_an_input(self) -> None:
         source = Path("song.mp4")
         self.assertTrue(validate_output_path(source, (source,)))
