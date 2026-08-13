@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.6 — 2026-08-13
+
+- consolida o Core Integrity MegaPack, com `RenderPlan` único e decisões explícitas de resolução, FPS, cor, armazenamento e entrega;
+- adiciona preservação real, upscale Lanczos/Real-ESRGAN, interpolação FFmpeg/RIFE e VFX guiado pelo envelope musical;
+- acrescenta verificação profunda, histórico de render, saída atômica, fila persistente e UX modular;
+- separa corretamente as distribuições MSI e portátil, inclui updater validado, SBOM, hooks de assinatura e gates de release;
+- valida 187 testes, matriz Windows/Linux em Python 3.11/3.13, integração CPU e integridade de mídia;
+- corrige compatibilidade do Tk no Windows, simulação neural em chunks, geração de SBOM no Python 3.11 e aliases de caminhos temporários.
+
 ## Core Integrity MegaPack — Phase 9
 
 - novo `scripts/ci_gate.py` transforma source checks e integrações CPU/GPU em perfis reproduzíveis com evidência JSON;

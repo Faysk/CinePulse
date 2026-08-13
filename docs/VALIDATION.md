@@ -1,4 +1,4 @@
-# Validação da versão 1.0.0-rc.5
+# Validação da versão 1.0.0-rc.6
 
 Data: 2026-08-04  
 Ambiente: Windows 11, Python portátil 3.13.7, FFmpeg 8.1.2/9.0, RTX 4070 Laptop 8 GB, 28 threads de CPU.

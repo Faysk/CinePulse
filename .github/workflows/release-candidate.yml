@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: SemVer da release (ex. 1.0.0-rc.5)
+        description: SemVer da release (ex. 1.0.0-rc.6)
         required: true
-        default: 1.0.0-rc.5
+        default: 1.0.0-rc.6
   push:
     tags: ['v*']
 

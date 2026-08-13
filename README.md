@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.0.0-rc.5`. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. Em máquinas híbridas, o CinePulse prioriza a GPU NVIDIA dedicada desde a abertura. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
+> Estado: `1.0.0-rc.6`. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. Em máquinas híbridas, o CinePulse prioriza a GPU NVIDIA dedicada desde a abertura. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
 
 ## O que já funciona
 
