@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .paths import PATHS
+from .signatures import verify_bytes
 
 
 CHANNEL_FILE = PATHS.root / "installer" / "update-channel.json"
@@ -24,6 +25,41 @@ class UpdateInfo:
     download_url: str
     sha256: str
     notes_url: str | None = None
+
+
+@dataclass(frozen=True)
+class UpdateChannel:
+    manifest_url: str
+    require_signature: bool = False
+    public_key: str | None = None
+    manifest_signature_url: str | None = None
+
+
+def configured_channel() -> UpdateChannel | None:
+    override = os.environ.get("CINEPULSE_UPDATE_MANIFEST", "").strip()
+    if override:
+        return UpdateChannel(
+            override,
+            os.environ.get("CINEPULSE_UPDATE_REQUIRE_SIGNATURE") == "1",
+            os.environ.get("CINEPULSE_UPDATE_PUBLIC_KEY", "").strip() or None,
+            os.environ.get("CINEPULSE_UPDATE_SIGNATURE", "").strip() or None,
+        )
+    try:
+        payload = json.loads(CHANNEL_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    schema = int(payload.get("schema") or 0)
+    if schema not in {1, 2}:
+        raise ValueError("Configuração do canal de atualização incompatível.")
+    manifest_url = str(payload.get("manifest_url") or "").strip()
+    if not manifest_url:
+        return None
+    require_signature = bool(payload.get("require_signature", False))
+    public_key = str(payload.get("public_key") or "").strip() or None
+    signature_url = str(payload.get("manifest_signature_url") or "").strip() or None
+    if require_signature and (not public_key or not signature_url):
+        raise ValueError("Canal assinado incompleto: chave pública e URL da assinatura são obrigatórias.")
+    return UpdateChannel(manifest_url, require_signature, public_key, signature_url)
 
 
 def _version_key(value: str) -> tuple[tuple[int, ...], int, int]:
@@ -49,14 +85,8 @@ def is_newer(candidate: str, current: str) -> bool:
 
 
 def configured_feed() -> str | None:
-    override = os.environ.get("CINEPULSE_UPDATE_MANIFEST", "").strip()
-    if override:
-        return override
-    try:
-        payload = json.loads(CHANNEL_FILE.read_text(encoding="utf-8-sig"))
-        return str(payload.get("manifest_url") or "").strip() or None
-    except (OSError, ValueError):
-        return None
+    channel = configured_channel()
+    return channel.manifest_url if channel else None
 
 
 def _require_https(url: str) -> None:
@@ -68,7 +98,16 @@ def check(feed_url: str, current_version: str, timeout: int = 15) -> UpdateInfo 
     _require_https(feed_url)
     request = urllib.request.Request(feed_url, headers={"User-Agent": f"CinePulse/{current_version}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read(1024 * 1024).decode("utf-8-sig"))
+        raw_manifest = response.read(1024 * 1024)
+    channel = configured_channel()
+    if channel and channel.manifest_url == feed_url and channel.require_signature:
+        assert channel.public_key and channel.manifest_signature_url
+        _require_https(channel.manifest_signature_url)
+        signature_request = urllib.request.Request(channel.manifest_signature_url, headers={"User-Agent": f"CinePulse/{current_version}"})
+        with urllib.request.urlopen(signature_request, timeout=timeout) as response:
+            raw_signature = response.read(256 * 1024)
+        verify_bytes(raw_manifest, raw_signature, channel.public_key)
+    payload = json.loads(raw_manifest.decode("utf-8-sig"))
     if payload.get("schema") != 1:
         raise ValueError("Canal de atualização incompatível.")
     info = UpdateInfo(

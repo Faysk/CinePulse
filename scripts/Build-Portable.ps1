@@ -1,14 +1,29 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Version = '1.0.0-rc.5',
     [string]$Repository = '',
+    [string]$MinisignPublicKey = '',
+    [string]$MinisignSecretKey = '',
+    [string]$MinisignExe = '',
+    [string]$BuildPython = '',
     [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$Python = Join-Path $ProjectRoot '.runtime\python\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $Python)) { throw 'Execute CinePulse.cmd uma vez antes de montar o pacote.' }
+$Python = $BuildPython
+if (-not $Python) {
+    $ManagedBuildPython = Join-Path $ProjectRoot '.runtime\python\Scripts\python.exe'
+    if (Test-Path -LiteralPath $ManagedBuildPython) {
+        $Python = $ManagedBuildPython
+    } else {
+        $PythonCommand = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $PythonCommand) { $PythonCommand = Get-Command 'py' -ErrorAction SilentlyContinue }
+        if (-not $PythonCommand) { throw 'Python de build não encontrado. Use -BuildPython ou inicialize o runtime gerenciado.' }
+        $Python = $PythonCommand.Source
+    }
+}
+if (-not (Test-Path -LiteralPath $Python)) { throw "Python de build inválido: $Python" }
 $env:PYTHONPATH = Join-Path $ProjectRoot 'src'
 if (-not $SkipTests) {
     & (Join-Path $PSScriptRoot 'Test-Release.ps1')
@@ -48,12 +63,30 @@ if ($Repository) {
     if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
         throw 'Use o formato dono/repositorio em -Repository.'
     }
-    $Channel = [ordered]@{
-        schema = 1
-        manifest_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json"
+    if ($MinisignPublicKey) {
+        if (-not $MinisignExe -or -not (Test-Path -LiteralPath $MinisignExe)) { throw 'Canal assinado exige -MinisignExe válido.' }
+        if (-not $MinisignSecretKey -or -not (Test-Path -LiteralPath $MinisignSecretKey)) { throw 'Canal assinado exige -MinisignSecretKey válido.' }
+        $ToolsRoot = Join-Path $PackageRoot 'installer\tools'
+        New-Item -ItemType Directory -Path $ToolsRoot -Force | Out-Null
+        Copy-Item -LiteralPath $MinisignExe -Destination (Join-Path $ToolsRoot 'minisign.exe') -Force
+        $Channel = [ordered]@{
+            schema = 2
+            manifest_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json"
+            require_signature = $true
+            public_key = $MinisignPublicKey.Trim()
+            manifest_signature_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json.minisig"
+        }
+    } else {
+        $Channel = [ordered]@{
+            schema = 1
+            manifest_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json"
+        }
     }
     $Channel | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PackageRoot 'installer\update-channel.json') -Encoding UTF8
 }
+
+& $Python (Join-Path $ProjectRoot 'scripts\generate_sbom.py') --output (Join-Path $PackageRoot 'sbom.cdx.json')
+if ($LASTEXITCODE -ne 0) { throw 'Falha ao gerar o SBOM CycloneDX.' }
 
 $IntegrityFiles = [ordered]@{}
 Get-ChildItem -LiteralPath $PackageRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
@@ -85,7 +118,13 @@ if ($Repository) {
         sha256 = $Hash
         notes_url = "https://github.com/$Repository/releases/tag/v$Version"
     }
-    $UpdateManifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Dist 'cinepulse-update.json') -Encoding UTF8
+    $UpdateManifestPath = Join-Path $Dist 'cinepulse-update.json'
+    $UpdateManifest | ConvertTo-Json | Set-Content -LiteralPath $UpdateManifestPath -Encoding UTF8
+    if ($MinisignPublicKey) {
+        $SignaturePath = "$UpdateManifestPath.minisig"
+        & $MinisignExe -S -s $MinisignSecretKey -m $UpdateManifestPath -x $SignaturePath -q
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $SignaturePath)) { throw 'Falha ao assinar o manifesto de atualização com Minisign.' }
+    }
 }
 Remove-Item -LiteralPath $Staging -Recurse -Force
 

@@ -6,8 +6,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .delivery import SUPPORTED_SUFFIXES
 
-VIDEO_OUTPUT_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm"}
+
+VIDEO_OUTPUT_SUFFIXES = set(SUPPORTED_SUFFIXES)
 
 
 @dataclass(frozen=True)
@@ -18,20 +20,26 @@ class StoragePlan:
     temporary_free_gb: float
     same_volume: bool
     reserve_gb: float
+    cache_growth_gb: float = 0.0
+    cache_free_gb: float = float("inf")
+    cache_on_output: bool = False
+    cache_on_temporary: bool = True
 
     @property
     def blocking_reasons(self) -> tuple[str, ...]:
         reasons: list[str] = []
+        cache_growth = max(0.0, self.cache_growth_gb)
         if self.same_volume:
-            needed = self.output_gb + self.temporary_gb + self.reserve_gb
+            shared_cache = cache_growth if self.cache_on_output or self.cache_on_temporary else 0.0
+            needed = self.output_gb + self.temporary_gb + shared_cache + self.reserve_gb
             if self.output_free_gb < needed:
                 reasons.append(
                     f"O disco compartilhado precisa de aproximadamente {needed:.2f} GB; "
                     f"há {self.output_free_gb:.2f} GB livres."
                 )
         else:
-            output_needed = self.output_gb + self.reserve_gb
-            temp_needed = self.temporary_gb + self.reserve_gb
+            output_needed = self.output_gb + (cache_growth if self.cache_on_output else 0.0) + self.reserve_gb
+            temp_needed = self.temporary_gb + (cache_growth if self.cache_on_temporary else 0.0) + self.reserve_gb
             if self.output_free_gb < output_needed:
                 reasons.append(
                     f"O disco de saída precisa de aproximadamente {output_needed:.2f} GB; "
@@ -41,6 +49,13 @@ class StoragePlan:
                 reasons.append(
                     f"O disco temporário precisa de aproximadamente {temp_needed:.2f} GB; "
                     f"há {self.temporary_free_gb:.2f} GB livres."
+                )
+        if cache_growth and not self.cache_on_output and not self.cache_on_temporary:
+            cache_needed = cache_growth + self.reserve_gb
+            if self.cache_free_gb < cache_needed:
+                reasons.append(
+                    f"O disco de cache precisa de aproximadamente {cache_needed:.2f} GB; "
+                    f"há {self.cache_free_gb:.2f} GB livres."
                 )
         return tuple(reasons)
 
@@ -73,10 +88,17 @@ def build_storage_plan(
     output_gb: float,
     temporary_gb: float,
     reserve_gb: float,
+    *,
+    cache: Path | None = None,
+    cache_growth_gb: float = 0.0,
 ) -> StoragePlan:
     output_parent = nearest_existing_parent(output)
     temporary_parent = nearest_existing_parent(temporary)
-    same_volume = volume_identity(output_parent) == volume_identity(temporary_parent)
+    output_volume = volume_identity(output_parent)
+    temporary_volume = volume_identity(temporary_parent)
+    same_volume = output_volume == temporary_volume
+    cache_parent = nearest_existing_parent(cache) if cache is not None else temporary_parent
+    cache_volume = volume_identity(cache_parent)
     return StoragePlan(
         output_gb=max(0.0, float(output_gb)),
         temporary_gb=max(0.0, float(temporary_gb)),
@@ -84,6 +106,10 @@ def build_storage_plan(
         temporary_free_gb=free_gb(temporary_parent),
         same_volume=same_volume,
         reserve_gb=max(0.0, float(reserve_gb)),
+        cache_growth_gb=max(0.0, float(cache_growth_gb)),
+        cache_free_gb=free_gb(cache_parent),
+        cache_on_output=cache_volume == output_volume,
+        cache_on_temporary=cache_volume == temporary_volume,
     )
 
 

@@ -12,6 +12,7 @@ from . import __version__
 from .ai_suite import inventory
 from .paths import PATHS, ensure_runtime_directories
 from .integrity import verify as verify_integrity
+from .runtime_distribution import installation_mode, find_powershell
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -34,13 +35,24 @@ def collect() -> dict:
     disk = shutil.disk_usage(PATHS.data)
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
+    try:
+        powershell = find_powershell()
+        powershell_info = {"path": powershell.executable, "modern": powershell.modern}
+    except OSError:
+        powershell_info = {"path": None, "modern": False}
     return {
         "cinepulse": __version__,
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "processor": platform.processor(),
         "cpu_threads": os.cpu_count(),
+        "distribution": {
+            "mode": installation_mode(PATHS.root),
+            "managed_python": os.environ.get("CINEPULSE_INSTALL_MODE") in {"portable", "installed"},
+            "powershell": powershell_info,
+        },
         "paths": {
+            "root": str(PATHS.root),
             "data": str(PATHS.data),
             "components": str(PATHS.components),
         },

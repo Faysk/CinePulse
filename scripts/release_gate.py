@@ -54,12 +54,26 @@ def main() -> int:
     require(bool(re.fullmatch(r"[0-9a-f]{128}", str(sdk.get("sha512", "")).lower())), "SHA-512 inválido para SDK .NET", failures)
 
     required = (
-        "CinePulse.cmd", "Install-CinePulse.cmd", "LICENSE", "README.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
-        "requirements.lock", "installer/Start-CinePulse.ps1", "installer/wix/Product.wxs",
-        "scripts/Build-Msi.ps1", "docs/VALIDATION.md",
+        "CinePulse.cmd", "Install-CinePulse.cmd", "CinePulse-Installed.cmd", "Install-CinePulse-Installed.cmd",
+        "LICENSE", "README.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md", "requirements.lock",
+        "assets/cinepulse.ico", "installer/Start-CinePulse.ps1", "installer/wix/Product.wxs",
+        "scripts/Build-Msi.ps1", "scripts/Test-MsiLifecycle.ps1", "scripts/generate_sbom.py", "scripts/ci_gate.py", "docs/VALIDATION.md",
+        ".github/workflows/quality.yml", ".github/workflows/release-candidate.yml", ".github/workflows/gpu-acceptance.yml",
+        "docs/CORE_INTEGRITY_PHASE9_CI_RELEASE_GATES.md", "docs/FINAL_AUDIT_RC_ACCEPTANCE.md",
+        "docs/RC_ACCEPTANCE_CHECKLIST.md", "scripts/final_audit.py", "scripts/Invoke-RcAcceptance.ps1",
     )
     for relative in required:
         require((ROOT / relative).is_file(), f"Arquivo obrigatório ausente: {relative}", failures)
+
+    requirements = (ROOT / "requirements.lock").read_text(encoding="utf-8")
+    require("--hash=sha256:" in requirements, "Lock do runtime sem hash", failures)
+    start_script = (ROOT / "installer" / "Start-CinePulse.ps1").read_text(encoding="utf-8-sig")
+    require("--python-preference only-managed" in start_script, "Runtime gerenciado não é obrigatório", failures)
+    require("Find-SystemPython" not in start_script, "Bootstrap ainda depende do Python do sistema", failures)
+    wix = (ROOT / "installer" / "wix" / "Product.wxs").read_text(encoding="utf-8-sig")
+    require("$(var.ProductVersion)" in wix, "Versão MSI continua fixa", failures)
+    require("CinePulse-Installed.cmd" in wix, "MSI ainda usa launcher portátil", failures)
+    require("CinePulseIcon" in wix, "Branding do MSI sem ícone", failures)
 
     if failures:
         print("CINEPULSE_RELEASE_GATE_FAILED")

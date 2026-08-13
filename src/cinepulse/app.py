@@ -6,6 +6,7 @@ from pathlib import Path
 
 from . import __version__
 from .paths import PATHS, ensure_runtime_directories
+from .runtime_distribution import InstanceGuard
 
 
 def _configure_logging() -> Path:
@@ -24,11 +25,24 @@ def _configure_logging() -> Path:
 
 def main() -> None:
     log_path = _configure_logging()
-    logging.getLogger(__name__).info(
-        "Iniciando CinePulse %s; dados=%s; log=%s",
-        __version__, PATHS.data, log_path,
-    )
-    from .studio import main as studio_main
+    guard = InstanceGuard(PATHS.locks / "app-instance.json")
+    if not guard.acquire():
+        logging.getLogger(__name__).warning("Segunda instância bloqueada; lock=%s", PATHS.locks)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, "O CinePulse já está aberto nesta sessão.", "CinePulse", 0x40)
+            except Exception:
+                pass
+        return
+    try:
+        logging.getLogger(__name__).info(
+            "Iniciando CinePulse %s; dados=%s; log=%s",
+            __version__, PATHS.data, log_path,
+        )
+        from .studio import main as studio_main
 
-    studio_main()
+        studio_main()
+    finally:
+        guard.release()
 
