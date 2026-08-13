@@ -24,6 +24,7 @@ def _component(name: str, version: str, *, kind: str = "library", hashes: list[d
 
 def build_sbom() -> dict:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    project_version = project["version"]
     bootstrap = json.loads((ROOT / "installer" / "bootstrap-manifest.json").read_text(encoding="utf-8"))
     lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
     numpy_match = re.search(r"numpy==([^\s\\]+)", lock)
@@ -48,7 +49,7 @@ def build_sbom() -> dict:
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
-        "serialNumber": f"urn:uuid:{uuid5(NAMESPACE_URL, f'https://cinepulse.local/sbom/{project["version"]}')}",
+        "serialNumber": f"urn:uuid:{uuid5(NAMESPACE_URL, 'https://cinepulse.local/sbom/' + project_version)}",
         "version": 1,
         "metadata": {
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
