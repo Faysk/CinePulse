@@ -27,6 +27,8 @@ jobs:
         run: nvidia-smi
       - name: GPU gate
         run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
+      - name: Recovery RIFE 8K UHD acceptance
+        run: python tests/recovery_gpu_acceptance.py
       - name: Upload GPU evidence
         if: always()
         uses: actions/upload-artifact@v7
