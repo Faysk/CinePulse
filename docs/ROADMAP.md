@@ -15,9 +15,22 @@
 
 - preview com vídeo e música reais;
 - render musical longo no perfil de uso principal;
-- render 8K/120 fps na máquina de destino;
+- render 8K/120 fps na máquina de destino — um job real interrompido foi recuperado e aprovado tecnicamente; ainda falta fechar o aceite perceptivo e integrar a recuperação ao fluxo normal;
 - fila com mais de um projeto;
 - conferência visual de transição, VFX, cor e reação musical.
+
+## Recuperação genérica pela interface
+
+- recuperador técnico por segmento e checkpoint: concluído no caso real 8K/120;
+- auditoria/reparo do defeito de quadros pretos: concluído para o perfil FFV1 8K observado;
+- timeline exata, reutilização segura e staging para SSD: concluídos no recuperador;
+- descoberta automática de jobs interrompidos: pendente;
+- item restaurado na fila e inspector de recuperação: pendentes;
+- pausa/retomada durável independente da janela: pendente;
+- gates de qualidade incorporados ao pipeline RIFE normal: pendentes;
+- testes de queda em todas as fases e segundo aceite físico: pendentes.
+
+O escopo executável, requisitos e gates estão em `RECOVERY_HARDENING_PROGRAM.md`, `RECOVERY_REQUIREMENTS.md` e `RECOVERY_TEST_MATRIX.md`. A visão de produto permanece em `RESUMABLE_RENDERING_DESIGN.md`. O sucesso do job específico não deve ser apresentado como retomada genérica já entregue na interface.
 
 ## Core Integrity MegaPack — consolidação antes do 1.0 estável
 

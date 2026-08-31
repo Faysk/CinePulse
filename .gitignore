@@ -3,6 +3,12 @@
 /components/
 /data/
 /.cinepulse-portable
+/.tmp_quality_review/
+
+# Local incident-specific recovery helpers
+/scripts/resume_nova_recovery.ps1
+/scripts/stage_nova_master_on_d.ps1
+/scripts/wait_nova_final_encode.ps1
 
 # User projects, media and generated outputs
 /projects/

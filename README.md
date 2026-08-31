@@ -73,6 +73,7 @@ py -3 -m venv .venv
 
 Consulte [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) e o [roadmap](docs/ROADMAP.md).
 Os resultados reproduzíveis da versão atual estão em [VALIDATION.md](docs/VALIDATION.md).
+Para renders interrompidos, consulte o [índice de recuperação](docs/RECOVERY_INDEX.md), que separa o pós-mortem real, o runbook técnico e o desenho ainda pendente da retomada pela interface.
 
 Para montar o ZIP portátil reproduzível, depois de abrir o CinePulse ao menos uma vez:
 

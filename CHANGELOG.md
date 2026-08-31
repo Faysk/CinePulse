@@ -1,5 +1,15 @@
 # Changelog
 
+## Não lançado — recuperação RIFE pós-interrupção
+
+- adiciona recuperador reiniciável por segmento para o layout RIFE em chunks, com checkpoint atômico e preservação de cache, segmentos, masters e parciais;
+- adiciona auditoria estrutural de segmentos FFV1 e reparo seguro do defeito determinístico de quadros pretos observado em 8K;
+- usa RIFE em modo UHD/serial, valida integridade dos PNGs e aplica retime temporal seguro para contagens residuais de 17/18 quadros;
+- corrige a concatenação de milhares de segmentos com durações derivadas da contagem exata de pacotes;
+- permite reutilizar master/parcial somente após validação, preserva rejeitados e remove `faststart` da entrega local muito grande;
+- documenta o caso real 8K/120, o runbook operacional, requisitos rastreáveis, manifesto/máquina de estados, UX, fault matrix, migração e o programa completo para recuperação genérica pela interface;
+- valida o recuperador no job real `20260826-203826-da124c70`: 2.718 segmentos, 43.533 quadros, zero preto no gate conhecido e MP4 final 7680×4320/120 HEVC + AAC aprovado.
+
 ## 1.0.0-rc.6 — 2026-08-13
 
 - consolida o Core Integrity MegaPack, com `RenderPlan` único e decisões explícitas de resolução, FPS, cor, armazenamento e entrega;

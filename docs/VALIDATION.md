@@ -347,3 +347,40 @@ Passagem final local em Linux/Xvfb após a Phase 9:
 - `update-channel.json` não possui manifesto de produção configurado nesta cópia — CP-019 permanece parcial.
 
 Decisão: código apto a seguir para Release Candidate controlado, condicionado ao gate Windows/NVIDIA. `1.0.0` estável ainda não aprovado.
+
+## Recuperação real RIFE 8K/120 — job `20260826-203826-da124c70`
+
+Ambiente: Windows, GPU NVIDIA, RIFE NCNN/Vulkan, FFmpeg/FFprobe distribuídos pelo CinePulse e múltiplos volumes locais/USB. Esta validação ocorreu sobre mídia real depois de reinicialização do PC; não é um smoke sintético.
+
+Resultado comprovado:
+
+- primeira validação recuperável: 754/2.718 segmentos, 12.064/43.533 quadros-alvo;
+- checkpoint retomado repetidamente sem apagar os segmentos confirmados;
+- auditoria intermediária: 2.555 segmentos, 40.920 quadros, 990 segmentos afetados e 6.197 quadros pretos determinísticos;
+- reparo atômico: 990/990 segmentos, com originais preservados em quarentena;
+- RIFE completo: 2.718/2.718 segmentos e 43.533/43.533 quadros;
+- gate final específico: zero quadro preto determinístico nos 2.718 segmentos;
+- concatenação corrigida por duração exata `packet_count / fps`: master de 362,774 s;
+- duas entregas em volume USB foram rejeitadas/preservadas por contêiner sem `moov` e erro de trailer;
+- master staged para SSD NVMe interno e entrega local sem `faststart`: PASS;
+- encode final: 11.932 s;
+- quick verify com contagem real: 7680×4320, 120 fps CFR, 43.533 quadros, HEVC, AAC estéreo 48 kHz, duração 362,775 s e delta A/V de aproximadamente 0,002 s: PASS;
+- saída promovida localmente como `nova_otimizado.mp4`, 33.096.031.715 bytes;
+- `job.json`: `status=success` e `recovered=true`.
+
+Testes unitários específicos executados depois das correções:
+
+```powershell
+python -m unittest tests.test_rife_recovery tests.test_matroska_quality -q
+```
+
+Resultado registrado: **8 testes PASS**.
+
+Limites honestos:
+
+- a verificação final registra `mode=quick` e `decoded_to_eof=false`; ela contou todos os quadros via FFprobe, mas não executou o deep verify FFmpeg separado;
+- o gate rápido de preto é calibrado para o FFV1 8K/yuv420p observado e não é um detector universal;
+- a integridade técnica não substitui inspeção perceptiva humana integral;
+- a recuperação genérica ainda não está disponível na interface.
+
+Evidência e procedimento: [pós-mortem do job](INCIDENT_2026-08-26_RIFE_8K120.md) e [runbook de recuperação](RIFE_RECOVERY_RUNBOOK.md).

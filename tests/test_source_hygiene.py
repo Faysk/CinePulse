@@ -13,7 +13,7 @@ class SourceHygieneTests(unittest.TestCase):
         self.assertEqual([], [str(path) for path in forbidden if path.exists()])
 
     def test_no_large_tracked_candidates(self) -> None:
-        ignored = {".git", ".runtime", ".venv", "components", "data"}
+        ignored = {".git", ".runtime", ".venv", ".tmp_quality_review", "components", "data"}
         large = []
         for path in ROOT.rglob("*"):
             if not path.is_file() or any(part in ignored for part in path.parts):
@@ -35,4 +35,3 @@ class SourceHygieneTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
