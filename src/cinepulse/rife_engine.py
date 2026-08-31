@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+SAFE_RUNNER_MODULE = "cinepulse.rife_safe_runner"
 
 
 @dataclass(frozen=True)
@@ -25,21 +29,34 @@ def build_command(
     frames: int,
     use_cpu: bool,
 ) -> list[str]:
+    """Build the crash-safe CinePulse RIFE wrapper command.
+
+    The wrapper intentionally owns the neural invocation instead of exposing a
+    raw ``rife-ncnn-vulkan`` command to Studio.  It generates the native 2x
+    frame count first, uses conservative UHD execution when required, validates
+    every produced PNG, and only then retimes a residual target such as 17/18
+    frames.  Existing callers keep the same API and therefore inherit the
+    safety policy without duplicating it in UI/orchestration code.
+    """
+
     if not paths.available:
         raise FileNotFoundError("Executável ou modelo RIFE não encontrado.")
     if frames < 2:
         raise ValueError("RIFE requer ao menos dois quadros de saída.")
-    command = [
+    return [
+        sys.executable,
+        "-m",
+        SAFE_RUNNER_MODULE,
+        "--rife",
         str(paths.executable),
-        "-i", str(incoming),
-        "-o", str(outgoing),
-        "-n", str(frames),
-        "-m", str(paths.model),
+        "--model",
+        str(paths.model),
+        "--input",
+        str(incoming),
+        "--output",
+        str(outgoing),
+        "--frames",
+        str(frames),
+        "--device",
+        "cpu" if use_cpu else "gpu",
     ]
-    if use_cpu:
-        command += ["-g", "-1"]
-    command += [
-        "-j", "1:2:2" if use_cpu else "2:2:2",
-        "-f", "%08d.png",
-    ]
-    return command
