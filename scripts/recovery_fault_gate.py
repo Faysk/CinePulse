@@ -15,6 +15,7 @@ SOURCE_MODULES = (
     "tests.test_rife_safe_runner",
     "tests.test_render_job",
     "tests.test_job_store",
+    "tests.test_render_history",
     "tests.test_job_lease",
     "tests.test_worker_protocol",
     "tests.test_render_worker",
@@ -23,6 +24,9 @@ SOURCE_MODULES = (
     "tests.test_frame_quality",
     "tests.test_storage_resilience",
     "tests.test_recovery_service",
+    "tests.test_recovery_rollout",
+    "tests.test_recovery_migration",
+    "tests.test_recovery_bootstrap",
 )
 
 
