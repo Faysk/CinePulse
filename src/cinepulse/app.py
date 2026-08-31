@@ -6,6 +6,7 @@ from pathlib import Path
 
 from . import __version__
 from .paths import PATHS, ensure_runtime_directories
+from .recovery_bootstrap import run_recovery_bootstrap
 from .runtime_distribution import InstanceGuard
 
 
@@ -40,9 +41,20 @@ def main() -> None:
             "Iniciando CinePulse %s; dados=%s; log=%s",
             __version__, PATHS.data, log_path,
         )
+        try:
+            bootstrap = run_recovery_bootstrap(PATHS.data, PATHS.logs, PATHS.config)
+            logging.getLogger(__name__).info(
+                "Recovery rollout ring=%s mode=%s discovered=%s",
+                bootstrap.flags.ring,
+                bootstrap.mode,
+                bootstrap.discovered,
+            )
+        except Exception as exc:
+            # Discovery is observational during rollout. It must never prevent
+            # the legacy application from starting or mutate recoverable data.
+            logging.getLogger(__name__).exception("Recovery bootstrap dry-run failed: %s", exc)
         from .studio import main as studio_main
 
         studio_main()
     finally:
         guard.release()
-
