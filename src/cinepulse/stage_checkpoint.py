@@ -102,11 +102,18 @@ class StageCheckpointStore:
             raise CheckpointError(f"estado de unidade inválido: {state}")
         payload = self.load()
         current = payload["units"].get(unit_id)
+        # `producing -> producing` and `validating -> producing` are deliberate
+        # recovery transitions. A real process crash can happen after the
+        # durable state change but before Python gets a chance to record
+        # `interrupted`. The next owner may safely restart that same unit because
+        # the job lease prevents concurrent producers and any old partial stays
+        # as evidence. At worst we redo the current unit; committed work is never
+        # invalidated.
         allowed = {
             None: {"planned", "producing", "committed"},
             "planned": {"producing", "interrupted", "quarantined"},
-            "producing": {"validating", "interrupted", "rejected"},
-            "validating": {"committed", "rejected", "interrupted"},
+            "producing": {"producing", "validating", "interrupted", "rejected"},
+            "validating": {"producing", "committed", "rejected", "interrupted"},
             "interrupted": {"planned", "producing", "quarantined", "committed"},
             "rejected": {"quarantined", "producing"},
             "quarantined": {"producing"},
