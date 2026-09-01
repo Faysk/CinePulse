@@ -96,8 +96,9 @@ class ResumableStager:
         progress: Callable[[int, int], None] | None = None,
         fault_after_bytes: int | None = None,
     ) -> Path:
+        requested_destination = Path(destination)
         source = source.resolve()
-        destination = destination.resolve(strict=False)
+        destination = requested_destination.resolve(strict=False)
         if not source.is_file():
             raise FileNotFoundError(source)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -192,4 +193,7 @@ class ResumableStager:
                 total_bytes=source_size, updated_at=time.time(), completed=True, checksum=checksum,
             ).to_dict(),
         )
-        return destination
+        # The state file keeps a canonical resolved path for restart matching,
+        # while callers receive the same path representation they supplied.
+        # On Windows this avoids changing an 8.3 path into its long-name alias.
+        return requested_destination
