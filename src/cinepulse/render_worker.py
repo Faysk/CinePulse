@@ -92,13 +92,7 @@ class WorkerContext:
 
 
 class RenderWorker:
-    """Tk-independent durable execution owner.
-
-    The worker accepts an executor adapter rather than importing `studio.py`.
-    Phase 3 supplies stage adapters; later rollout wires the UI to launch this
-    class in a separate process. This keeps ownership/state semantics testable
-    before moving the legacy pipeline out of Studio.
-    """
+    """Tk-independent durable execution owner."""
 
     def __init__(
         self,
@@ -128,6 +122,17 @@ class RenderWorker:
             raise RuntimeError(f"job não pode iniciar worker a partir de {current.state}")
         return current
 
+    def _mark_cancelled(self) -> RenderJobManifest:
+        """Persist cancellation through only valid manifest transitions."""
+        current = self.store.load()
+        if current.state == "cancelled":
+            return current
+        if current.state == "pause_requested":
+            current = self.store.transition("paused", reason="worker_cancel_after_pause")
+        if current.state in {"preflight", "running", "paused", "recoverable", "blocked"}:
+            return self.store.transition("cancelled", reason="worker_cancelled")
+        raise RuntimeError(f"cancelamento não pode ser persistido a partir de {current.state}")
+
     def run(self, executor: WorkerExecutor) -> RenderJobManifest:
         self.lease.acquire(phase="preflight")
         context = WorkerContext(self)
@@ -152,13 +157,7 @@ class RenderWorker:
                 current = self.store.transition("paused", reason="worker_paused")
             return current
         except WorkerCancelled:
-            current = self.store.load()
-            if current.state in {"running", "pause_requested", "paused", "recoverable", "blocked", "preflight"}:
-                try:
-                    return self.store.transition("cancelled", reason="worker_cancelled")
-                except Exception:
-                    pass
-            return current
+            return self._mark_cancelled()
         except Exception as exc:
             self.store.update(
                 lambda manifest: manifest.with_error(
