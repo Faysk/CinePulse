@@ -126,6 +126,23 @@ def _draw_line(frame: np.ndarray, points: list[tuple[int, int]], color: np.ndarr
             _draw_disc(frame, x, y, radius, color, alpha)
 
 
+def _draw_gradient_line(
+    frame: np.ndarray,
+    points: list[tuple[int, int]],
+    primary: np.ndarray,
+    secondary: np.ndarray,
+    thickness: int,
+    alpha: int,
+) -> None:
+    if len(points) < 2:
+        return
+    denominator = max(1, len(points) - 2)
+    for index, (start, end) in enumerate(zip(points, points[1:])):
+        mix = index / denominator
+        color = np.clip(primary * (1.0 - mix) + secondary * mix, 0, 255).astype(np.uint8)
+        _draw_line(frame, [start, end], color, thickness, alpha)
+
+
 def _focus_gain(spec: VisualizerSpec, state: AudioReactiveState) -> float:
     bass, mids, highs = state.bands
     if spec.focus == "bass":
@@ -139,6 +156,16 @@ def _focus_gain(spec: VisualizerSpec, state: AudioReactiveState) -> float:
     else:
         value = bass * 0.40 + mids * 0.34 + highs * 0.26
     return max(0.02, min(1.0, value * spec.sensitivity))
+
+
+def _spectral_value(nx: float, spec: VisualizerSpec, state: AudioReactiveState, index: int) -> float:
+    bass, mids, highs = state.bands
+    bass_curve = bass * (1.0 - nx) ** 1.8
+    mid_curve = mids * max(0.0, 1.0 - abs(nx - 0.5) * 1.6)
+    high_curve = highs * nx**1.6
+    spectral = max(0.0, bass_curve + mid_curve + high_curve) / 1.7
+    ripple = 0.88 + 0.12 * math.sin(math.tau * (nx * 2.6 + state.phase + index * 0.009))
+    return max(0.025, min(1.0, spectral * ripple * spec.sensitivity))
 
 
 def render_visualizer_rgba(
@@ -179,18 +206,35 @@ def render_visualizer_rgba(
         _draw_line(frame, points, primary, thickness, alpha)
         return frame
 
+    if spec.style == "spectrum":
+        samples = max(24, min(width, 420))
+        thickness = max(1, int(round(spec.thickness * max(2.0, height * 0.08))))
+        lower: list[tuple[int, int]] = []
+        upper: list[tuple[int, int]] = []
+        for index in range(samples):
+            nx = index / max(1, samples - 1)
+            value = _spectral_value(nx, spec, state, index)
+            x = int(round(nx * (width - 1)))
+            if spec.mirror:
+                excursion = value * max(1.0, center * 0.90)
+                upper.append((x, int(round(center - excursion))))
+                lower.append((x, int(round(center + excursion))))
+            else:
+                y = int(round((height - 1) - value * height * 0.86))
+                lower.append((x, y))
+        if spec.mirror:
+            _draw_gradient_line(frame, upper, primary, secondary, thickness, alpha)
+        _draw_gradient_line(frame, lower, primary, secondary, thickness, alpha)
+        return frame
+
     count = max(4, min(int(spec.bars), max(4, width // 2)))
     gap = max(1, width // max(24, count * 6))
     cell = width / count
     for index in range(count):
         nx = (index + 0.5) / count
         harmonic = 0.55 + 0.45 * math.sin(math.tau * (nx * 2.3 + state.phase + index * 0.013))
-        bass, mids, highs = state.bands
-        spectral = bass * (1.0 - nx) ** 1.8 + mids * (1.0 - abs(nx - 0.5) * 1.6) + highs * nx**1.6
-        spectral = max(0.0, spectral) / 1.7
-        value = max(0.035, min(1.0, (spectral * 0.72 + harmonic * 0.28) * spec.sensitivity))
-        if spec.style == "bars":
-            value = max(value * 0.72, gain * (0.60 + 0.40 * harmonic))
+        value = _spectral_value(nx, spec, state, index)
+        value = max(value * 0.72, gain * (0.60 + 0.40 * harmonic))
         bar_height = max(1, int(round(value * height * (0.92 if spec.mirror else 0.86))))
         bar_width = max(1, int(round(cell - gap)))
         x0 = min(width - 1, int(round(index * cell + gap / 2)))
