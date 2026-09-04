@@ -78,7 +78,11 @@ class OverlayComposerView(ttk.Frame):
         self.visualizer_style = StringVar(value="waveform")
         self.visualizer_focus = StringVar(value="full")
         self.visualizer_color = StringVar(value="#F2E5C9")
+        self.visualizer_secondary_color = StringVar(value="#42D8FF")
         self.sensitivity_var = DoubleVar(value=100.0)
+        self.thickness_var = DoubleVar(value=42.0)
+        self.bars_var = DoubleVar(value=48.0)
+        self.mirror_var = BooleanVar(value=False)
 
         self._build()
         self._refresh_all()
@@ -212,9 +216,24 @@ class OverlayComposerView(ttk.Frame):
         focus_box.grid(row=13, column=1, sticky="ew", pady=3)
         focus_box.bind("<<ComboboxSelected>>", lambda _e: self._apply_properties())
         self._number_row(properties, 14, "Sensibilidade %", self.sensitivity_var)
+        self._number_row(properties, 15, "Espessura %", self.thickness_var)
+        self._number_row(properties, 16, "Barras", self.bars_var)
+        ttk.Checkbutton(
+            properties,
+            text="Espelhar no eixo central",
+            variable=self.mirror_var,
+            command=self._apply_properties,
+        ).grid(row=17, column=0, columnspan=2, sticky="w", pady=(4, 2))
         color_row = ttk.Frame(properties, style="PanelAlt.TFrame")
-        color_row.grid(row=15, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        ttk.Button(color_row, text="Cor do gráfico…", command=self._choose_visualizer_color).pack(fill="x")
+        color_row.grid(row=18, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ttk.Button(color_row, text="Cor principal…", command=self._choose_visualizer_color).pack(fill="x")
+        ttk.Button(color_row, text="Cor secundária…", command=self._choose_visualizer_secondary_color).pack(fill="x", pady=(4, 0))
+        ttk.Label(
+            properties,
+            text="Waveform usa a cor principal; barras/espectro podem combinar as duas cores.",
+            style="PanelAlt.TLabel",
+            wraplength=180,
+        ).grid(row=19, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
     def _number_row(self, parent, row: int, label: str, variable: DoubleVar) -> None:
         ttk.Label(parent, text=label, style="PanelAlt.TLabel").grid(row=row, column=0, sticky="w", pady=3)
@@ -371,7 +390,11 @@ class OverlayComposerView(ttk.Frame):
             self.visualizer_style.set(layer.visualizer.style)
             self.visualizer_focus.set(layer.visualizer.focus)
             self.visualizer_color.set(layer.visualizer.color)
+            self.visualizer_secondary_color.set(layer.visualizer.secondary_color)
             self.sensitivity_var.set(layer.visualizer.sensitivity * 100.0)
+            self.thickness_var.set(layer.visualizer.thickness * 100.0)
+            self.bars_var.set(float(layer.visualizer.bars))
+            self.mirror_var.set(layer.visualizer.mirror)
 
     def _apply_properties(self) -> None:
         layer = self._selected_layer()
@@ -400,7 +423,11 @@ class OverlayComposerView(ttk.Frame):
                     style=self.visualizer_style.get(),
                     focus=self.visualizer_focus.get(),
                     color=self.visualizer_color.get(),
+                    secondary_color=self.visualizer_secondary_color.get(),
                     sensitivity=max(0.05, min(8.0, float(self.sensitivity_var.get()) / 100.0)),
+                    thickness=max(0.02, min(1.0, float(self.thickness_var.get()) / 100.0)),
+                    bars=max(4, min(256, int(round(float(self.bars_var.get()))))),
+                    mirror=self.mirror_var.get(),
                 )
             replacement = replace(layer, transform=transform, locked=self.locked_var.get(), asset=asset, visualizer=visualizer)
             self.editor.apply(self.scene.replace_layer(replacement))
@@ -417,6 +444,18 @@ class OverlayComposerView(ttk.Frame):
         value = colorchooser.askcolor(initialcolor=layer.visualizer.color, title="Cor do visualizador")[1]
         if value:
             self.visualizer_color.set(value.upper())
+            self._apply_properties()
+
+    def _choose_visualizer_secondary_color(self) -> None:
+        layer = self._selected_layer()
+        if layer is None or layer.visualizer is None:
+            return
+        value = colorchooser.askcolor(
+            initialcolor=layer.visualizer.secondary_color,
+            title="Cor secundária do visualizador",
+        )[1]
+        if value:
+            self.visualizer_secondary_color.set(value.upper())
             self._apply_properties()
 
     def _safe_area_changed(self) -> None:
