@@ -8,18 +8,25 @@
 
 **Automated Preview gates: GREEN** na branch isolada baseada diretamente em `main`.
 
-Evidência autoritativa atual:
+Evidência autoritativa da branch antes da abertura do PR:
 
 - workflow: `Overlay Composer Preview`;
 - run: **33894800962**;
 - commit funcional/gates: `26a1896952dca8755ff5cc3fdcf58cfacaf39f44`;
 - base: `main` em `04a3ae829412177e78249523b0f57ed4f300fbcd`.
 
+O PR #3 também executou os gates no contexto real de `pull_request` contra `main` e passou integralmente:
+
+- `Overlay Composer Preview` run **33895068104** — **6/6 PASS**;
+- `Quality` run **33895068107** — **6/6 PASS**.
+
 A branch limpa foi criada para eliminar histórico e arquivos não relacionados que existiam na branch experimental anterior. O gate de isolamento compara `origin/main...HEAD` e rejeita qualquer arquivo fora do allowlist do Overlay Composer.
 
 ## Evidência automatizada
 
-Run `33894800962` concluiu com sucesso em **todos os 6 jobs**:
+### Overlay Composer Preview
+
+Tanto o run de branch isolada quanto o run do PR concluíram com sucesso:
 
 - `Overlay branch isolation` — PASS;
 - `Overlay unit · ubuntu-latest` — PASS;
@@ -29,6 +36,17 @@ Run `33894800962` concluiu com sucesso em **todos os 6 jobs**:
 - `Overlay streaming soak · Linux` — PASS.
 
 No job unit Ubuntu, **52 testes** passaram no snapshot isolado da `main`; o mesmo conjunto passou no job Windows.
+
+### Quality geral do CinePulse no PR
+
+Run `33895068107` passou em todos os jobs:
+
+- Source · Ubuntu · Python 3.11 — PASS;
+- Source · Ubuntu · Python 3.13 — PASS;
+- Source · Windows · Python 3.11 — PASS;
+- Source · Windows · Python 3.13 — PASS;
+- CPU integration · Linux — PASS;
+- Media integrity · Linux — PASS.
 
 ### O que esses gates provam
 
@@ -113,11 +131,10 @@ A arquitetura evita crescimento de scratch proporcional ao número de frames do 
 
 ## Rollout
 
-1. Manter a feature em `preview-overlay-composer-clean` durante revisão.
-2. Abrir PR **draft** Preview → `main`, sem merge automático.
-3. Exigir o workflow `Overlay Composer Preview` também no contexto do PR.
-4. Executar gates manuais/perceptuais.
-5. Somente depois decidir se a feature entra em Stable, permanece Preview ou recebe nova rodada de polimento.
+1. Manter o PR #3 como **draft**.
+2. Executar gates manuais/perceptuais na máquina real.
+3. Registrar problemas encontrados sem promover a feature silenciosamente.
+4. Somente depois decidir se a feature entra em Stable, permanece Preview ou recebe nova rodada de polimento.
 
 ## Regra de promoção
 
