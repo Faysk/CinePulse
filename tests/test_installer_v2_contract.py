@@ -77,3 +77,13 @@ def test_msi_lifecycle_uses_non_default_install_root() -> None:
     text = _text("scripts/Test-MsiLifecycle.ps1")
     assert "msi-install-root" in text
     assert 'INSTALLFOLDER=$InstallRoot' in text
+
+
+def test_temporary_installer_patch_scaffolds_are_absent() -> None:
+    for relative in (
+        ".github/workflows/installer-v2-apply.yml",
+        ".github/workflows/installer-v2-msi-apply.yml",
+        "scripts/_installer_v2_patch.py",
+        "scripts/_installer_v2_msi_patch.py",
+    ):
+        assert not (ROOT / relative).exists(), relative
