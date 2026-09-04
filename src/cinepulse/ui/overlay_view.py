@@ -436,6 +436,35 @@ class OverlayComposerView(ttk.Frame):
 
     def _canvas_down(self, event) -> None:
         width, height = self._canvas_size()
+
+        # A group resize handle can sit in empty canvas between/outside member
+        # layers. Give that visible handle priority over per-layer hit testing so
+        # the control the creator sees is always directly clickable.
+        group_id = self.editor.group_for_selection()
+        group_handle_hit = False
+        if group_id:
+            bounds = self.scene.group_bounds(group_id)
+            gx, gy, gw, gh = bounds.pixels(width, height)
+            group_handle_hit = (
+                abs(event.x - (gx + gw)) <= HANDLE_SIZE * 2
+                and abs(event.y - (gy + gh)) <= HANDLE_SIZE * 2
+            )
+            if group_handle_hit:
+                group = self.scene.group(group_id)
+                blocked = any(self.scene.layer(member_id).locked for member_id in group.member_ids)
+                if blocked:
+                    self.status_text.set("Desbloqueie todas as layers do grupo antes de redimensionar o conjunto.")
+                    self._refresh_canvas()
+                    return
+                self._drag_mode = "resize"
+                self._drag_start = (event.x, event.y)
+                self._drag_origin_scene = self.scene
+                self._working_scene = self.scene
+                self._refresh_tree()
+                self._refresh_properties()
+                self._refresh_canvas()
+                return
+
         layer_id = hit_test(self.scene, event.x, event.y, width, height)
         if layer_id is None:
             self.editor.clear_selection()
