@@ -8,6 +8,7 @@ on:
       - 'scripts/integrate_overlay_studio.py'
       - 'scripts/integrate_overlay_phase8_ui.py'
       - 'scripts/integrate_overlay_phase8_handle.py'
+      - 'scripts/integrate_overlay_phase9_ui.py'
   workflow_dispatch:
 
 permissions:
@@ -31,15 +32,17 @@ jobs:
         run: python scripts/integrate_overlay_phase8_ui.py
       - name: Apply group handle interaction fix
         run: python scripts/integrate_overlay_phase8_handle.py
+      - name: Apply advanced visualizer controls
+        run: python scripts/integrate_overlay_phase9_ui.py
       - name: Compile patched Preview files
-        run: python -m compileall -q src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/overlay_presets.py
+        run: python -m compileall -q src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/overlay_presets.py src/cinepulse/overlay_ffmpeg.py src/cinepulse/overlay_preview.py
       - name: Verify integration markers
         run: >-
           python -c "from pathlib import Path;
           s=Path('src/cinepulse/studio.py').read_text(encoding='utf-8');
           u=Path('src/cinepulse/ui/overlay_view.py').read_text(encoding='utf-8');
           markers=('overlay_scene_json:','build_overlay_ffmpeg_plan(','visualizer_audio_index');
-          ui_markers=('def _apply_layout_preset','scale_group(group_id','Layout rápido','LAYOUT_PRESETS','group_handle_hit = False');
+          ui_markers=('def _apply_layout_preset','scale_group(group_id','Layout rápido','LAYOUT_PRESETS','group_handle_hit = False','visualizer_secondary_color','Espelhar no eixo central','Espessura %');
           missing=[m for m in markers if m not in s]+[m for m in ui_markers if m not in u];
           assert not missing, f'missing integration markers: {missing}';
           print('CINEPULSE_OVERLAY_PREVIEW_PATCH_OK')"
@@ -53,5 +56,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py
-          git commit -m 'overlay phase 8: harden grouped resize interaction'
+          git commit -m 'overlay phase 9: integrate advanced visualizer controls'
           git push origin HEAD:preview-overlay-composer
