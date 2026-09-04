@@ -49,13 +49,16 @@ class CiReleaseGateTests(unittest.TestCase):
         ):
             self.assertIn(needle, text)
 
-    def test_gpu_workflow_is_manual_and_self_hosted(self) -> None:
+    def test_gpu_workflow_is_guarded_and_self_hosted(self) -> None:
         text = (ROOT / ".github/workflows/gpu-acceptance.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", text)
+        self.assertIn("pull_request:", text)
         self.assertIn("self-hosted", text)
         self.assertIn("cinepulse-gpu", text)
         self.assertIn("--profile gpu", text)
-        self.assertNotIn("pull_request:", text)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
+        self.assertIn("github.actor == 'Faysk'", text)
+        self.assertIn("Recovery RIFE 8K UHD acceptance", text)
 
     def test_release_gate_documents_phase9_contract(self) -> None:
         text = (ROOT / "scripts/release_gate.py").read_text(encoding="utf-8")
