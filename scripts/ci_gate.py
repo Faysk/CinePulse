@@ -25,6 +25,7 @@ class GateStep:
 
 SOURCE_STEPS = (
     GateStep("release-contract", (sys.executable, "scripts/release_gate.py")),
+    GateStep("final-audit", (sys.executable, "scripts/final_audit.py", "--output", "artifacts/ci/final-audit-static.json")),
     GateStep("compileall", (sys.executable, "-m", "compileall", "-q", "src", "tests", "scripts")),
     GateStep("unit-tests", (sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v")),
     GateStep("sbom", (sys.executable, "scripts/generate_sbom.py", "--output", "artifacts/ci/sbom-probe.cdx.json")),
