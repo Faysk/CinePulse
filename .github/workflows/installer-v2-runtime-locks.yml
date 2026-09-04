@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: installer-v2-runtime-locks
+  cancel-in-progress: true
+
 jobs:
   lock-windows-runtime:
     if: github.actor == 'Faysk'
@@ -84,7 +88,7 @@ jobs:
           if ((Get-Content requirements.lock -Raw) -notmatch '--hash=sha256:') { throw 'core lock is not hashed' }
           if ($lock -notmatch '--hash=sha256:') { throw 'neural lock is not hashed' }
           Write-Host "CINEPULSE_RUNTIME_LOCKS_OK python=$($manifest.python.version) cuda=$($manifest.demucs.cuda_runtime)"
-      - name: Commit generated locks
+      - name: Commit generated locks safely
         shell: bash
         run: |
           if git diff --quiet -- requirements.lock requirements-neural.lock; then
@@ -95,4 +99,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add requirements.lock requirements-neural.lock
           git commit -m 'installer v2: lock Python 3.14 CUDA 13.2 runtime'
+          git fetch origin installer-v2-self-contained
+          git rebase origin/installer-v2-self-contained
           git push origin HEAD:installer-v2-self-contained
