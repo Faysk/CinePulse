@@ -31,6 +31,7 @@ from ..overlay_composer import (
 )
 from ..overlay_editor import OverlayEditorSession
 from ..overlay_layout import SAFE_AREAS, delta_to_normalized, hit_test, other_layer_rects, resize_rect, snap_rect
+from ..overlay_presets import LAYOUT_PRESETS, apply_layout_preset, preset_summary
 from ..overlay_preview import AudioReactiveState, render_scene_preview
 from .preview import demo_background, demo_reactivity, resize_nearest, to_ppm_bytes
 
@@ -65,6 +66,7 @@ class OverlayComposerView(ttk.Frame):
         self._canvas_image = None
 
         self.safe_area_key = StringVar(value=self.editor.scene.safe_area_profile if self.editor.scene.safe_area_profile in SAFE_AREAS else "none")
+        self.layout_preset_label = StringVar(value=LAYOUT_PRESETS[0].label)
         self.status_text = StringVar(value="Adicione um PNG/GIF e um visualizador para começar.")
         self.x_var = DoubleVar(value=70.0)
         self.y_var = DoubleVar(value=68.0)
@@ -101,7 +103,7 @@ class OverlayComposerView(ttk.Frame):
         ttk.Label(
             self,
             text=(
-                "Monte PNG/GIF + gráfico musical como layers independentes. Arraste no canvas, redimensione pelo canto e agrupe quando quiser mover o conjunto."
+                "Monte PNG/GIF + gráfico musical como layers independentes. Arraste, redimensione e agrupe para mover ou escalar o conjunto como uma composição."
             ),
             style="CardMuted.TLabel",
             wraplength=700,
@@ -119,8 +121,22 @@ class OverlayComposerView(ttk.Frame):
         ttk.Button(toolbar, text="Desfazer", command=self._undo).pack(side="right")
         ttk.Button(toolbar, text="Refazer", command=self._redo).pack(side="right", padx=(0, 5))
 
+        preset_row = ttk.Frame(self, style="Card.TFrame")
+        preset_row.grid(row=3, column=0, sticky="ew", pady=(7, 0))
+        ttk.Label(preset_row, text="Layout rápido", style="CardMuted.TLabel").pack(side="left")
+        preset_box = ttk.Combobox(
+            preset_row, state="readonly", width=24, textvariable=self.layout_preset_label,
+            values=tuple(item.label for item in LAYOUT_PRESETS),
+        )
+        preset_box.pack(side="left", padx=(6, 5))
+        ttk.Button(preset_row, text="Aplicar layout", command=self._apply_layout_preset).pack(side="left")
+        ttk.Label(
+            preset_row, text="Reposiciona as layers; arquivos e animação permanecem intactos.",
+            style="CardMuted.TLabel",
+        ).pack(side="right")
+
         body = ttk.Frame(self, style="Card.TFrame")
-        body.grid(row=3, column=0, sticky="nsew", pady=(9, 0))
+        body.grid(row=4, column=0, sticky="nsew", pady=(9, 0))
         body.columnconfigure(0, weight=4, minsize=180)
         body.columnconfigure(1, weight=9, minsize=420)
         body.columnconfigure(2, weight=4, minsize=190)
@@ -206,6 +222,36 @@ class OverlayComposerView(ttk.Frame):
         entry.grid(row=row, column=1, sticky="ew", pady=3)
         entry.bind("<Return>", lambda _e: self._apply_properties())
         entry.bind("<FocusOut>", lambda _e: self._apply_properties())
+
+    def _apply_layout_preset(self) -> None:
+        chosen = next((item for item in LAYOUT_PRESETS if item.label == self.layout_preset_label.get()), LAYOUT_PRESETS[0])
+        selected_layers = []
+        for layer_id in self.editor.selected_ids:
+            try:
+                selected_layers.append(self.scene.layer(layer_id))
+            except OverlaySceneError:
+                continue
+        asset_id = next((layer.id for layer in selected_layers if layer.kind == "asset"), None)
+        visualizer_id = next((layer.id for layer in selected_layers if layer.kind == "visualizer"), None)
+        try:
+            result = apply_layout_preset(
+                self.scene,
+                chosen.key,
+                asset_layer_id=asset_id,
+                visualizer_layer_id=visualizer_id,
+            )
+            if asset_id is None:
+                asset_id = next((layer.id for layer in result.ordered_layers if layer.kind == "asset"), None)
+            if visualizer_id is None:
+                visualizer_id = next((layer.id for layer in result.ordered_layers if layer.kind == "visualizer"), None)
+            selected = tuple(layer_id for layer_id in (asset_id, visualizer_id) if layer_id)
+            self.editor.apply(result, selected_ids=selected)
+            self.safe_area_key.set(result.safe_area_profile)
+            self.status_text.set(preset_summary(chosen.key))
+            self._notify_scene_changed()
+            self._refresh_all()
+        except OverlaySceneError as exc:
+            self.status_text.set(str(exc))
 
     def _add_asset(self) -> None:
         path = filedialog.askopenfilename(
@@ -399,9 +445,26 @@ class OverlayComposerView(ttk.Frame):
             return
         self.editor.select(layer_id)
         layer = self.scene.layer(layer_id)
-        x, y, w, h = layer.transform.rect.pixels(width, height)
+        group_id = self.editor.group_for_selection()
+        drag_rect = layer.transform.rect
+        blocked = layer.locked
+        if group_id:
+            group = self.scene.group(group_id)
+            blocked = any(self.scene.layer(member_id).locked for member_id in group.member_ids)
+            drag_rect = self.scene.group_bounds(group_id)
+        x, y, w, h = drag_rect.pixels(width, height)
         near_handle = abs(event.x - (x + w)) <= HANDLE_SIZE * 2 and abs(event.y - (y + h)) <= HANDLE_SIZE * 2
-        self._drag_mode = "resize" if near_handle and not layer.locked else "move"
+        if blocked:
+            self.status_text.set("Desbloqueie todas as layers do grupo antes de mover ou redimensionar o conjunto.")
+            self._drag_start = None
+            self._drag_origin_scene = None
+            self._working_scene = None
+            self._drag_mode = None
+            self._refresh_tree()
+            self._refresh_properties()
+            self._refresh_canvas()
+            return
+        self._drag_mode = "resize" if near_handle else "move"
         self._drag_start = (event.x, event.y)
         self._drag_origin_scene = self.scene
         self._working_scene = self.scene
@@ -423,6 +486,11 @@ class OverlayComposerView(ttk.Frame):
 
         group_id = self.editor.group_for_selection()
         try:
+            if group_id:
+                group = self._drag_origin_scene.group(group_id)
+                if any(self._drag_origin_scene.layer(member_id).locked for member_id in group.member_ids):
+                    self.status_text.set("Grupo contém layer bloqueada; transformação cancelada para preservar a composição.")
+                    return
             if self._drag_mode == "move" and group_id:
                 scene = self._drag_origin_scene.move_group(group_id, dx, dy)
             elif self._drag_mode == "move":
@@ -434,6 +502,13 @@ class OverlayComposerView(ttk.Frame):
                 )
                 transform = replace(layer.transform, rect=snapped.rect)
                 scene = self._drag_origin_scene.replace_layer(replace(layer, transform=transform))
+            elif group_id:
+                bounds = self._drag_origin_scene.group_bounds(group_id)
+                factor_x = (bounds.width + dx) / max(bounds.width, 1e-9)
+                factor_y = (bounds.height + dy) / max(bounds.height, 1e-9)
+                factor = factor_x if abs(factor_x - 1.0) >= abs(factor_y - 1.0) else factor_y
+                factor = max(0.05, min(20.0, factor))
+                scene = self._drag_origin_scene.scale_group(group_id, factor)
             else:
                 source_aspect = None
                 probe = self.asset_probes.get(selected_id)
@@ -536,15 +611,27 @@ class OverlayComposerView(ttk.Frame):
             self.canvas.create_rectangle(gx, gy, gx + gw, gy + gh, outline="#D2B46A", dash=(5, 4), width=1)
 
         selected = set(self.editor.selected_ids)
-        for layer in scene.active_layers:
-            if layer.id not in selected:
-                continue
-            x, y, w, h = layer.transform.rect.pixels(width, height)
-            color = "#F3D28B" if not layer.locked else "#A7AFBE"
-            self.canvas.create_rectangle(x, y, x + w, y + h, outline=color, width=2)
-            if not layer.locked:
+        group_id = self.editor.group_for_selection()
+        if group_id:
+            group = scene.group(group_id)
+            bounds = scene.group_bounds(group_id)
+            x, y, w, h = bounds.pixels(width, height)
+            blocked = any(scene.layer(member_id).locked for member_id in group.member_ids)
+            color = "#A7AFBE" if blocked else "#F3D28B"
+            self.canvas.create_rectangle(x, y, x + w, y + h, outline=color, width=2, dash=(5, 3))
+            if not blocked:
                 hs = HANDLE_SIZE
                 self.canvas.create_rectangle(x + w - hs, y + h - hs, x + w + hs, y + h + hs, fill=color, outline="")
+        else:
+            for layer in scene.active_layers:
+                if layer.id not in selected:
+                    continue
+                x, y, w, h = layer.transform.rect.pixels(width, height)
+                color = "#F3D28B" if not layer.locked else "#A7AFBE"
+                self.canvas.create_rectangle(x, y, x + w, y + h, outline=color, width=2)
+                if not layer.locked:
+                    hs = HANDLE_SIZE
+                    self.canvas.create_rectangle(x + w - hs, y + h - hs, x + w + hs, y + h + hs, fill=color, outline="")
 
     def _refresh_all(self) -> None:
         self._refresh_tree()
