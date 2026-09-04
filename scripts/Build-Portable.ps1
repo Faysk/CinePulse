@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$Version = '1.0.0-rc.6',
+    [string]$Version = '1.0.0',
     [string]$Repository = '',
     [string]$MinisignPublicKey = '',
     [string]$MinisignSecretKey = '',
@@ -69,64 +69,44 @@ if ($Repository) {
         $ToolsRoot = Join-Path $PackageRoot 'installer\tools'
         New-Item -ItemType Directory -Path $ToolsRoot -Force | Out-Null
         Copy-Item -LiteralPath $MinisignExe -Destination (Join-Path $ToolsRoot 'minisign.exe') -Force
-        $Channel = [ordered]@{
+        $Channel = @{
             schema = 2
             manifest_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json"
-            require_signature = $true
-            public_key = $MinisignPublicKey.Trim()
             manifest_signature_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json.minisig"
+            public_key = $MinisignPublicKey
+            require_signature = $true
         }
+        $Channel | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PackageRoot 'installer\update-channel.json') -Encoding UTF8
     } else {
-        $Channel = [ordered]@{
-            schema = 1
-            manifest_url = "https://github.com/$Repository/releases/latest/download/cinepulse-update.json"
-        }
-    }
-    $Channel | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PackageRoot 'installer\update-channel.json') -Encoding UTF8
-}
-
-& $Python (Join-Path $ProjectRoot 'scripts\generate_sbom.py') --output (Join-Path $PackageRoot 'sbom.cdx.json')
-if ($LASTEXITCODE -ne 0) { throw 'Falha ao gerar o SBOM CycloneDX.' }
-
-$IntegrityFiles = [ordered]@{}
-Get-ChildItem -LiteralPath $PackageRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
-    $Relative = $_.FullName.Substring($PackageRoot.Length + 1).Replace('\', '/')
-    if ($Relative -ne 'cinepulse-files.json') {
-        $IntegrityFiles[$Relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+        $Channel = @{ schema = 1; manifest_url = '' }
+        $Channel | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PackageRoot 'installer\update-channel.json') -Encoding UTF8
     }
 }
-[ordered]@{ schema = 1; files = $IntegrityFiles } | ConvertTo-Json -Depth 4 |
-    Set-Content -LiteralPath (Join-Path $PackageRoot 'cinepulse-files.json') -Encoding UTF8
 
-if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
-Compress-Archive -LiteralPath $PackageRoot -DestinationPath $Archive -CompressionLevel Optimal
-$Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-$Manifest = [ordered]@{
+$Manifest = @{
     schema = 1
     version = $Version
-    file = Split-Path -Leaf $Archive
-    sha256 = $Hash
-    created_at = (Get-Date).ToUniversalTime().ToString('o')
+    generated_at = [DateTimeOffset]::UtcNow.ToString('o')
+    files = @()
 }
-$ManifestPath = Join-Path $Dist "CinePulse-$Version-manifest.json"
-$Manifest | ConvertTo-Json | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
-if ($Repository) {
-    $UpdateManifest = [ordered]@{
-        schema = 1
-        version = $Version
-        download_url = "https://github.com/$Repository/releases/download/v$Version/$(Split-Path -Leaf $Archive)"
-        sha256 = $Hash
-        notes_url = "https://github.com/$Repository/releases/tag/v$Version"
-    }
-    $UpdateManifestPath = Join-Path $Dist 'cinepulse-update.json'
-    $UpdateManifest | ConvertTo-Json | Set-Content -LiteralPath $UpdateManifestPath -Encoding UTF8
-    if ($MinisignPublicKey) {
-        $SignaturePath = "$UpdateManifestPath.minisig"
-        & $MinisignExe -S -s $MinisignSecretKey -m $UpdateManifestPath -x $SignaturePath -q
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $SignaturePath)) { throw 'Falha ao assinar o manifesto de atualização com Minisign.' }
+Get-ChildItem -LiteralPath $PackageRoot -File -Recurse | ForEach-Object {
+    $Relative = [IO.Path]::GetRelativePath($PackageRoot, $_.FullName).Replace('\', '/')
+    $Manifest.files += @{
+        path = $Relative
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+        size = $_.Length
     }
 }
-Remove-Item -LiteralPath $Staging -Recurse -Force
+$ManifestPath = Join-Path $PackageRoot 'cinepulse-files.json'
+$Manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+
+if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
+Compress-Archive -LiteralPath (Join-Path $PackageRoot '*') -DestinationPath $Archive -CompressionLevel Optimal
+
+if ($MinisignSecretKey) {
+    if (-not $MinisignExe -or -not (Test-Path -LiteralPath $MinisignExe)) { throw 'Assinatura exige -MinisignExe válido.' }
+    & $MinisignExe -S -s $MinisignSecretKey -m $Archive
+    if ($LASTEXITCODE -ne 0) { throw 'Falha ao assinar o pacote portátil.' }
+}
 
 Write-Host "CINEPULSE_PORTABLE_BUILD_OK $Archive"
-Write-Host "SHA256 $Hash"
