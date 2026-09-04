@@ -63,6 +63,9 @@ from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
+from .overlay_composer import OverlayScene, OverlaySceneError
+from .overlay_ffmpeg import build_overlay_ffmpeg_plan
+from .overlay_runtime import has_visualizer as overlay_has_visualizer, summary as overlay_summary, validate_scene_sources
 from .rife_engine import RifePaths, build_command as build_rife_command, target_frame_count
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
@@ -380,6 +383,7 @@ class RenderSettings:
     delivery_profile: str = PROFILE_AUTO
     scratch_dir: str = ""
     cache_quota_gb: float = 50.0
+    overlay_scene_json: str = ""
 
 
 class ScrollableTab(ttk.Frame):
@@ -509,6 +513,8 @@ class VideoOptimizerStudio:
         self.home_preview_mode = StringVar(value="Resultado")
         self.visual_preview_mode = StringVar(value="Resultado")
         self.visual_preview_position = DoubleVar(value=38.0)
+        self.overlay_scene = OverlayScene()
+        self.overlay_scene_json = self.overlay_scene.to_json()
 
         # Phase 3 — Project workspace state.  These variables are UI-only and
         # intentionally do not alter RenderSettings or the render pipeline.
@@ -1249,6 +1255,7 @@ class VideoOptimizerStudio:
             "comparison_preview": True,
             "use_stems": False,
             "delivery_profile": PROFILE_AUTO,
+            "overlay_scene_json": OverlayScene().to_json(),
         }
         accepted = {field.name for field in fields(RenderSettings)}
         clean = {key: value for key, value in {**defaults, **data}.items() if key in accepted}
@@ -1355,6 +1362,7 @@ class VideoOptimizerStudio:
             "comparison_preview": self.comparison_preview.get(),
             "use_stems": self.use_stems.get(),
             "delivery_profile": self.delivery_profile.get(),
+            "overlay_scene_json": getattr(self, "overlay_scene_json", OverlayScene().to_json()),
         }
 
     def _apply_selected_preset(self) -> None:
@@ -1397,6 +1405,15 @@ class VideoOptimizerStudio:
         for variable, key in mapping:
             if key in data:
                 variable.set(data[key])
+        if "overlay_scene_json" in data:
+            try:
+                scene = OverlayScene.from_json(str(data.get("overlay_scene_json") or ""))
+            except OverlaySceneError:
+                scene = OverlayScene()
+            self.overlay_scene = scene
+            self.overlay_scene_json = scene.to_json()
+            if hasattr(self, "overlay_composer_view"):
+                self.overlay_composer_view.set_scene(scene)
         selected = set(data.get("effects", []))
         for name, variable in self.effect_vars.items():
             variable.set(name in selected)
@@ -3366,6 +3383,7 @@ class VideoOptimizerStudio:
             comparison_preview=self.comparison_preview.get(),
             use_stems=self.use_stems.get(),
             delivery_profile=self.delivery_profile.get(),
+            overlay_scene_json=getattr(self, "overlay_scene_json", OverlayScene().to_json()),
         )
 
     @staticmethod
@@ -4066,6 +4084,14 @@ class VideoOptimizerStudio:
         )
         for variable, value in mapping:
             variable.set(value)
+        try:
+            scene = OverlayScene.from_json(settings.overlay_scene_json or OverlayScene().to_json())
+        except OverlaySceneError:
+            scene = OverlayScene()
+        self.overlay_scene = scene
+        self.overlay_scene_json = scene.to_json()
+        if hasattr(self, "overlay_composer_view"):
+            self.overlay_composer_view.set_scene(scene)
         for name, variable in self.effect_vars.items():
             variable.set(name in settings.effects)
         self.color_swatch.configure(background=self.color.get())
@@ -4243,6 +4269,19 @@ class VideoOptimizerStudio:
                 audio_source = settings.video
                 if settings.effects and not source_has_audio:
                     raise RuntimeError("VFX dinâmicos precisam de áudio. Este vídeo não possui uma faixa de áudio.")
+            try:
+                overlay_scene = OverlayScene.from_json(settings.overlay_scene_json or OverlayScene().to_json())
+            except OverlaySceneError as exc:
+                raise RuntimeError(f"Overlay Composer: cena persistida inválida: {exc}") from exc
+            overlay_validation = validate_scene_sources(
+                overlay_scene, audio_available=(settings.mode == MODE_MUSIC or source_has_audio),
+            )
+            if overlay_validation.errors:
+                raise RuntimeError("Overlay Composer: " + " • ".join(overlay_validation.errors))
+            for warning in overlay_validation.warnings:
+                self._log("OVERLAY WARNING: " + warning)
+            if overlay_scene.active_layers:
+                self._log(f"OVERLAY Preview: {overlay_summary(overlay_scene)} • {overlay_scene.fingerprint[:12]}")
             # Phase 3: VFX normalization always sees the full reactive source.
             # A short rendered preview slices this same envelope instead of
             # recalculating percentiles only over preview_seconds (CP-013).
@@ -4556,13 +4595,49 @@ class VideoOptimizerStudio:
             if settings.mode == MODE_MUSIC and not effects_active:
                 command += ["-stream_loop", "-1"]
             command += ["-i", visual_source]
+            next_input_index = 1
+            output_audio_index: int | None = None
             if settings.mode == MODE_MUSIC:
-                command += ["-i", settings.audio, "-map", "0:v:0", "-map", "1:a:0"]
+                command += ["-i", settings.audio]
+                output_audio_index = next_input_index
+                next_input_index += 1
             elif settings.preserve_audio and source_has_audio:
-                command += ["-i", settings.video, "-map", "0:v:0", "-map", "1:a:0"]
+                command += ["-i", settings.video]
+                output_audio_index = next_input_index
+                next_input_index += 1
+
+            if overlay_scene.active_layers:
+                visualizer_audio_index: int | None = None
+                if overlay_has_visualizer(overlay_scene):
+                    visualizer_audio_source = settings.audio if settings.mode == MODE_MUSIC else settings.video
+                    command += ["-i", visualizer_audio_source]
+                    visualizer_audio_index = next_input_index
+                    next_input_index += 1
+                overlay_plan = build_overlay_ffmpeg_plan(
+                    overlay_scene,
+                    canvas_width=target_w,
+                    canvas_height=target_h,
+                    fps=target_fps,
+                    first_asset_input_index=next_input_index,
+                    base_video_label="overlay_base",
+                    audio_label=(f"{visualizer_audio_index}:a" if visualizer_audio_index is not None else None),
+                )
+                command += list(overlay_plan.input_args)
+                overlay_graph = f"[0:v]{final_filter}[overlay_base]"
+                if overlay_plan.filter_complex:
+                    overlay_graph += ";" + overlay_plan.filter_complex
+                command += ["-filter_complex", overlay_graph, "-map", f"[{overlay_plan.output_label}]"]
+                self._set_stage(
+                    "Overlay Composer",
+                    "Aplicando PNG/GIF e visualizador musical depois de IA/VFX, sem reinterpolar os overlays.",
+                )
             else:
-                command += ["-map", "0:v:0", "-an"]
-            command += ["-vf", final_filter]
+                command += ["-map", "0:v:0", "-vf", final_filter]
+
+            if output_audio_index is not None:
+                command += ["-map", f"{output_audio_index}:a:0"]
+            else:
+                command += ["-an"]
             bitrate_mbps = estimated_bitrate
             command += delivery_plan.video_args(
                 use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
