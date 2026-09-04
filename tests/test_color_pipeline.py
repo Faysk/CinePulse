@@ -14,6 +14,9 @@ class ColorPipelineTests(unittest.TestCase):
     def sdr10(self, *, color_range: str = "tv") -> ColorProfile:
         return ColorProfile("bt709", "bt709", "bt709", color_range, "yuv420p10le", 10, False)
 
+    def sdr8(self, *, color_range: str = "tv") -> ColorProfile:
+        return ColorProfile("bt709", "bt709", "bt709", color_range, "yuv420p", 8, False)
+
     def test_clean_hdr_path_preserves_hdr_and_10bit(self):
         plan = build_color_pipeline(
             self.hdr10(), effects_active=False, transition_active=False,
@@ -88,10 +91,22 @@ class ColorPipelineTests(unittest.TestCase):
         self.assertIn("ffv1", args)
         self.assertIn("yuv420p10le", args)
 
+    def test_sdr8_intermediate_is_lossless_for_stable_quality(self):
+        studio = VideoOptimizerStudio.__new__(VideoOptimizerStudio)
+        plan = build_color_pipeline(
+            self.sdr8(), effects_active=True, transition_active=True,
+            enhancement_mode="preserve", rife_active=False,
+        )
+        self.assertTrue(plan.needs_lossless_intermediate)
+        args = studio._intermediate_encoder(1920, 1080, True, plan)
+        self.assertIn("ffv1", args)
+        self.assertIn("yuv420p", args)
+        self.assertNotIn("libx264", args)
+
     def test_sdr8_final_is_not_falsely_promoted_to_main10(self):
         studio = VideoOptimizerStudio.__new__(VideoOptimizerStudio)
         studio._nvenc = False
-        source = ColorProfile("bt709", "bt709", "bt709", "tv", "yuv420p", 8, False)
+        source = self.sdr8()
         plan = build_color_pipeline(
             source, effects_active=False, transition_active=False,
             enhancement_mode="preserve", rife_active=False,
