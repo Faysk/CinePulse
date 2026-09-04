@@ -65,8 +65,13 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check pytest
+          if ($LASTEXITCODE -ne 0) { throw 'pytest install failed' }
           python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'hash-locked core runtime install failed' }
           python -m pip install --disable-pip-version-check --no-deps --editable .
+          if ($LASTEXITCODE -ne 0) { throw 'CinePulse editable install failed' }
+          python -c "import numpy, sys; print('CINEPULSE_RELEASE_RUNTIME', sys.version.split()[0], numpy.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'locked runtime import proof failed' }
       - name: Release light gate
         run: python scripts/ci_gate.py --profile release-light --output artifacts/ci/release-windows.json
       - name: PowerShell release contract
