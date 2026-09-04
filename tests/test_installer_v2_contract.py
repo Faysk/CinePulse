@@ -83,7 +83,9 @@ def test_temporary_installer_patch_scaffolds_are_absent() -> None:
     for relative in (
         ".github/workflows/installer-v2-apply.yml",
         ".github/workflows/installer-v2-msi-apply.yml",
+        ".github/workflows/hotfix-neural-installer.yml",
         "scripts/_installer_v2_patch.py",
         "scripts/_installer_v2_msi_patch.py",
+        "scripts/_hotfix_apply_neural_index.py",
     ):
         assert not (ROOT / relative).exists(), relative
