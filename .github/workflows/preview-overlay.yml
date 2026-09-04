@@ -14,6 +14,17 @@ on:
       - 'scripts/integrate_overlay_*.py'
       - '.github/workflows/overlay-studio-integrate.yml'
       - '.github/workflows/preview-overlay.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/cinepulse/overlay_*.py'
+      - 'src/cinepulse/studio.py'
+      - 'src/cinepulse/ui/overlay_view.py'
+      - 'src/cinepulse/ui/visual_view.py'
+      - 'tests/test_overlay_*.py'
+      - 'tests/integration_overlay_composer.py'
+      - 'tests/integration_overlay_longform.py'
+      - '.github/workflows/preview-overlay.yml'
   workflow_dispatch:
 
 permissions:
@@ -24,6 +35,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  overlay-isolation:
+    name: Overlay branch isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fetch current main
+        run: git fetch origin main --no-tags
+      - name: Reject unrelated branch changes
+        run: >-
+          python -c "import fnmatch, subprocess;
+          changed=subprocess.check_output(['git','diff','--name-only','origin/main...HEAD'], text=True).splitlines();
+          exact={'.github/workflows/preview-overlay.yml','docs/OVERLAY_COMPOSER_ACCEPTANCE.md','docs/OVERLAY_COMPOSER_PREVIEW.md','src/cinepulse/studio.py','src/cinepulse/ui/overlay_view.py','src/cinepulse/ui/visual_view.py','tests/integration_overlay_composer.py','tests/integration_overlay_longform.py'};
+          patterns=('src/cinepulse/overlay_*.py','tests/test_overlay_*.py');
+          unexpected=[path for path in changed if path not in exact and not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)];
+          assert not unexpected, f'unrelated changes in Overlay Preview branch: {unexpected}';
+          print(f'CINEPULSE_OVERLAY_ISOLATION_OK files={len(changed)}')"
+
   overlay-unit:
     name: Overlay unit · ${{ matrix.os }}
     strategy:
