@@ -107,6 +107,10 @@ try {
         Copy-Item -LiteralPath $Entry.FullName -Destination (Join-Path $ProjectRoot $Entry.Name) -Recurse -Force
     }
 
+    if ($env:CINEPULSE_CI_UPDATE_FAIL_AFTER_COPY -eq '1') {
+        throw 'Falha injetada após cópia do payload recebido.'
+    }
+
     # Verify the tree after copying as a second integrity boundary.
     $null = Test-PackageManifest -PackageRoot $ProjectRoot -ExpectedVersion ([string]$Pending.version)
 
