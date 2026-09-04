@@ -2,7 +2,7 @@ name: Overlay Composer Preview
 
 on:
   push:
-    branches: [preview-overlay-composer]
+    branches: [preview-overlay-composer-clean]
     paths:
       - 'src/cinepulse/overlay_*.py'
       - 'src/cinepulse/studio.py'
