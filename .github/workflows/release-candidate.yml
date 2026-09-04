@@ -6,7 +6,7 @@ on:
       version:
         description: SemVer da release (deve coincidir com o código)
         required: true
-        default: 1.1.0
+        default: 1.1.1
   pull_request:
     branches: [main]
     paths:
