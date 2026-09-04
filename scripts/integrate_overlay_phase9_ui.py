@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "src" / "cinepulse" / "ui" / "overlay_view.py"
-REVISION = 1
+REVISION = 2
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
