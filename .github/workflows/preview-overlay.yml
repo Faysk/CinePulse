@@ -145,3 +145,107 @@ jobs:
         run: python -m pip install --disable-pip-version-check --editable .
       - name: 30 second streaming soak without temp frame expansion
         run: python tests/integration_overlay_longform.py
+
+  overlay-preview-package:
+    name: Windows Preview portable package
+    needs: [overlay-unit, overlay-media-windows]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build and stamp Preview package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.0.0-preview-overlay.${{ github.run_number }}'
+          $python = (Get-Command python -ErrorAction Stop).Source
+          ./scripts/Build-Portable.ps1 -Version $version -BuildPython $python -SkipTests
+
+          $archive = Join-Path $PWD "dist/CinePulse-$version-windows-portable.zip"
+          if (-not (Test-Path -LiteralPath $archive)) { throw "Portable archive missing: $archive" }
+
+          $stage = Join-Path $env:RUNNER_TEMP 'cinepulse-overlay-preview-package'
+          $verify = Join-Path $env:RUNNER_TEMP 'cinepulse-overlay-preview-verify'
+          Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $verify -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $stage -Force
+          $packageRoot = Join-Path $stage 'CinePulse'
+          if (-not (Test-Path -LiteralPath $packageRoot)) { throw 'Portable ZIP does not contain CinePulse root.' }
+
+          $scriptsRoot = Join-Path $packageRoot 'scripts'
+          New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
+          Copy-Item -LiteralPath './scripts/Invoke-OverlayAcceptance.ps1' -Destination (Join-Path $scriptsRoot 'Invoke-OverlayAcceptance.ps1') -Force
+
+          $buildInfo = [ordered]@{
+            schema = 1
+            channel = 'preview'
+            feature = 'overlay-composer'
+            version = $version
+            git_sha = '${{ github.sha }}'
+            git_ref = '${{ github.ref }}'
+            workflow_run_id = '${{ github.run_id }}'
+            workflow_run_number = '${{ github.run_number }}'
+            pull_request = '${{ github.event.pull_request.number }}'
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+          }
+          $buildInfo | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $packageRoot 'PREVIEW-BUILD.json') -Encoding UTF8
+
+          $integrity = [ordered]@{}
+          Get-ChildItem -LiteralPath $packageRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+            $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace('\', '/')
+            if ($relative -ne 'cinepulse-files.json') {
+              $integrity[$relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{ schema = 1; files = $integrity } | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $packageRoot 'cinepulse-files.json') -Encoding UTF8
+
+          Remove-Item -LiteralPath $archive -Force
+          Compress-Archive -LiteralPath $packageRoot -DestinationPath $archive -CompressionLevel Optimal
+          $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          $outerManifest = [ordered]@{
+            schema = 1
+            channel = 'preview'
+            feature = 'overlay-composer'
+            version = $version
+            file = Split-Path -Leaf $archive
+            sha256 = $sha256
+            git_sha = '${{ github.sha }}'
+            workflow_run_id = '${{ github.run_id }}'
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+          }
+          $manifest = Join-Path $PWD "dist/CinePulse-$version-preview-build.json"
+          $outerManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifest -Encoding UTF8
+
+          New-Item -ItemType Directory -Path $verify -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $verify -Force
+          $verifyRoot = Join-Path $verify 'CinePulse'
+          $required = @(
+            '.cinepulse-portable',
+            'CinePulse.cmd',
+            'PREVIEW-BUILD.json',
+            'cinepulse-files.json',
+            'scripts/Invoke-OverlayAcceptance.ps1',
+            'docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md',
+            'src/cinepulse/overlay_composer.py',
+            'src/cinepulse/ui/overlay_view.py'
+          )
+          foreach ($relative in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $verifyRoot $relative))) {
+              throw "Preview package missing required file: $relative"
+            }
+          }
+          Write-Host "CINEPULSE_OVERLAY_PREVIEW_PACKAGE_OK version=$version sha256=$sha256"
+      - name: Upload Windows Preview package
+        uses: actions/upload-artifact@v6
+        with:
+          name: CinePulse-Overlay-Preview-Windows-${{ github.sha }}
+          path: |
+            dist/CinePulse-1.0.0-preview-overlay.${{ github.run_number }}-windows-portable.zip
+            dist/CinePulse-1.0.0-preview-overlay.${{ github.run_number }}-preview-build.json
+          if-no-files-found: error
+          retention-days: 14
