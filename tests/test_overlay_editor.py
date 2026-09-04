@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cinepulse.overlay_composer import NormalizedRect, OverlayScene, make_asset_layer, make_visualizer_layer
+from cinepulse.overlay_composer import NormalizedRect, OverlayGroup, OverlayScene, make_asset_layer, make_visualizer_layer
 from cinepulse.overlay_editor import OverlayEditorSession
 from cinepulse.overlay_layout import hit_test, resize_rect, snap_rect
 
@@ -60,6 +60,29 @@ class OverlayEditorTests(unittest.TestCase):
         self.assertEqual(editor.scene.layers, ())
         self.assertTrue(editor.undo())
         self.assertEqual({layer.id for layer in editor.scene.layers}, {"asset", "viz"})
+
+    def test_group_scale_preserves_relative_geometry(self) -> None:
+        asset = make_asset_layer(
+            "character.png", layer_id="asset", rect=NormalizedRect(0.70, 0.40, 0.20, 0.40)
+        )
+        visualizer = make_visualizer_layer(
+            layer_id="viz", rect=NormalizedRect(0.50, 0.82, 0.40, 0.08)
+        )
+        scene = OverlayScene(
+            (asset, visualizer),
+            (OverlayGroup("group", "Character + waveform", ("asset", "viz")),),
+        )
+        before = scene.group_bounds("group")
+        scaled = scene.scale_group("group", 1.5)
+        after = scaled.group_bounds("group")
+        self.assertAlmostEqual(after.width, before.width * 1.5)
+        self.assertAlmostEqual(after.height, before.height * 1.5)
+        self.assertAlmostEqual(scaled.layer("asset").transform.rect.width, 0.30)
+        self.assertAlmostEqual(scaled.layer("viz").transform.rect.width, 0.60)
+        before_center = (before.x + before.width / 2.0, before.y + before.height / 2.0)
+        after_center = (after.x + after.width / 2.0, after.y + after.height / 2.0)
+        self.assertAlmostEqual(after_center[0], before_center[0])
+        self.assertAlmostEqual(after_center[1], before_center[1])
 
 
 if __name__ == "__main__":
