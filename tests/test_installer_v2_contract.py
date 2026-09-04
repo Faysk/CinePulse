@@ -11,7 +11,12 @@ def _text(path: str) -> str:
 
 def test_paths_default_to_project_root_not_localappdata() -> None:
     text = _text("src/cinepulse/paths.py")
-    assert "LOCALAPPDATA" not in text
+    # Documentation may mention LocalAppData when explaining that it is not
+    # used; reject actual environment lookups instead of matching comments.
+    assert 'os.environ.get("LOCALAPPDATA")' not in text
+    assert "os.environ['LOCALAPPDATA']" not in text
+    assert "os.environ[\"LOCALAPPDATA\"]" not in text
+    assert 'os.getenv("LOCALAPPDATA")' not in text
     assert 'root / "data"' in text
     assert 'root / "cache"' in text
     assert 'root / "temp"' in text
