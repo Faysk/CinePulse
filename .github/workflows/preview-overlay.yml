@@ -11,8 +11,10 @@ on:
       - 'tests/test_overlay_*.py'
       - 'tests/integration_overlay_composer.py'
       - 'tests/integration_overlay_longform.py'
-      - 'scripts/integrate_overlay_*.py'
-      - '.github/workflows/overlay-studio-integrate.yml'
+      - 'scripts/Invoke-OverlayAcceptance.ps1'
+      - 'docs/OVERLAY_COMPOSER_ACCEPTANCE.md'
+      - 'docs/OVERLAY_COMPOSER_PREVIEW.md'
+      - 'docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md'
       - '.github/workflows/preview-overlay.yml'
   pull_request:
     branches: [main]
@@ -24,6 +26,10 @@ on:
       - 'tests/test_overlay_*.py'
       - 'tests/integration_overlay_composer.py'
       - 'tests/integration_overlay_longform.py'
+      - 'scripts/Invoke-OverlayAcceptance.ps1'
+      - 'docs/OVERLAY_COMPOSER_ACCEPTANCE.md'
+      - 'docs/OVERLAY_COMPOSER_PREVIEW.md'
+      - 'docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md'
       - '.github/workflows/preview-overlay.yml'
   workflow_dispatch:
 
@@ -49,7 +55,7 @@ jobs:
         run: >-
           python -c "import fnmatch, subprocess;
           changed=subprocess.check_output(['git','diff','--name-only','origin/main...HEAD'], text=True).splitlines();
-          exact={'.github/workflows/preview-overlay.yml','docs/OVERLAY_COMPOSER_ACCEPTANCE.md','docs/OVERLAY_COMPOSER_PREVIEW.md','src/cinepulse/studio.py','src/cinepulse/ui/overlay_view.py','src/cinepulse/ui/visual_view.py','tests/integration_overlay_composer.py','tests/integration_overlay_longform.py'};
+          exact={'.github/workflows/preview-overlay.yml','docs/OVERLAY_COMPOSER_ACCEPTANCE.md','docs/OVERLAY_COMPOSER_PREVIEW.md','docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md','scripts/Invoke-OverlayAcceptance.ps1','src/cinepulse/studio.py','src/cinepulse/ui/overlay_view.py','src/cinepulse/ui/visual_view.py','tests/integration_overlay_composer.py','tests/integration_overlay_longform.py'};
           patterns=('src/cinepulse/overlay_*.py','tests/test_overlay_*.py');
           unexpected=[path for path in changed if path not in exact and not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)];
           assert not unexpected, f'unrelated changes in Overlay Preview branch: {unexpected}';
@@ -81,6 +87,15 @@ jobs:
         run: python -m compileall -q src/cinepulse/overlay_composer.py src/cinepulse/overlay_assets.py src/cinepulse/overlay_preview.py src/cinepulse/overlay_layout.py src/cinepulse/overlay_editor.py src/cinepulse/overlay_ffmpeg.py src/cinepulse/overlay_runtime.py src/cinepulse/overlay_presets.py src/cinepulse/overlay_longform.py src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/ui/visual_view.py
       - name: Overlay unit persistence and longform tests
         run: python -m unittest tests.test_overlay_composer tests.test_overlay_assets tests.test_overlay_preview tests.test_overlay_editor tests.test_overlay_ffmpeg tests.test_overlay_runtime tests.test_overlay_presets tests.test_overlay_longform tests.test_overlay_studio_contract -v
+      - name: Generate manual acceptance evidence pack
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'overlay-manual-acceptance'
+          ./scripts/Invoke-OverlayAcceptance.ps1 -GenerateOnly -SessionRoot $root
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'environment.json'))) { throw 'environment.json was not generated' }
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'ACCEPTANCE.md'))) { throw 'ACCEPTANCE.md was not generated' }
+          Write-Host 'CINEPULSE_OVERLAY_MANUAL_HARNESS_OK'
 
   overlay-media-linux:
     name: Overlay media integration · Linux
