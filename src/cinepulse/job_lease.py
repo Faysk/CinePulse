@@ -6,9 +6,10 @@ import os
 import socket
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 
 LEASE_SCHEMA = 1
@@ -26,19 +27,46 @@ class LeaseOwnershipLost(LeaseError):
     pass
 
 
+def _windows_process_api():
+    """Return typed Win32 process functions.
+
+    OpenProcess returns a pointer-sized HANDLE.  Leaving ctypes signatures
+    implicit truncates handles on 64-bit Python, the same class of bug that the
+    application instance mutex previously had.
+    """
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
 def _process_start_token_windows(pid: int) -> str | None:
     if os.name != "nt":
         return None
+    from ctypes import wintypes
+
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32 = _windows_process_api()
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return None
     try:
-        creation = ctypes.c_ulonglong()
-        exit_time = ctypes.c_ulonglong()
-        kernel = ctypes.c_ulonglong()
-        user = ctypes.c_ulonglong()
+        creation = wintypes.FILETIME()
+        exit_time = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
         ok = kernel32.GetProcessTimes(
             handle,
             ctypes.byref(creation),
@@ -48,7 +76,8 @@ def _process_start_token_windows(pid: int) -> str | None:
         )
         if not ok:
             return None
-        return f"win-filetime:{creation.value}"
+        value = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+        return f"win-filetime:{value}"
     finally:
         kernel32.CloseHandle(handle)
 
@@ -151,6 +180,7 @@ class JobLease:
         pid: int | None = None,
         process_token: Callable[[int], str | None] = process_start_token,
         alive: Callable[[int], bool] = process_alive,
+        mutation_timeout: float = 5.0,
     ) -> None:
         self.path = Path(path)
         self.job_id = job_id
@@ -159,7 +189,83 @@ class JobLease:
         self.pid = int(os.getpid() if pid is None else pid)
         self._process_token = process_token
         self._alive = alive
+        self.mutation_timeout = max(0.1, float(mutation_timeout))
         self.nonce: str | None = None
+
+    @property
+    def _guard_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".guard")
+
+    def _guard_is_stale(self) -> bool:
+        try:
+            payload = json.loads(self._guard_path.read_text(encoding="utf-8"))
+            pid = int(payload.get("pid") or 0)
+            token = payload.get("process_start")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            try:
+                return time.time() - self._guard_path.stat().st_mtime > 30.0
+            except OSError:
+                return True
+        if not self._alive(pid):
+            return True
+        current = self._process_token(pid)
+        if token is not None and current is not None and current != token:
+            return True
+        return False
+
+    @contextmanager
+    def _mutation_guard(self) -> Iterator[None]:
+        """Serialize lease compare-and-swap operations across processes.
+
+        Without this fence, an old owner could read its nonce, a challenger
+        could take over a stale lease, and the old owner could then os.replace
+        the challenger's lease during heartbeat/release.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        guard = self._guard_path
+        guard_nonce = uuid.uuid4().hex
+        deadline = time.monotonic() + self.mutation_timeout
+        while True:
+            payload = {
+                "schema": 1,
+                "pid": self.pid,
+                "process_start": self._process_token(self.pid),
+                "nonce": guard_nonce,
+                "created_at": time.time(),
+            }
+            try:
+                descriptor = os.open(guard, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                if self._guard_is_stale():
+                    evidence = guard.with_name(f"{guard.name}.stale-{time.time_ns()}")
+                    try:
+                        os.replace(guard, evidence)
+                    except FileNotFoundError:
+                        pass
+                    continue
+                if time.monotonic() >= deadline:
+                    raise LeaseBusy(f"job {self.job_id} está com uma mutação de lease em andamento")
+                time.sleep(0.01)
+                continue
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                    json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except BaseException:
+                guard.unlink(missing_ok=True)
+                raise
+            break
+        try:
+            yield
+        finally:
+            try:
+                current = json.loads(guard.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                current = {}
+            if current.get("nonce") == guard_nonce:
+                guard.unlink(missing_ok=True)
 
     def read(self) -> LeaseRecord | None:
         try:
@@ -188,55 +294,53 @@ class JobLease:
             return False
         if self._same_process(record):
             return False
-        # A registered subprocess can still be finishing a committed artifact.
         if any(self._alive(pid) for pid in record.subprocesses):
             return False
         return True
 
     def acquire(self, *, phase: str = "preflight", unit: str | None = None) -> LeaseRecord:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        existing = self.read()
-        if existing is not None:
-            if not self.is_stale(existing):
-                raise LeaseBusy(
-                    f"job {self.job_id} já possui owner pid={existing.pid} nonce={existing.nonce[:8]}"
-                )
-            evidence = self.path.with_name(f"{self.path.name}.stale-{int(self.clock())}-{existing.nonce[:8]}")
+        with self._mutation_guard():
+            existing = self.read()
+            if existing is not None:
+                if not self.is_stale(existing):
+                    raise LeaseBusy(
+                        f"job {self.job_id} já possui owner pid={existing.pid} nonce={existing.nonce[:8]}"
+                    )
+                evidence = self.path.with_name(f"{self.path.name}.stale-{int(self.clock())}-{existing.nonce[:8]}")
+                try:
+                    os.replace(self.path, evidence)
+                except FileNotFoundError:
+                    pass
+            nonce = uuid.uuid4().hex
+            now = self.clock()
+            record = LeaseRecord(
+                job_id=self.job_id,
+                pid=self.pid,
+                process_start=self._process_token(self.pid),
+                nonce=nonce,
+                host_id=socket.gethostname(),
+                acquired_at=now,
+                heartbeat_at=now,
+                progress_counter=0,
+                phase=phase,
+                unit=unit,
+                subprocesses=(),
+            )
+            payload = json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
             try:
-                os.replace(self.path, evidence)
-            except FileNotFoundError:
-                pass
-        nonce = uuid.uuid4().hex
-        now = self.clock()
-        record = LeaseRecord(
-            job_id=self.job_id,
-            pid=self.pid,
-            process_start=self._process_token(self.pid),
-            nonce=nonce,
-            host_id=socket.gethostname(),
-            acquired_at=now,
-            heartbeat_at=now,
-            progress_counter=0,
-            phase=phase,
-            unit=unit,
-            subprocesses=(),
-        )
-        # O_EXCL is the final race barrier after stale reconciliation.
-        payload = json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-        try:
-            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError as exc:
-            raise LeaseBusy(f"job {self.job_id} foi adquirido por outro worker") from exc
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-        except BaseException:
-            self.path.unlink(missing_ok=True)
-            raise
-        self.nonce = nonce
-        return record
+                descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError as exc:
+                raise LeaseBusy(f"job {self.job_id} foi adquirido por outro worker") from exc
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except BaseException:
+                self.path.unlink(missing_ok=True)
+                raise
+            self.nonce = nonce
+            return record
 
     def _owned(self) -> LeaseRecord:
         record = self.read()
@@ -252,26 +356,28 @@ class JobLease:
         progress: bool = False,
         subprocesses: tuple[int, ...] | None = None,
     ) -> LeaseRecord:
-        current = self._owned()
-        updated = replace(
-            current,
-            heartbeat_at=self.clock(),
-            progress_counter=current.progress_counter + (1 if progress else 0),
-            phase=current.phase if phase is None else phase,
-            unit=current.unit if unit is None else unit,
-            subprocesses=current.subprocesses if subprocesses is None else tuple(subprocesses),
-        )
-        _atomic_json(self.path, updated.to_dict())
-        return updated
+        with self._mutation_guard():
+            current = self._owned()
+            updated = replace(
+                current,
+                heartbeat_at=self.clock(),
+                progress_counter=current.progress_counter + (1 if progress else 0),
+                phase=current.phase if phase is None else phase,
+                unit=current.unit if unit is None else unit,
+                subprocesses=current.subprocesses if subprocesses is None else tuple(subprocesses),
+            )
+            _atomic_json(self.path, updated.to_dict())
+            return updated
 
     def release(self) -> None:
-        current = self._owned()
-        released = self.path.with_name(f"{self.path.name}.released-{int(self.clock())}-{current.nonce[:8]}")
-        try:
-            os.replace(self.path, released)
-        except FileNotFoundError as exc:
-            raise LeaseOwnershipLost("lease desapareceu antes do release") from exc
-        self.nonce = None
+        with self._mutation_guard():
+            current = self._owned()
+            released = self.path.with_name(f"{self.path.name}.released-{int(self.clock())}-{current.nonce[:8]}")
+            try:
+                os.replace(self.path, released)
+            except FileNotFoundError as exc:
+                raise LeaseOwnershipLost("lease desapareceu antes do release") from exc
+            self.nonce = None
 
     def __enter__(self) -> "JobLease":
         self.acquire()
