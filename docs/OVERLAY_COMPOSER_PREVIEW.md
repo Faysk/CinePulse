@@ -1,6 +1,6 @@
 # Overlay Composer — Preview
 
-> Status: **Preview / experimental**. Esta feature vive na branch `preview-overlay-composer` e não altera a linha Stable 1.0 até passar pelos gates automatizados e pela aceitação visual/manual.
+> Status: **Preview / experimental**. Esta feature vive na branch `preview-overlay-composer-clean` e não altera a linha Stable 1.0 até passar pelos gates automatizados e pela aceitação visual/manual.
 
 ## Objetivo
 
@@ -184,10 +184,18 @@ Existem guias de canvas e uma guia vertical social conservadora. A guia social *
 - não há promessa de equivalência pixel-a-pixel NumPy × FFmpeg;
 - 4K/8K e projetos reais de 1–2 h ainda precisam de aceitação manual/soak físico antes de promoção para Stable.
 
+## Isolamento da Preview
+
+A branch `preview-overlay-composer-clean` nasce diretamente da `main`. O workflow possui um gate de isolamento que rejeita qualquer mudança fora dos módulos, testes, documentação e pontos de integração explicitamente autorizados para o Overlay Composer.
+
+Isso evita que Recovery Mega Pack, release tooling ou outra feature experimental seja carregada acidentalmente junto com o Preview.
+
 ## Gates automatizados
 
 O workflow `Overlay Composer Preview` cobre:
 
+- isolamento da branch em relação à `main`;
+- ausência de scaffolding temporário de integração;
 - unit tests Ubuntu + Windows;
 - compilação do Studio integrado;
 - persistência/backward compatibility;
