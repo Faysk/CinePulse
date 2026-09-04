@@ -1,0 +1,55 @@
+name: Installer v2 Patch
+
+on:
+  push:
+    branches: [installer-v2-self-contained]
+    paths:
+      - 'scripts/_installer_v2_patch.py'
+      - '.github/workflows/installer-v2-apply.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor == 'Faysk'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: installer-v2-self-contained
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Apply bootstrap patch
+        run: python scripts/_installer_v2_patch.py
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'installer/Start-CinePulse.ps1'), [ref]$null, [ref]$errors)
+          if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw 'PowerShell parse failed.' }
+      - name: Verify self-contained contract
+        shell: pwsh
+        run: |
+          $text = Get-Content installer/Start-CinePulse.ps1 -Raw
+          foreach ($token in @('CINEPULSE_TEMP_DIR', 'UV_CACHE_DIR', 'TORCH_HOME', 'PYTHONNOUSERSITE', 'installed-self-contained')) {
+            if ($text -notmatch [regex]::Escape($token)) { throw "Missing $token" }
+          }
+          if ($text -match 'UserGpuPreferences') { throw 'Installer v2 must not write global GPU preference registry entries.' }
+          if ($text -match '\$UserDataRoot') { throw 'Installer v2 must not redirect runtime to LocalAppData.' }
+      - name: Commit patched bootstrap
+        shell: bash
+        run: |
+          if git diff --quiet -- installer/Start-CinePulse.ps1; then
+            echo 'Bootstrap already patched.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add installer/Start-CinePulse.ps1
+          git commit -m 'installer v2: isolate runtime data cache and temp under install root'
+          git push origin HEAD:installer-v2-self-contained
