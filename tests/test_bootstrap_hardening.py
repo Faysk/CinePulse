@@ -28,7 +28,7 @@ class BootstrapHardeningTests(unittest.TestCase):
         self.assertIn("CINEPULSE_CI_UPDATE_FAIL_AFTER_COPY", text)
         self.assertIn("CINEPULSE_UPDATE_ROLLBACK_OK", text)
 
-    def test_update_manifest_is_exact_not_only_subset_validated(self) -> None:
+    def test_update_manifest_is_exact_only_for_managed_payload(self) -> None:
         text = APPLIER.read_text(encoding="utf-8-sig")
         self.assertIn("HashSet[string]", text)
         self.assertIn("$ManifestPaths.Add($Relative)", text)
@@ -36,7 +36,9 @@ class BootstrapHardeningTests(unittest.TestCase):
         self.assertIn("Get-ChildItem -LiteralPath $PackageRoot -File -Recurse", text)
         self.assertIn("$ManifestPaths.Contains($Relative)", text)
         self.assertIn("arquivo gerenciado não listado no manifesto", text)
+        self.assertIn("if ($First -in $ProtectedTopLevel) { continue }", text)
         self.assertIn("if ($Relative -eq 'cinepulse-files.json') { continue }", text)
+        self.assertIn("Mutable roots are intentionally preserved", text)
 
     def test_updater_acceptance_exercises_partial_copy_rollback_and_retry(self) -> None:
         text = UPDATER_TEST.read_text(encoding="utf-8-sig")
