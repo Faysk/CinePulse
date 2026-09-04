@@ -37,9 +37,9 @@ jobs:
       - name: Install project
         run: python -m pip install --disable-pip-version-check --editable .
       - name: Compile Preview integration
-        run: python -m compileall -q src/cinepulse/overlay_composer.py src/cinepulse/overlay_assets.py src/cinepulse/overlay_preview.py src/cinepulse/overlay_layout.py src/cinepulse/overlay_editor.py src/cinepulse/overlay_ffmpeg.py src/cinepulse/overlay_runtime.py src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/ui/visual_view.py
+        run: python -m compileall -q src/cinepulse/overlay_composer.py src/cinepulse/overlay_assets.py src/cinepulse/overlay_preview.py src/cinepulse/overlay_layout.py src/cinepulse/overlay_editor.py src/cinepulse/overlay_ffmpeg.py src/cinepulse/overlay_runtime.py src/cinepulse/overlay_presets.py src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/ui/visual_view.py
       - name: Overlay unit and persistence tests
-        run: python -m unittest tests.test_overlay_composer tests.test_overlay_assets tests.test_overlay_preview tests.test_overlay_editor tests.test_overlay_ffmpeg tests.test_overlay_runtime tests.test_overlay_studio_contract -v
+        run: python -m unittest tests.test_overlay_composer tests.test_overlay_assets tests.test_overlay_preview tests.test_overlay_editor tests.test_overlay_ffmpeg tests.test_overlay_runtime tests.test_overlay_presets tests.test_overlay_studio_contract -v
 
   overlay-media-linux:
     name: Overlay media integration · Linux
