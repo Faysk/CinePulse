@@ -8,7 +8,6 @@ from cinepulse.overlay_composer import (
     NormalizedRect,
     OverlayLayer,
     OverlayScene,
-    OverlaySceneError,
     VisualizerSpec,
 )
 from cinepulse.overlay_ffmpeg import OverlayFfmpegError, build_overlay_ffmpeg_plan
@@ -30,7 +29,9 @@ class OverlayFfmpegTests(unittest.TestCase):
             kind="visualizer",
             z_index=20,
             transform=LayerTransform(NormalizedRect(0.48, 0.84, 0.34, 0.07), opacity=0.60, preserve_aspect=False),
-            visualizer=VisualizerSpec(style="waveform", color="#F0E0C0", sensitivity=1.25, focus="bass"),
+            visualizer=VisualizerSpec(
+                style="waveform", color="#F0E0C0", sensitivity=1.25, focus="bass", thickness=0.75
+            ),
         )
         plan = build_overlay_ffmpeg_plan(
             OverlayScene((waveform, image)),
@@ -46,8 +47,10 @@ class OverlayFfmpegTests(unittest.TestCase):
         self.assertIn("character.png", plan.input_args)
         self.assertIn("scale=384:378", plan.filter_complex)
         self.assertIn("showwaves=s=653x76", plan.filter_complex)
+        self.assertIn("colors=0xF0E0C0", plan.filter_complex)
         self.assertIn("lowpass=f=280", plan.filter_complex)
         self.assertIn("volume=1.25", plan.filter_complex)
+        self.assertGreaterEqual(plan.filter_complex.count("dilation"), 2)
         self.assertIn("aa=0.6", plan.filter_complex)
         self.assertIn("overlay=x=1344:y=594", plan.filter_complex)
         self.assertEqual(plan.output_label, "ov_mix_1")
@@ -72,6 +75,38 @@ class OverlayFfmpegTests(unittest.TestCase):
         self.assertEqual(plan.asset_inputs[0].args[:2], ("-stream_loop", "-1"))
         self.assertIn("setpts=PTS/1.5", plan.filter_complex)
         self.assertNotIn("showwaves", plan.filter_complex)
+
+    def test_bars_honor_count_secondary_color_and_mirror(self) -> None:
+        bars = OverlayLayer(
+            id="viz-bars",
+            name="Bars",
+            kind="visualizer",
+            transform=LayerTransform(NormalizedRect(0.1, 0.7, 0.5, 0.2), opacity=0.8, preserve_aspect=False),
+            visualizer=VisualizerSpec(
+                style="bars",
+                bars=24,
+                mirror=True,
+                color="#FFAA44",
+                secondary_color="#44AAFF",
+            ),
+        )
+        plan = build_overlay_ffmpeg_plan(
+            OverlayScene((bars,)),
+            canvas_width=640,
+            canvas_height=360,
+            fps=30,
+            first_asset_input_index=1,
+            base_video_label="0:v",
+            audio_label="0:a",
+        )
+        # Layer is 320x72, mirrored generation uses half-height and 24 bins.
+        self.assertIn("showfreqs=s=24x36:mode=bar", plan.filter_complex)
+        self.assertIn("colors=0xFFAA44|0x44AAFF", plan.filter_complex)
+        self.assertIn("scale=320:36:flags=neighbor", plan.filter_complex)
+        self.assertIn("split=2", plan.filter_complex)
+        self.assertIn("vflip", plan.filter_complex)
+        self.assertIn("vstack=inputs=2,scale=320:72:flags=neighbor", plan.filter_complex)
+        self.assertIn("aa=0.8", plan.filter_complex)
 
     def test_multiple_visualizers_split_audio_once(self) -> None:
         first = OverlayLayer(
