@@ -45,9 +45,11 @@ $PayloadParent = Join-Path $BuildRoot 'payload'
 $Payload = Join-Path $PayloadParent 'CinePulse'
 $WixRoot = Join-Path $RuntimeRoot 'wix-6.0.2'
 $WixExe = Join-Path $WixRoot 'wix.exe'
+$WixExtensionCache = Join-Path $RuntimeRoot 'wix-extension-cache'
 $BuildTools = Get-Content -LiteralPath (Join-Path $ProjectRoot 'installer\build-tools.json') -Raw | ConvertFrom-Json
 $DotnetRoot = Join-Path $RuntimeRoot "dotnet-sdk-$($BuildTools.dotnet_sdk.version)"
 $DotnetExe = Join-Path $DotnetRoot 'dotnet.exe'
+$WixUiExtension = "WixToolset.UI.wixext/$($BuildTools.wix.version)"
 $Archive = Join-Path $ProjectRoot "dist\CinePulse-$Version-windows-portable.zip"
 $Output = Join-Path $ProjectRoot "dist\CinePulse-$Version-Setup.msi"
 
@@ -97,9 +99,16 @@ if (-not (Test-Path -LiteralPath $WixExe)) {
     if ($LASTEXITCODE -ne 0) { throw 'Não foi possível instalar o WiX Toolset.' }
 }
 
+# The install-directory wizard lives in WixToolset.UI.wixext. Keep the
+# extension cache inside CinePulse build runtime instead of the user profile.
+New-Item -ItemType Directory -Path $WixExtensionCache -Force | Out-Null
+$env:WIX_EXTENSION = $WixExtensionCache
+& $WixExe extension add -g $WixUiExtension
+if ($LASTEXITCODE -ne 0) { throw 'Não foi possível preparar a extensão de UI do WiX.' }
+
 if (Test-Path -LiteralPath $Output) { Remove-Item -LiteralPath $Output -Force }
 & $WixExe build (Join-Path $ProjectRoot 'installer\wix\Product.wxs') `
-    -arch x64 -bindpath "Payload=$Payload" -d ProductVersion=$MsiVersion -out $Output
+    -arch x64 -ext $WixUiExtension -bindpath "Payload=$Payload" -d ProductVersion=$MsiVersion -out $Output
 if ($LASTEXITCODE -ne 0) { throw 'A compilação do MSI falhou.' }
 # O payload é deliberadamente per-user para que modelos e atualizações não exijam administrador.
 # O harvester do WiX usa arquivos como KeyPath; ICE38/ICE91 não representam falha funcional nesse escopo.
