@@ -1,0 +1,54 @@
+name: Audit Updater Patch
+
+on:
+  push:
+    branches: [audit-final-hardening]
+    paths:
+      - 'scripts/_audit_patch_updater.py'
+      - '.github/workflows/audit-updater-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit-final-hardening
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Patch updater delegation
+        run: python scripts/_audit_patch_updater.py
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          foreach ($Path in @('installer/Start-CinePulse.ps1','installer/Apply-CinePulseUpdate.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $Path), [ref]$null, [ref]$errors)
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "PowerShell parse failed: $Path" }
+          }
+      - name: Verify delegation
+        shell: pwsh
+        run: |
+          $text = Get-Content installer/Start-CinePulse.ps1 -Raw
+          if ($text -notmatch 'Apply-CinePulseUpdate\.ps1') { throw 'Transactional updater delegation missing.' }
+          if ($text -match 'update-backup.*RootFiles') { throw 'Legacy overlay updater is still present.' }
+      - name: Commit patch
+        shell: bash
+        run: |
+          if git diff --quiet -- installer/Start-CinePulse.ps1; then
+            echo 'Updater already patched.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add installer/Start-CinePulse.ps1
+          git commit -m 'fix: delegate updates to transactional payload swap'
+          git pull --rebase origin audit-final-hardening
+          git push origin HEAD:audit-final-hardening
