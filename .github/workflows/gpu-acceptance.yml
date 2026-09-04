@@ -2,17 +2,32 @@ name: GPU Acceptance
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/gpu-acceptance.yml'
+      - 'src/cinepulse/rife_engine.py'
+      - 'src/cinepulse/rife_safe_runner.py'
+      - 'src/cinepulse/job_lease.py'
+      - 'src/cinepulse/render_worker.py'
+      - 'src/cinepulse/stage_adapter.py'
+      - 'src/cinepulse/frame_quality.py'
+      - 'src/cinepulse/storage_resilience.py'
+      - 'tests/recovery_gpu_acceptance.py'
 
 permissions:
   contents: read
 
 concurrency:
-  group: gpu-acceptance
+  group: gpu-acceptance-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   nvidia-windows:
     name: NVIDIA target-machine acceptance
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'Faysk')
     runs-on: [self-hosted, Windows, X64, cinepulse-gpu]
     timeout-minutes: 180
     steps:
