@@ -55,7 +55,7 @@ class OverlayPreviewTests(unittest.TestCase):
         loud = render_visualizer_rgba(160, 48, spec, AudioReactiveState((1.0, 0.8, 0.7), 1.0, 1.0, 0.2))
         quiet_rows = np.where(np.any(quiet[..., 3] > 0, axis=1))[0]
         loud_rows = np.where(np.any(loud[..., 3] > 0, axis=1))[0]
-        self.assertGreater(loud_rows.ptp(), quiet_rows.ptp())
+        self.assertGreater(np.ptp(loud_rows), np.ptp(quiet_rows))
 
     def test_bars_are_transparent_outside_drawn_area(self) -> None:
         spec = VisualizerSpec(style="bars", bars=16, color="#FF0000", secondary_color="#0000FF")
