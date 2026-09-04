@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.11', '3.13']
+        python: ['3.11', '3.13', '3.14.7']
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -40,49 +40,50 @@ jobs:
           if-no-files-found: error
 
   cpu-integration:
-    name: CPU integration · Linux
+    name: CPU integration · Linux · Python 3.14.7
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: '3.14.7'
           cache: pip
       - name: System media dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb python3-tk
       - name: Install project
         run: python -m pip install --disable-pip-version-check --editable .
       - name: CPU integration gate
-        run: python scripts/ci_gate.py --profile cpu --output artifacts/ci/cpu-linux.json
+        run: python scripts/ci_gate.py --profile cpu --output artifacts/ci/cpu-linux-py3.14.7.json
       - name: Upload integration evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: cpu-integration-linux
+          name: cpu-integration-linux-py3.14.7
           path: |
             artifacts/ci/*.json
             data/test-runs/**/report.json
           if-no-files-found: warn
+
   media-integration:
-    name: Media integrity · Linux
+    name: Media integrity · Linux · Python 3.14.7
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: '3.14.7'
           cache: pip
       - name: System media dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb python3-tk
       - name: Install project
         run: python -m pip install --disable-pip-version-check --editable .
       - name: Media integration gate
-        run: python scripts/ci_gate.py --profile media --output artifacts/ci/media-linux.json
+        run: python scripts/ci_gate.py --profile media --output artifacts/ci/media-linux-py3.14.7.json
       - name: Upload media evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: media-integration-linux
+          name: media-integration-linux-py3.14.7
           path: |
             artifacts/ci/*.json
             data/test-runs/**/report.json
