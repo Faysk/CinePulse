@@ -53,6 +53,26 @@ def instance_mutex_name() -> str:
     return f"Local\\CinePulse-{digest}"
 
 
+def _windows_mutex_api():
+    """Return Win32 mutex functions with pointer-sized signatures.
+
+    ctypes assumes ``c_int`` for an undeclared function result.  A Windows
+    HANDLE is pointer-sized, so leaving CreateMutexW untyped can truncate the
+    handle in a 64-bit process and make ReleaseMutex/CloseHandle unreliable.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    kernel32.ReleaseMutex.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
 class InstanceGuard:
     """Single-instance guard.
 
@@ -69,11 +89,13 @@ class InstanceGuard:
         if os.name == "nt":
             import ctypes
 
-            kernel32 = ctypes.windll.kernel32
+            kernel32 = _windows_mutex_api()
+            ctypes.set_last_error(0)
             handle = kernel32.CreateMutexW(None, True, instance_mutex_name())
             if not handle:
-                raise OSError("Não foi possível criar o mutex de instância do CinePulse.")
-            already_exists = int(kernel32.GetLastError()) == 183  # ERROR_ALREADY_EXISTS
+                code = ctypes.get_last_error()
+                raise OSError(code, "Não foi possível criar o mutex de instância do CinePulse.")
+            already_exists = ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
             if already_exists:
                 kernel32.CloseHandle(handle)
                 return False
@@ -109,10 +131,12 @@ class InstanceGuard:
 
     def release(self) -> None:
         if os.name == "nt" and self._handle is not None:
-            import ctypes
+            from ctypes import wintypes
 
-            ctypes.windll.kernel32.ReleaseMutex(self._handle)
-            ctypes.windll.kernel32.CloseHandle(self._handle)
+            kernel32 = _windows_mutex_api()
+            handle = wintypes.HANDLE(self._handle)
+            kernel32.ReleaseMutex(handle)
+            kernel32.CloseHandle(handle)
             self._handle = None
         if self._owns_file:
             try:

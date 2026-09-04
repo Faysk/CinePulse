@@ -83,71 +83,12 @@ if ($InstallOnly) {
 }
 
 function Apply-PendingUpdate {
-    $PendingFile = Join-Path $RuntimeRoot 'pending-update.json'
-    if (-not (Test-Path -LiteralPath $PendingFile)) { return }
-    $Pending = Get-Content -LiteralPath $PendingFile -Raw | ConvertFrom-Json
-    if ($Pending.schema -ne 1 -or -not $Pending.source -or -not $Pending.version) {
-        throw 'A atualização pendente possui metadados inválidos.'
-    }
-    $UpdatesRoot = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot 'updates'))
-    $Source = [IO.Path]::GetFullPath([string]$Pending.source)
-    $Prefix = $UpdatesRoot.TrimEnd('\') + '\'
-    if (-not $Source.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A origem da atualização não pertence à pasta privada do CinePulse.'
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $Source 'CinePulse.cmd')) -or
-        -not (Test-Path -LiteralPath (Join-Path $Source 'pyproject.toml'))) {
-        throw 'A atualização pendente está incompleta.'
-    }
-
-    $Backup = Join-Path $RuntimeRoot 'update-backup'
-    if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }
-    New-Item -ItemType Directory -Path $Backup -Force | Out-Null
-    $RootFiles = @(
-        '.env.example', '.gitattributes', '.gitignore', 'CHANGELOG.md', 'CONTRIBUTING.md',
-        'CinePulse.cmd', 'Install-CinePulse.cmd', 'cinepulse-files.json', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
-        'pyproject.toml', 'requirements.lock', 'requirements-neural.in', 'requirements-neural.lock'
-    )
-    $Directories = @('assets', 'docs', 'installer', 'src')
+    $Applier = Join-Path $PSScriptRoot 'Apply-CinePulseUpdate.ps1'
+    if (-not (Test-Path -LiteralPath $Applier)) { throw 'Aplicador transacional de atualização não encontrado.' }
     try {
-        foreach ($Name in $RootFiles) {
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Current) { Copy-Item -LiteralPath $Current -Destination (Join-Path $Backup $Name) -Force }
-        }
-        foreach ($Name in $Directories) {
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Current) { Copy-Item -LiteralPath $Current -Destination (Join-Path $Backup $Name) -Recurse -Force }
-        }
-        foreach ($Name in $RootFiles) {
-            $Incoming = Join-Path $Source $Name
-            if (Test-Path -LiteralPath $Incoming) { Copy-Item -LiteralPath $Incoming -Destination (Join-Path $ProjectRoot $Name) -Force }
-        }
-        foreach ($Name in $Directories) {
-            $Incoming = Join-Path $Source $Name
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Incoming) {
-                if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
-                Copy-Item -LiteralPath $Incoming -Destination $Current -Recurse -Force
-            }
-        }
-        Remove-Item -LiteralPath $PendingFile -Force
-        Remove-Item -LiteralPath (Split-Path -Parent (Split-Path -Parent $Source)) -Recurse -Force
-        Remove-Item -LiteralPath $Backup -Recurse -Force
-        Write-Host "CinePulse atualizado para $($Pending.version)."
+        & $Applier -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
     } catch {
-        foreach ($Name in $RootFiles) {
-            $Saved = Join-Path $Backup $Name
-            if (Test-Path -LiteralPath $Saved) { Copy-Item -LiteralPath $Saved -Destination (Join-Path $ProjectRoot $Name) -Force }
-        }
-        foreach ($Name in $Directories) {
-            $Saved = Join-Path $Backup $Name
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Saved) {
-                if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
-                Copy-Item -LiteralPath $Saved -Destination $Current -Recurse -Force
-            }
-        }
-        throw "A atualização falhou e a versão anterior foi restaurada. $($_.Exception.Message)"
+        throw "Aplicador transacional de atualização falhou. $($_.Exception.Message)"
     }
 }
 
@@ -198,22 +139,38 @@ function Set-DedicatedGpuPreference {
 function Get-PortableUv {
     $BootstrapRoot = Join-Path $RuntimeRoot 'bootstrap'
     $UvExe = Join-Path $BootstrapRoot 'uv.exe'
-    if (Test-Path -LiteralPath $UvExe) { return $UvExe }
+    $StateFile = Join-Path $BootstrapRoot 'uv-state.json'
+    $ExpectedVersion = [string]$BootstrapManifest.uv.version
+    $ExpectedSha256 = ([string]$BootstrapManifest.uv.sha256).ToLowerInvariant()
+    if ((Test-Path -LiteralPath $UvExe) -and (Test-Path -LiteralPath $StateFile)) {
+        try {
+            $State = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+            if ($State.schema -eq 1 -and
+                [string]$State.version -eq $ExpectedVersion -and
+                ([string]$State.sha256).ToLowerInvariant() -eq $ExpectedSha256) {
+                return $UvExe
+            }
+        } catch { }
+    }
+    if (Test-Path -LiteralPath $BootstrapRoot) { Remove-Item -LiteralPath $BootstrapRoot -Recurse -Force }
     New-Item -ItemType Directory -Path $BootstrapRoot -Force | Out-Null
     $Archive = Join-Path $BootstrapRoot 'uv.zip.part'
-    Write-Host "Baixando inicializador portátil uv $($BootstrapManifest.uv.version)..."
+    Write-Host "Baixando inicializador portátil uv $ExpectedVersion..."
     Invoke-WebRequest -UseBasicParsing -Uri $BootstrapManifest.uv.url -OutFile $Archive
     $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-    if ($ActualHash -ne $BootstrapManifest.uv.sha256.ToLowerInvariant()) {
+    if ($ActualHash -ne $ExpectedSha256) {
         Remove-Item -LiteralPath $Archive -Force
         throw 'O download do inicializador portátil não passou na verificação SHA-256.'
     }
     $Extracted = Join-Path $BootstrapRoot 'extracted'
-    if (Test-Path -LiteralPath $Extracted) { Remove-Item -LiteralPath $Extracted -Recurse -Force }
     Expand-Archive -LiteralPath $Archive -DestinationPath $Extracted -Force
     $Found = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'uv.exe' | Select-Object -First 1
     if (-not $Found) { throw 'O pacote do uv não contém o executável esperado.' }
     Move-Item -LiteralPath $Found.FullName -Destination $UvExe -Force
+    $StateTemp = "$StateFile.part"
+    @{ schema = 1; version = $ExpectedVersion; sha256 = $ExpectedSha256 } |
+        ConvertTo-Json | Set-Content -LiteralPath $StateTemp -Encoding UTF8
+    Move-Item -LiteralPath $StateTemp -Destination $StateFile -Force
     Remove-Item -LiteralPath $Archive -Force
     Remove-Item -LiteralPath $Extracted -Recurse -Force
     return $UvExe
@@ -221,37 +178,9 @@ function Get-PortableUv {
 
 function Install-PortableFfmpeg {
     $Destination = Join-Path $ComponentsRoot 'ffmpeg'
-    $FfmpegExe = Join-Path $Destination 'bin\ffmpeg.exe'
-    $FfprobeExe = Join-Path $Destination 'bin\ffprobe.exe'
-    if ((Test-Path -LiteralPath $FfmpegExe) -and (Test-Path -LiteralPath $FfprobeExe)) { return }
-    $StagingRoot = Join-Path $ComponentsRoot '.staging\ffmpeg'
-    $Archive = Join-Path $StagingRoot 'ffmpeg.zip.part'
-    $Extracted = Join-Path $StagingRoot 'extracted'
-    New-Item -ItemType Directory -Path $StagingRoot -Force | Out-Null
-    Get-VerifiedDownload -Name "FFmpeg portátil $($BootstrapManifest.ffmpeg.version)" `
-        -Url $BootstrapManifest.ffmpeg.url -Sha256 $BootstrapManifest.ffmpeg.sha256 -Destination $Archive
-    if (Test-Path -LiteralPath $Extracted) { Remove-Item -LiteralPath $Extracted -Recurse -Force }
-    Expand-Archive -LiteralPath $Archive -DestinationPath $Extracted -Force
-    $FoundFfmpeg = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'ffmpeg.exe' | Select-Object -First 1
-    $FoundFfprobe = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'ffprobe.exe' | Select-Object -First 1
-    if (-not $FoundFfmpeg -or -not $FoundFfprobe) { throw 'O pacote não contém FFmpeg e FFprobe.' }
-    $PackageRoot = Split-Path -Parent (Split-Path -Parent $FoundFfmpeg.FullName)
-    $Incoming = Join-Path $StagingRoot 'incoming'
-    if (Test-Path -LiteralPath $Incoming) { Remove-Item -LiteralPath $Incoming -Recurse -Force }
-    Move-Item -LiteralPath $PackageRoot -Destination $Incoming
-    $Previous = "$Destination.previous"
-    if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
-    if (Test-Path -LiteralPath $Destination) { Move-Item -LiteralPath $Destination -Destination $Previous }
-    try {
-        Move-Item -LiteralPath $Incoming -Destination $Destination
-    } catch {
-        if ((Test-Path -LiteralPath $Previous) -and -not (Test-Path -LiteralPath $Destination)) {
-            Move-Item -LiteralPath $Previous -Destination $Destination
-        }
-        throw
-    }
-    if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
-    Remove-Item -LiteralPath $StagingRoot -Recurse -Force
+    Install-VerifiedArchive -Key 'ffmpeg' -Name "FFmpeg portátil $($BootstrapManifest.ffmpeg.version)" `
+        -Manifest $BootstrapManifest.ffmpeg -Destination $Destination `
+        -RequiredFiles @('bin\ffmpeg.exe', 'bin\ffprobe.exe') -UseSingleRoot
 }
 
 function Get-VerifiedDownload {
@@ -327,7 +256,9 @@ function Install-VerifiedArchive {
             foreach ($RequiredFile in $RequiredFiles) {
                 if (-not (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile))) { $Complete = $false }
             }
-            if ($State.version -eq $Manifest.version -and $Complete) { return }
+            $StateHash = ([string]$State.sha256).ToLowerInvariant()
+            $ManifestHash = ([string]$Manifest.sha256).ToLowerInvariant()
+            if ($State.version -eq $Manifest.version -and $StateHash -eq $ManifestHash -and $Complete) { return }
         } catch { }
     }
     $StagingRoot = Join-Path $ComponentsRoot ".staging\$Key"
@@ -344,22 +275,25 @@ function Install-VerifiedArchive {
         if ($Roots.Count -ne 1) { throw "O pacote de $Name não possui a estrutura esperada." }
         $Incoming = $Roots[0].FullName
     }
+    foreach ($RequiredFile in $RequiredFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Incoming $RequiredFile))) { throw "O pacote de $Name está incompleto: $RequiredFile" }
+    }
     $Previous = "$Destination.previous"
     if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
     if (Test-Path -LiteralPath $Destination) { Move-Item -LiteralPath $Destination -Destination $Previous }
     try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
         Move-Item -LiteralPath $Incoming -Destination $Destination
-        @{ schema = 1; key = $Key; version = $Manifest.version; sha256 = $Manifest.sha256 } |
+        if ($env:CINEPULSE_CI_COMPONENT_FAIL_AFTER_PROMOTE -eq $Key) { throw "Falha injetada após promoção de $Key." }
+        @{ schema = 2; key = $Key; version = $Manifest.version; sha256 = $Manifest.sha256 } |
             ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
     } catch {
-        if ((Test-Path -LiteralPath $Previous) -and -not (Test-Path -LiteralPath $Destination)) {
-            Move-Item -LiteralPath $Previous -Destination $Destination
-        }
+        if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
+        if (Test-Path -LiteralPath $Previous) { Move-Item -LiteralPath $Previous -Destination $Destination }
         throw
     }
-    if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force }
-    if (Test-Path -LiteralPath $StagingRoot) { Remove-Item -LiteralPath $StagingRoot -Recurse -Force }
+    if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $StagingRoot) { Remove-Item -LiteralPath $StagingRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 function Install-Demucs {
@@ -372,8 +306,20 @@ function Install-Demucs {
     if ((Test-Path -LiteralPath $AiPython) -and (Test-Path -LiteralPath $DemucsState)) {
         try {
             $State = Get-Content -LiteralPath $DemucsState -Raw | ConvertFrom-Json
-            if ($State.demucs -eq $BootstrapManifest.demucs.version -and $State.torch -eq $BootstrapManifest.demucs.torch_version) {
-                & $AiPython -c "import demucs, torch; raise SystemExit(0 if torch.__version__ else 1)" *> $null
+            $StateMatches = (
+                $State.demucs -eq $BootstrapManifest.demucs.version -and
+                $State.torch -eq $BootstrapManifest.demucs.torch_version -and
+                $State.soundfile -eq $BootstrapManifest.demucs.soundfile_version -and
+                $State.python -eq $BootstrapManifest.python.version -and
+                $State.cuda_runtime -eq $BootstrapManifest.demucs.cuda_runtime -and
+                $State.torch_index -eq $BootstrapManifest.demucs.torch_index
+            )
+            if ($StateMatches) {
+                $Py = [string]$BootstrapManifest.python.version
+                $Torch = [string]$BootstrapManifest.demucs.torch_version
+                $Demucs = [string]$BootstrapManifest.demucs.version
+                $SoundFile = [string]$BootstrapManifest.demucs.soundfile_version
+                & $AiPython -c "import importlib.metadata as m, platform, torch; ok=(platform.python_version() == '$Py' and torch.__version__ == '$Torch' and m.version('demucs') == '$Demucs' and m.version('soundfile') == '$SoundFile'); raise SystemExit(0 if ok else 1)" *> $null
                 $Ready = $LASTEXITCODE -eq 0
             }
         } catch { $Ready = $false }
@@ -385,29 +331,31 @@ function Install-Demucs {
         if ($LASTEXITCODE -ne 0) { throw 'Não foi possível criar o ambiente privado do Demucs.' }
         if (-not $UvExe) { $script:UvExe = Get-PortableUv }
         $NeuralLock = Join-Path $ProjectRoot 'requirements-neural.lock'
-        if (-not (Test-Path -LiteralPath $NeuralLock)) {
-            throw 'Lock neural ausente; recusando instalar dependências não reproduzíveis.'
-        }
+        if (-not (Test-Path -LiteralPath $NeuralLock)) { throw 'Lock neural ausente; recusando instalar dependências não reproduzíveis.' }
         $TorchIndex = [string]$BootstrapManifest.demucs.torch_index
-        if (-not $TorchIndex.StartsWith('https://download.pytorch.org/whl/', [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Índice oficial do PyTorch ausente ou inválido no manifesto de bootstrap.'
-        }
+        if (-not $TorchIndex.StartsWith('https://download.pytorch.org/whl/', [StringComparison]::OrdinalIgnoreCase)) { throw 'Índice oficial do PyTorch ausente ou inválido no manifesto de bootstrap.' }
         Write-Host "Resolvendo PyTorch $($BootstrapManifest.demucs.torch_version) pelo índice oficial CUDA: $TorchIndex"
         & $UvExe pip install --python $AiPython --require-hashes --index $TorchIndex -r $NeuralLock
         if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar o runtime neural hash-locked do Demucs.' }
     }
     New-Item -ItemType Directory -Path $ModelRepo -Force | Out-Null
     foreach ($Weight in $BootstrapManifest.demucs.weights) {
-        Get-VerifiedDownload -Name "modelo Demucs $($Weight.file)" -Url $Weight.url -Sha256 $Weight.sha256 `
-            -Destination (Join-Path $ModelRepo $Weight.file)
+        Get-VerifiedDownload -Name "modelo Demucs $($Weight.file)" -Url $Weight.url -Sha256 $Weight.sha256 -Destination (Join-Path $ModelRepo $Weight.file)
     }
     @"
 models: ['f7e0c4bc', 'd12395a8', '92cfc3b6', '04573f0d']
 weights:
   [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]]
 "@ | Set-Content -LiteralPath (Join-Path $ModelRepo 'htdemucs_ft.yaml') -Encoding UTF8
-    @{ schema = 1; demucs = $BootstrapManifest.demucs.version; torch = $BootstrapManifest.demucs.torch_version } |
-        ConvertTo-Json | Set-Content -LiteralPath $DemucsState -Encoding UTF8
+    @{
+        schema = 2
+        python = $BootstrapManifest.python.version
+        demucs = $BootstrapManifest.demucs.version
+        torch = $BootstrapManifest.demucs.torch_version
+        soundfile = $BootstrapManifest.demucs.soundfile_version
+        cuda_runtime = $BootstrapManifest.demucs.cuda_runtime
+        torch_index = $BootstrapManifest.demucs.torch_index
+    } | ConvertTo-Json | Set-Content -LiteralPath $DemucsState -Encoding UTF8
 }
 
 function Install-CompleteComponents {
@@ -434,36 +382,58 @@ function Install-CompleteComponents {
     Write-Host "CINEPULSE_COMPONENTS_READY selected=$($Selected -join ',')"
 }
 
-if ($Repair -and (Test-Path -LiteralPath $VenvRoot)) {
-    $ResolvedRuntime = (Resolve-Path -LiteralPath $RuntimeRoot).Path
-    $ResolvedVenv = (Resolve-Path -LiteralPath $VenvRoot).Path
-    if (-not $ResolvedVenv.StartsWith($ResolvedRuntime, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A pasta do ambiente não pertence ao CinePulse.'
+$ExpectedPythonVersion = [string]$BootstrapManifest.python.version
+$RuntimeRebuilt = $false
+$RebuildRuntime = $Repair -or -not (Test-Path -LiteralPath $PythonExe)
+if (-not $RebuildRuntime) {
+    try {
+        $ActualPythonVersion = (& $PythonExe -c "import platform; print(platform.python_version())").Trim()
+        if ($LASTEXITCODE -ne 0 -or $ActualPythonVersion -ne $ExpectedPythonVersion.Trim()) {
+            Write-Host "Runtime Python mudou: instalado=$ActualPythonVersion esperado=$ExpectedPythonVersion. Recriando ambiente privado..."
+            $RebuildRuntime = $true
+        }
+    } catch {
+        Write-Host 'Runtime Python existente está inválido. Recriando ambiente privado...'
+        $RebuildRuntime = $true
     }
-    Remove-Item -LiteralPath $ResolvedVenv -Recurse -Force
 }
 
 if ($InstallOnly) { Write-Host '[1/4] Preparando o ambiente Python privado...' }
-if (-not (Test-Path -LiteralPath $PythonExe)) {
+if ($RebuildRuntime) {
+    if (Test-Path -LiteralPath $VenvRoot) {
+        $ResolvedRuntime = [IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\') + '\'
+        $ResolvedVenv = [IO.Path]::GetFullPath($VenvRoot)
+        if (-not $ResolvedVenv.StartsWith($ResolvedRuntime, [StringComparison]::OrdinalIgnoreCase)) { throw 'A pasta do ambiente não pertence ao CinePulse.' }
+        Remove-Item -LiteralPath $VenvRoot -Recurse -Force
+    }
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
-    $UvExe = Get-PortableUv
-    Write-Host "Preparando Python gerenciado $($BootstrapManifest.python.version) dentro de $RuntimeRoot..."
-    & $UvExe venv --python $BootstrapManifest.python.version --python-preference only-managed $VenvRoot
+    if (-not $UvExe) { $UvExe = Get-PortableUv }
+    Write-Host "Preparando Python gerenciado $ExpectedPythonVersion dentro de $RuntimeRoot..."
+    & $UvExe venv --python $ExpectedPythonVersion --python-preference only-managed $VenvRoot
     if ($LASTEXITCODE -ne 0) { throw 'Não foi possível preparar o Python gerenciado do CinePulse.' }
+    $RuntimeRebuilt = $true
 }
-
-$ExpectedPythonVersion = [string]$BootstrapManifest.python.version
-$ActualPythonVersion = & $PythonExe -c "import platform; print(platform.python_version())"
-if ($ActualPythonVersion.Trim() -ne $ExpectedPythonVersion.Trim()) {
-    throw "Runtime Python inesperado. Esperado $ExpectedPythonVersion, obtido $($ActualPythonVersion.Trim())."
+if (-not (Test-Path -LiteralPath $PythonExe)) { throw 'Runtime Python privado não foi criado.' }
+$ActualPythonVersion = (& $PythonExe -c "import platform; print(platform.python_version())").Trim()
+if ($LASTEXITCODE -ne 0 -or $ActualPythonVersion -ne $ExpectedPythonVersion.Trim()) {
+    throw "Runtime Python inesperado após reconstrução. Esperado $ExpectedPythonVersion, obtido $ActualPythonVersion."
 }
 
 $ProjectHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ProjectRoot 'pyproject.toml')).Hash
 $LockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ProjectRoot 'requirements.lock')).Hash
-$ExpectedState = "$ProjectHash`n$LockHash"
+$ExpectedState = "$ExpectedPythonVersion`n$ProjectHash`n$LockHash"
 $CurrentState = if (Test-Path -LiteralPath $InstallState) { Get-Content -LiteralPath $InstallState -Raw } else { '' }
+$RuntimePackagesHealthy = $false
+if (-not $RuntimeRebuilt) {
+    try {
+        & $PythonExe -c "import numpy, cinepulse; raise SystemExit(0)" *> $null
+        $RuntimePackagesHealthy = $LASTEXITCODE -eq 0
+    } catch {
+        $RuntimePackagesHealthy = $false
+    }
+}
 if ($InstallOnly) { Write-Host '[2/4] Verificando dependências do CinePulse...' }
-if ($Repair -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
+if ($Repair -or $RuntimeRebuilt -or -not $RuntimePackagesHealthy -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
     & $PythonExe -m pip --version *> $null
     if ($LASTEXITCODE -eq 0) {
         & $PythonExe -m pip install --disable-pip-version-check --quiet --require-hashes --only-binary=:all: --requirement (Join-Path $ProjectRoot 'requirements.lock')

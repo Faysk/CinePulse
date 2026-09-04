@@ -160,8 +160,8 @@ jobs:
           )
           $Args = @('release', 'create', $Tag) + $Assets + @(
             '--repo', $env:GITHUB_REPOSITORY,
-            '--title', "CinePulse $env:RELEASE_VERSION — Installer v2",
-            '--notes-file', 'docs/INSTALLER_V2_RELEASE.md'
+            '--title', "CinePulse $env:RELEASE_VERSION — Reliability Hardening",
+            '--notes-file', 'docs/RELEASE_1_1_1.md'
           )
           if ($RemoteTag) {
             git fetch origin "refs/tags/$Tag:refs/tags/$Tag"

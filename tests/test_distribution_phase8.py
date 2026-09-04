@@ -74,10 +74,14 @@ class DistributionPhase8Tests(unittest.TestCase):
         self.assertGreaterEqual(studio.count('installation_mode(APP_DIR) == "installed"'), 3)
         self.assertGreaterEqual(studio.count('command.append("-NonPortable")'), 2)
 
-    def test_windows_mutex_takes_ownership_and_closes_duplicate_handle(self) -> None:
+    def test_windows_mutex_uses_pointer_sized_handle_and_closes_duplicates(self) -> None:
         runtime = (ROOT / "src" / "cinepulse" / "runtime_distribution.py").read_text(encoding="utf-8")
         self.assertIn("CreateMutexW(None, True", runtime)
+        self.assertIn("CreateMutexW.restype = wintypes.HANDLE", runtime)
+        self.assertIn("ReleaseMutex.argtypes = [wintypes.HANDLE]", runtime)
+        self.assertIn("CloseHandle.argtypes = [wintypes.HANDLE]", runtime)
         self.assertIn("kernel32.CloseHandle(handle)", runtime)
+        self.assertIn("ctypes.get_last_error() == 183", runtime)
 
 
 if __name__ == "__main__":

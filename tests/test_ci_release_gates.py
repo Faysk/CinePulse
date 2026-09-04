@@ -30,13 +30,15 @@ class CiReleaseGateTests(unittest.TestCase):
         ):
             self.assertIn(script, commands)
 
-    def test_quality_workflow_has_matrix_and_cpu_integration(self) -> None:
+    def test_quality_workflow_covers_supported_and_release_python(self) -> None:
         text = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
         self.assertIn("source-matrix:", text)
         self.assertIn("cpu-integration:", text)
         self.assertIn("media-integration:", text)
         self.assertIn("'3.11'", text)
         self.assertIn("'3.13'", text)
+        self.assertIn("'3.14.7'", text)
+        self.assertGreaterEqual(text.count("python-version: '3.14.7'"), 2)
         self.assertIn("--profile cpu", text)
         self.assertIn("--profile media", text)
         self.assertIn("actions/upload-artifact@v7", text)
@@ -49,12 +51,44 @@ class CiReleaseGateTests(unittest.TestCase):
         ):
             self.assertIn(needle, text)
 
-    def test_gpu_workflow_is_guarded_and_self_hosted(self) -> None:
+    def test_release_candidate_binds_tag_and_manual_version_to_code(self) -> None:
+        text = (ROOT / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
+        self.assertIn("tomllib", text)
+        self.assertIn("Version mismatch: pyproject=", text)
+        self.assertIn("does not match repository version", text)
+        self.assertIn("GITHUB_REF_TYPE", text)
+        self.assertIn("REQUESTED_VERSION", text)
+        self.assertIn("cinepulse.__version__ == os.environ['CINEPULSE_VERSION']", text)
+
+    def test_installer_acceptance_is_permanent_dynamic_main_gate(self) -> None:
+        text = (ROOT / ".github/workflows/installer-v2-acceptance.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_request:", text)
+        self.assertGreaterEqual(text.count("branches: [main]"), 2)
+        self.assertNotIn("installer-v2-self-contained", text)
+        self.assertIn("CINEPULSE_VERSION", text)
+        self.assertNotIn("-Version 1.1.0", text)
+        self.assertIn("python-version: '3.14.7'", text)
+
+    def test_obsolete_runtime_lock_writer_is_not_shipped(self) -> None:
+        self.assertFalse((ROOT / ".github/workflows/installer-v2-runtime-locks.yml").exists())
+        writers = []
+        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            text = workflow.read_text(encoding="utf-8")
+            if "contents: write" in text:
+                writers.append(workflow.name)
+        self.assertEqual(writers, ["publish-release.yml"])
+
+    def test_gpu_workflow_is_guarded_self_contained_and_release_aligned(self) -> None:
         text = (ROOT / ".github/workflows/gpu-acceptance.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("pull_request:", text)
         self.assertIn("self-hosted", text)
         self.assertIn("cinepulse-gpu", text)
+        self.assertIn("python-version: '3.14.7'", text)
+        self.assertIn("--require-hashes", text)
+        self.assertIn("Start-CinePulse.ps1 -InstallOnly", text)
+        self.assertIn("Test-IsolatedEnvironment.ps1", text)
+        self.assertIn("Test-NeuralInstaller.ps1", text)
         self.assertIn("--profile gpu", text)
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.actor == 'Faysk'", text)

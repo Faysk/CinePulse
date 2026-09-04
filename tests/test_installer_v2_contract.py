@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "1.1.0"
 
 
 def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_release_version_is_synchronized() -> None:
-    pyproject = _text("pyproject.toml")
-    package = _text("src/cinepulse/__init__.py")
-    assert f'version = "{RELEASE_VERSION}"' in pyproject
-    assert f'__version__ = "{RELEASE_VERSION}"' in package
+def _release_version() -> str:
+    payload = tomllib.loads(_text("pyproject.toml"))
+    version = str(payload["project"]["version"])
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), version
+    return version
 
+
+def test_release_version_is_synchronized() -> None:
+    version = _release_version()
+    package = _text("src/cinepulse/__init__.py")
+    assert f'__version__ = "{version}"' in package
+
+    expected = re.compile(rf"\[string\]\$Version\s*=\s*'{re.escape(version)}'")
     for path in (
         "scripts/Build-Portable.ps1",
         "scripts/Build-Msi.ps1",
@@ -25,11 +32,10 @@ def test_release_version_is_synchronized() -> None:
         "scripts/Test-MsiLifecycle.ps1",
         "scripts/Invoke-RcAcceptance.ps1",
     ):
-        text = _text(path)
-        assert re.search(r"\[string\]\$Version\s*=\s*'1\.1\.0'", text), path
+        assert expected.search(_text(path)), path
 
     release_workflow = _text(".github/workflows/release-candidate.yml")
-    assert "default: 1.1.0" in release_workflow
+    assert f"default: {version}" in release_workflow
 
 
 def test_paths_default_to_project_root_not_localappdata() -> None:
