@@ -94,6 +94,27 @@ def _require_https(url: str) -> None:
         raise ValueError("O canal de atualização precisa usar HTTPS.")
 
 
+def _validated_update_info(info: UpdateInfo) -> tuple[str, str]:
+    """Validate the staging trust boundary even for internally constructed UpdateInfo.
+
+    `check()` normally validates feed data first, but `stage()` is also a public
+    module boundary and must not rely on every future caller remembering to use
+    `check()`.  In particular, the version becomes a directory name and the URL
+    drives a network request, so both are validated again before filesystem or
+    network side effects occur.
+    """
+
+    version = info.version.strip()
+    if not version:
+        raise ValueError("A versão da atualização está vazia.")
+    _version_key(version)
+    _require_https(info.download_url)
+    digest = info.sha256.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("A atualização não contém um SHA-256 válido.")
+    return version, digest
+
+
 def check(feed_url: str, current_version: str, timeout: int = 15) -> UpdateInfo | None:
     _require_https(feed_url)
     request = urllib.request.Request(feed_url, headers={"User-Agent": f"CinePulse/{current_version}"})
@@ -116,9 +137,7 @@ def check(feed_url: str, current_version: str, timeout: int = 15) -> UpdateInfo 
         sha256=str(payload["sha256"]).lower(),
         notes_url=str(payload["notes_url"]) if payload.get("notes_url") else None,
     )
-    _require_https(info.download_url)
-    if not re.fullmatch(r"[0-9a-f]{64}", info.sha256):
-        raise ValueError("O canal não contém um SHA-256 válido.")
+    _validated_update_info(info)
     return info if is_newer(info.version, current_version) else None
 
 
@@ -138,12 +157,13 @@ def _safe_extract(archive: Path, destination: Path) -> Path:
 
 
 def stage(info: UpdateInfo) -> Path:
+    version, expected_sha256 = _validated_update_info(info)
     if os.environ.get("CINEPULSE_PORTABLE") != "1" and not (PATHS.root / ".cinepulse-portable").exists():
         raise RuntimeError("A atualização automática está disponível no modo portátil.")
     runtime = PATHS.root / ".runtime"
     updates = runtime / "updates"
     updates.mkdir(parents=True, exist_ok=True)
-    staging = updates / info.version
+    staging = updates / version
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
@@ -154,7 +174,7 @@ def stage(info: UpdateInfo) -> Path:
         while block := response.read(1024 * 1024):
             output.write(block)
             digest.update(block)
-    if digest.hexdigest().lower() != info.sha256:
+    if digest.hexdigest().lower() != expected_sha256:
         shutil.rmtree(staging, ignore_errors=True)
         raise RuntimeError("A atualização não passou na verificação SHA-256.")
     extracted = staging / "extracted"
@@ -167,7 +187,7 @@ def stage(info: UpdateInfo) -> Path:
     temporary = Path(temporary_name)
     try:
         temporary.write_text(
-            json.dumps({"schema": 1, "version": info.version, "source": str(package.resolve())}, indent=2) + "\n",
+            json.dumps({"schema": 1, "version": version, "source": str(package.resolve())}, indent=2) + "\n",
             encoding="utf-8",
         )
         os.replace(temporary, pending)
