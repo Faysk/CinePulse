@@ -136,11 +136,18 @@ function Set-DedicatedGpuPreference {
 function Get-PortableUv {
     $BootstrapRoot = Join-Path $RuntimeRoot 'bootstrap'
     $UvExe = Join-Path $BootstrapRoot 'uv.exe'
-    $VersionFile = Join-Path $BootstrapRoot 'uv-version.txt'
+    $StateFile = Join-Path $BootstrapRoot 'uv-state.json'
     $ExpectedVersion = [string]$BootstrapManifest.uv.version
-    if ((Test-Path -LiteralPath $UvExe) -and (Test-Path -LiteralPath $VersionFile)) {
-        $InstalledVersion = (Get-Content -LiteralPath $VersionFile -Raw).Trim()
-        if ($InstalledVersion -eq $ExpectedVersion) { return $UvExe }
+    $ExpectedSha256 = ([string]$BootstrapManifest.uv.sha256).ToLowerInvariant()
+    if ((Test-Path -LiteralPath $UvExe) -and (Test-Path -LiteralPath $StateFile)) {
+        try {
+            $State = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+            if ($State.schema -eq 1 -and
+                [string]$State.version -eq $ExpectedVersion -and
+                ([string]$State.sha256).ToLowerInvariant() -eq $ExpectedSha256) {
+                return $UvExe
+            }
+        } catch { }
     }
     if (Test-Path -LiteralPath $BootstrapRoot) { Remove-Item -LiteralPath $BootstrapRoot -Recurse -Force }
     New-Item -ItemType Directory -Path $BootstrapRoot -Force | Out-Null
@@ -148,7 +155,7 @@ function Get-PortableUv {
     Write-Host "Baixando inicializador portátil uv $ExpectedVersion..."
     Invoke-WebRequest -UseBasicParsing -Uri $BootstrapManifest.uv.url -OutFile $Archive
     $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-    if ($ActualHash -ne $BootstrapManifest.uv.sha256.ToLowerInvariant()) {
+    if ($ActualHash -ne $ExpectedSha256) {
         Remove-Item -LiteralPath $Archive -Force
         throw 'O download do inicializador portátil não passou na verificação SHA-256.'
     }
@@ -157,7 +164,10 @@ function Get-PortableUv {
     $Found = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'uv.exe' | Select-Object -First 1
     if (-not $Found) { throw 'O pacote do uv não contém o executável esperado.' }
     Move-Item -LiteralPath $Found.FullName -Destination $UvExe -Force
-    Set-Content -LiteralPath $VersionFile -Value $ExpectedVersion -Encoding ascii
+    $StateTemp = "$StateFile.part"
+    @{ schema = 1; version = $ExpectedVersion; sha256 = $ExpectedSha256 } |
+        ConvertTo-Json | Set-Content -LiteralPath $StateTemp -Encoding UTF8
+    Move-Item -LiteralPath $StateTemp -Destination $StateFile -Force
     Remove-Item -LiteralPath $Archive -Force
     Remove-Item -LiteralPath $Extracted -Recurse -Force
     return $UvExe
@@ -370,6 +380,7 @@ function Install-CompleteComponents {
 }
 
 $ExpectedPythonVersion = [string]$BootstrapManifest.python.version
+$RuntimeRebuilt = $false
 $RebuildRuntime = $Repair -or -not (Test-Path -LiteralPath $PythonExe)
 if (-not $RebuildRuntime) {
     try {
@@ -397,6 +408,7 @@ if ($RebuildRuntime) {
     Write-Host "Preparando Python gerenciado $ExpectedPythonVersion dentro de $RuntimeRoot..."
     & $UvExe venv --python $ExpectedPythonVersion --python-preference only-managed $VenvRoot
     if ($LASTEXITCODE -ne 0) { throw 'Não foi possível preparar o Python gerenciado do CinePulse.' }
+    $RuntimeRebuilt = $true
 }
 if (-not (Test-Path -LiteralPath $PythonExe)) { throw 'Runtime Python privado não foi criado.' }
 $ActualPythonVersion = (& $PythonExe -c "import platform; print(platform.python_version())").Trim()
@@ -408,8 +420,17 @@ $ProjectHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ProjectR
 $LockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ProjectRoot 'requirements.lock')).Hash
 $ExpectedState = "$ExpectedPythonVersion`n$ProjectHash`n$LockHash"
 $CurrentState = if (Test-Path -LiteralPath $InstallState) { Get-Content -LiteralPath $InstallState -Raw } else { '' }
+$RuntimePackagesHealthy = $false
+if (-not $RuntimeRebuilt) {
+    try {
+        & $PythonExe -c "import numpy, cinepulse; raise SystemExit(0)" *> $null
+        $RuntimePackagesHealthy = $LASTEXITCODE -eq 0
+    } catch {
+        $RuntimePackagesHealthy = $false
+    }
+}
 if ($InstallOnly) { Write-Host '[2/4] Verificando dependências do CinePulse...' }
-if ($Repair -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
+if ($Repair -or $RuntimeRebuilt -or -not $RuntimePackagesHealthy -or $CurrentState.Trim() -ne $ExpectedState.Trim()) {
     & $PythonExe -m pip --version *> $null
     if ($LASTEXITCODE -eq 0) {
         & $PythonExe -m pip install --disable-pip-version-check --quiet --require-hashes --only-binary=:all: --requirement (Join-Path $ProjectRoot 'requirements.lock')

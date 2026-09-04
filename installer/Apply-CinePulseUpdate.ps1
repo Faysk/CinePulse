@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ProjectRoot,
     [Parameter(Mandatory)][string]$RuntimeRoot
@@ -50,18 +50,27 @@ function Test-PackageManifest {
     if ($Manifest.schema -ne 1 -or [string]$Manifest.version -ne $ExpectedVersion -or -not $Manifest.files) {
         throw "Manifesto do pacote incompatível com a atualização $ExpectedVersion."
     }
+    $ManifestPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($Item in $Manifest.files) {
-        $Relative = ([string]$Item.path).Replace('/', '\').TrimStart('\')
+        $Relative = ([string]$Item.path).Replace('\', '/').TrimStart('/')
         if (-not $Relative) { throw 'Manifesto contém caminho vazio.' }
-        $First = $Relative.Split('\', 2)[0]
+        if (-not $ManifestPaths.Add($Relative)) { throw "Manifesto contém caminho duplicado: $Relative" }
+        $First = $Relative.Split('/', 2)[0]
         if ($First -in $ProtectedTopLevel) { throw "Pacote tenta escrever em área mutável/protegida: $Relative" }
-        $Target = [IO.Path]::GetFullPath((Join-Path $PackageRoot $Relative))
+        $Target = [IO.Path]::GetFullPath((Join-Path $PackageRoot ($Relative.Replace('/', '\'))))
         Assert-PathInside -Root $PackageRoot -Candidate $Target -Message "Manifesto contém caminho inseguro: $Relative"
         if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) { throw "Arquivo do manifesto ausente: $Relative" }
         $Info = Get-Item -LiteralPath $Target
         if ([int64]$Item.size -ne $Info.Length) { throw "Tamanho divergente no pacote: $Relative" }
         $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Target).Hash.ToLowerInvariant()
         if ($Hash -ne ([string]$Item.sha256).ToLowerInvariant()) { throw "SHA-256 divergente no pacote: $Relative" }
+    }
+    foreach ($File in Get-ChildItem -LiteralPath $PackageRoot -File -Recurse) {
+        $Relative = [IO.Path]::GetRelativePath($PackageRoot, $File.FullName).Replace('\', '/')
+        if ($Relative -eq 'cinepulse-files.json') { continue }
+        if (-not $ManifestPaths.Contains($Relative)) {
+            throw "Pacote contém arquivo gerenciado não listado no manifesto: $Relative"
+        }
     }
     foreach ($Required in @('CinePulse.cmd', 'Install-CinePulse.cmd', 'pyproject.toml', 'installer\Start-CinePulse.ps1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $Required))) { throw "Pacote de atualização incompleto: $Required" }
