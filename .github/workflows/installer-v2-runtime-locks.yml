@@ -1,0 +1,98 @@
+name: Installer v2 Runtime Locks
+
+on:
+  push:
+    branches: [installer-v2-self-contained]
+    paths:
+      - 'installer/bootstrap-manifest.json'
+      - 'requirements-neural.in'
+      - '.github/workflows/installer-v2-runtime-locks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lock-windows-runtime:
+    if: github.actor == 'Faysk'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: installer-v2-self-contained
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Download exact portable uv from bootstrap manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-Content installer/bootstrap-manifest.json -Raw | ConvertFrom-Json
+          $root = Join-Path $PWD '.runtime\lock-refresh'
+          $zip = Join-Path $root 'uv.zip'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri $manifest.uv.url -OutFile $zip
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($hash -ne ([string]$manifest.uv.sha256).ToLowerInvariant()) { throw 'uv checksum mismatch' }
+          Expand-Archive $zip -DestinationPath $root -Force
+          $uv = (Get-ChildItem $root -Recurse -Filter uv.exe | Select-Object -First 1).FullName
+          if (-not $uv) { throw 'uv.exe not found' }
+          "CINEPULSE_UV=$uv" | Out-File $env:GITHUB_ENV -Append
+          "UV_CACHE_DIR=$PWD\cache\uv-lock-refresh" | Out-File $env:GITHUB_ENV -Append
+          "TEMP=$PWD\temp\lock-refresh" | Out-File $env:GITHUB_ENV -Append
+          "TMP=$PWD\temp\lock-refresh" | Out-File $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory -Path "$PWD\temp\lock-refresh" -Force | Out-Null
+          & $uv --version
+      - name: Compile core Windows Python 3.14 hash lock
+        shell: pwsh
+        run: |
+          & $env:CINEPULSE_UV pip compile pyproject.toml `
+            --generate-hashes --python-version 3.14 --python-platform windows `
+            --output-file requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'core lock compile failed' }
+      - name: Compile neural Windows Python 3.14 CUDA hash lock
+        shell: pwsh
+        run: |
+          & $env:CINEPULSE_UV pip compile requirements-neural.in `
+            --generate-hashes --python-version 3.14 --python-platform windows `
+            --output-file requirements-neural.lock
+          if ($LASTEXITCODE -ne 0) { throw 'neural lock compile failed' }
+      - name: Prove both locks resolve in fresh Python 3.14 venvs
+        shell: pwsh
+        run: |
+          $manifest = Get-Content installer/bootstrap-manifest.json -Raw | ConvertFrom-Json
+          python -m venv .runtime\lock-proof-core
+          & $env:CINEPULSE_UV pip install --python .runtime\lock-proof-core\Scripts\python.exe --require-hashes -r requirements.lock --dry-run
+          if ($LASTEXITCODE -ne 0) { throw 'core lock dry-run failed' }
+          python -m venv .runtime\lock-proof-neural
+          & $env:CINEPULSE_UV pip install --python .runtime\lock-proof-neural\Scripts\python.exe --require-hashes --index $manifest.demucs.torch_index -r requirements-neural.lock --dry-run
+          if ($LASTEXITCODE -ne 0) { throw 'neural lock dry-run failed' }
+      - name: Verify pinned runtime contract
+        shell: pwsh
+        run: |
+          $manifest = Get-Content installer/bootstrap-manifest.json -Raw | ConvertFrom-Json
+          $lock = Get-Content requirements-neural.lock -Raw
+          foreach ($pin in @(
+            "torch==$($manifest.demucs.torch_version)",
+            "torchaudio==$($manifest.demucs.torchaudio_version)",
+            "demucs==$($manifest.demucs.version)",
+            "soundfile==$($manifest.demucs.soundfile_version)"
+          )) {
+            if ($lock -notmatch [regex]::Escape($pin)) { throw "missing neural pin $pin" }
+          }
+          if ((Get-Content requirements.lock -Raw) -notmatch '--hash=sha256:') { throw 'core lock is not hashed' }
+          if ($lock -notmatch '--hash=sha256:') { throw 'neural lock is not hashed' }
+          Write-Host "CINEPULSE_RUNTIME_LOCKS_OK python=$($manifest.python.version) cuda=$($manifest.demucs.cuda_runtime)"
+      - name: Commit generated locks
+        shell: bash
+        run: |
+          if git diff --quiet -- requirements.lock requirements-neural.lock; then
+            echo 'Locks already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add requirements.lock requirements-neural.lock
+          git commit -m 'installer v2: lock Python 3.14 CUDA 13.2 runtime'
+          git push origin HEAD:installer-v2-self-contained
