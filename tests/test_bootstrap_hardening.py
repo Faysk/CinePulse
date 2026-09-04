@@ -15,6 +15,8 @@ class BootstrapHardeningTests(unittest.TestCase):
         start = START.read_text(encoding="utf-8-sig")
         self.assertIn("Apply-CinePulseUpdate.ps1", start)
         self.assertIn("-ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot", start)
+        self.assertIn("Aplicador transacional de atualização falhou. $($_.Exception.Message)", start)
+        self.assertNotIn("Aplicador transacional de atualização falhou com código $LASTEXITCODE", start)
         self.assertNotIn("$RootFiles = @(", start)
         self.assertTrue(APPLIER.is_file())
 
@@ -101,9 +103,11 @@ class BootstrapHardeningTests(unittest.TestCase):
         for path in (
             ROOT / ".github" / "workflows" / "audit-updater-patch.yml",
             ROOT / ".github" / "workflows" / "audit-final-hardening-patch.yml",
+            ROOT / ".github" / "workflows" / "audit-exitcode-fix.yml",
             ROOT / "scripts" / "_audit_patch_updater.py",
             ROOT / "scripts" / "_audit_bootstrap_patch_v2.py",
             ROOT / "scripts" / "_audit_final_hardening_patch.py",
+            ROOT / "scripts" / "_audit_fix_powershell_exitcode.py",
         ):
             self.assertFalse(path.exists(), str(path))
 
