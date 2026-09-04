@@ -37,16 +37,16 @@ jobs:
           if (-not (Select-String -LiteralPath requirements-neural.lock -Pattern '--hash=sha256:' -Quiet)) {
             throw 'Neural lock was generated without hashes.'
           }
-      - name: Wire lock into component installer
+      - name: Wire lock into installer and portable package
         run: python scripts/finalize_neural_lock.py
-      - name: Commit generated lock and installer contract
+      - name: Commit generated lock and packaging contract
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add requirements-neural.lock installer/Start-CinePulse.ps1
+          git add requirements-neural.lock installer/Start-CinePulse.ps1 scripts/Build-Portable.ps1
           if (git diff --cached --quiet) {
-            Write-Host 'Neural lock and installer already up to date.'
+            Write-Host 'Neural lock and packaging already up to date.'
             exit 0
           }
           git commit -m 'build: lock neural runtime transitively [skip neural-lock]'
