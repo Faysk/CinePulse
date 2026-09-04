@@ -98,9 +98,16 @@ class ColorPipeline:
 
     @property
     def needs_lossless_intermediate(self) -> bool:
-        """Use lossless staging when source precision/HDR makes re-encoding risky."""
+        """All active visual intermediates use FFV1 for the stable quality contract.
 
-        return self.source.hdr or self.source.bit_depth > 8
+        The old SDR8 exception used high-quality H.264 to reduce scratch usage,
+        but multiple master/transition/VFX generations could accumulate visible
+        loss.  Storage planning already models FFV1, so stable 1.0 prefers
+        deterministic lossless staging and reports the larger disk requirement
+        before rendering instead of spending image quality silently.
+        """
+
+        return True
 
     @property
     def working_pix_fmt(self) -> str:
