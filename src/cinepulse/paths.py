@@ -17,16 +17,32 @@ def _executable_root() -> Path:
     return SOURCE_ROOT
 
 
-def _data_root() -> Path:
-    override = os.environ.get("CINEPULSE_DATA_DIR")
+def _path_override(name: str, fallback: Path) -> Path:
+    override = os.environ.get(name)
     if override:
         return Path(override).expanduser().resolve()
-    executable_root = _executable_root()
-    if os.environ.get("CINEPULSE_PORTABLE") == "1" or (executable_root / ".cinepulse-portable").exists():
-        return executable_root / "data"
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
-    return base / APP_NAME
+    return fallback.resolve()
+
+
+def _data_root() -> Path:
+    """CinePulse 1.1+ is self-contained by default.
+
+    Installed and portable builds keep mutable application data under the chosen
+    CinePulse root.  A caller may still override the location explicitly for
+    development/tests, but there is no implicit %LOCALAPPDATA% fallback.
+    """
+    root = _executable_root()
+    return _path_override("CINEPULSE_DATA_DIR", root / "data")
+
+
+def _cache_root() -> Path:
+    root = _executable_root()
+    return _path_override("CINEPULSE_CACHE_DIR", root / "cache")
+
+
+def _temp_root() -> Path:
+    root = _executable_root()
+    return _path_override("CINEPULSE_TEMP_DIR", root / "temp")
 
 
 @dataclass(frozen=True)
@@ -47,16 +63,18 @@ class RuntimePaths:
 
 _root = _executable_root()
 _data = _data_root()
+_cache = _cache_root()
+_temp = _temp_root()
 _component_override = os.environ.get("CINEPULSE_COMPONENTS_DIR")
-_components = Path(_component_override).expanduser().resolve() if _component_override else _root / "components"
+_components = Path(_component_override).expanduser().resolve() if _component_override else (_root / "components").resolve()
 PATHS = RuntimePaths(
     root=_root,
     data=_data,
     config=_data / "config",
-    cache=_data / "cache",
-    temp=_data / "temp",
-    previews=_data / "temp" / "previews",
-    work=_data / "temp" / "work",
+    cache=_cache,
+    temp=_temp,
+    previews=_temp / "previews",
+    work=_temp / "work",
     reports=_data / "reports",
     logs=_data / "logs",
     components=_components,
@@ -67,8 +85,17 @@ PATHS = RuntimePaths(
 
 def ensure_runtime_directories() -> None:
     for directory in (
-        PATHS.config, PATHS.cache, PATHS.previews, PATHS.work,
-        PATHS.reports, PATHS.logs, PATHS.components, PATHS.models, PATHS.locks,
+        PATHS.data,
+        PATHS.config,
+        PATHS.cache,
+        PATHS.temp,
+        PATHS.previews,
+        PATHS.work,
+        PATHS.reports,
+        PATHS.logs,
+        PATHS.components,
+        PATHS.models,
+        PATHS.locks,
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
