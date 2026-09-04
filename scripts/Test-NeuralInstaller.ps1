@@ -12,7 +12,7 @@ $InstallerPath = Join-Path $Root 'installer\Start-CinePulse.ps1'
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
 $TorchIndex = [string]$Manifest.demucs.torch_index
 $TorchVersion = [string]$Manifest.demucs.torch_version
-$TorchaudioVersion = [string]$Manifest.demucs.torchaudio_version
+$SoundFileVersion = [string]$Manifest.demucs.soundfile_version
 
 if (-not $TorchIndex.StartsWith('https://download.pytorch.org/whl/', [StringComparison]::OrdinalIgnoreCase)) {
     throw "Unexpected PyTorch index: $TorchIndex"
@@ -22,8 +22,11 @@ if ($InputText -notmatch [regex]::Escape("--extra-index-url $TorchIndex")) {
     throw 'requirements-neural.in is not aligned with bootstrap torch_index.'
 }
 $LockText = Get-Content -LiteralPath $LockPath -Raw
-foreach ($Pin in @("torch==$TorchVersion", "torchaudio==$TorchaudioVersion")) {
+foreach ($Pin in @("torch==$TorchVersion", "demucs==$($Manifest.demucs.version)", "soundfile==$SoundFileVersion")) {
     if ($LockText -notmatch [regex]::Escape($Pin)) { throw "requirements-neural.lock does not contain $Pin" }
+}
+if ($LockText -match '(?m)^torchaudio==') {
+    throw 'Training-only torchaudio unexpectedly leaked into the CinePulse runtime lock.'
 }
 $InstallerText = Get-Content -LiteralPath $InstallerPath -Raw
 if ($InstallerText -notmatch 'BootstrapManifest\.demucs\.torch_index' -or $InstallerText -notmatch '--index \$TorchIndex') {
