@@ -1,0 +1,8 @@
+# CinePulse optional neural runtime inputs — Windows x64 / Python 3.13.
+# The generated requirements-neural.lock is the install surface used by 1.0.
+--extra-index-url https://download.pytorch.org/whl/cu126
+
+torch==2.11.0+cu126
+torchaudio==2.11.0+cu126
+demucs==4.1.0
+soundfile
