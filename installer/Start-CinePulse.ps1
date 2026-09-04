@@ -83,72 +83,10 @@ if ($InstallOnly) {
 }
 
 function Apply-PendingUpdate {
-    $PendingFile = Join-Path $RuntimeRoot 'pending-update.json'
-    if (-not (Test-Path -LiteralPath $PendingFile)) { return }
-    $Pending = Get-Content -LiteralPath $PendingFile -Raw | ConvertFrom-Json
-    if ($Pending.schema -ne 1 -or -not $Pending.source -or -not $Pending.version) {
-        throw 'A atualização pendente possui metadados inválidos.'
-    }
-    $UpdatesRoot = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot 'updates'))
-    $Source = [IO.Path]::GetFullPath([string]$Pending.source)
-    $Prefix = $UpdatesRoot.TrimEnd('\') + '\'
-    if (-not $Source.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A origem da atualização não pertence à pasta privada do CinePulse.'
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $Source 'CinePulse.cmd')) -or
-        -not (Test-Path -LiteralPath (Join-Path $Source 'pyproject.toml'))) {
-        throw 'A atualização pendente está incompleta.'
-    }
-
-    $Backup = Join-Path $RuntimeRoot 'update-backup'
-    if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }
-    New-Item -ItemType Directory -Path $Backup -Force | Out-Null
-    $RootFiles = @(
-        '.env.example', '.gitattributes', '.gitignore', 'CHANGELOG.md', 'CONTRIBUTING.md',
-        'CinePulse.cmd', 'Install-CinePulse.cmd', 'cinepulse-files.json', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
-        'pyproject.toml', 'requirements.lock', 'requirements-neural.in', 'requirements-neural.lock'
-    )
-    $Directories = @('assets', 'docs', 'installer', 'src')
-    try {
-        foreach ($Name in $RootFiles) {
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Current) { Copy-Item -LiteralPath $Current -Destination (Join-Path $Backup $Name) -Force }
-        }
-        foreach ($Name in $Directories) {
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Current) { Copy-Item -LiteralPath $Current -Destination (Join-Path $Backup $Name) -Recurse -Force }
-        }
-        foreach ($Name in $RootFiles) {
-            $Incoming = Join-Path $Source $Name
-            if (Test-Path -LiteralPath $Incoming) { Copy-Item -LiteralPath $Incoming -Destination (Join-Path $ProjectRoot $Name) -Force }
-        }
-        foreach ($Name in $Directories) {
-            $Incoming = Join-Path $Source $Name
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Incoming) {
-                if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
-                Copy-Item -LiteralPath $Incoming -Destination $Current -Recurse -Force
-            }
-        }
-        Remove-Item -LiteralPath $PendingFile -Force
-        Remove-Item -LiteralPath (Split-Path -Parent (Split-Path -Parent $Source)) -Recurse -Force
-        Remove-Item -LiteralPath $Backup -Recurse -Force
-        Write-Host "CinePulse atualizado para $($Pending.version)."
-    } catch {
-        foreach ($Name in $RootFiles) {
-            $Saved = Join-Path $Backup $Name
-            if (Test-Path -LiteralPath $Saved) { Copy-Item -LiteralPath $Saved -Destination (Join-Path $ProjectRoot $Name) -Force }
-        }
-        foreach ($Name in $Directories) {
-            $Saved = Join-Path $Backup $Name
-            $Current = Join-Path $ProjectRoot $Name
-            if (Test-Path -LiteralPath $Saved) {
-                if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
-                Copy-Item -LiteralPath $Saved -Destination $Current -Recurse -Force
-            }
-        }
-        throw "A atualização falhou e a versão anterior foi restaurada. $($_.Exception.Message)"
-    }
+    $Applier = Join-Path $PSScriptRoot 'Apply-CinePulseUpdate.ps1'
+    if (-not (Test-Path -LiteralPath $Applier)) { throw 'Aplicador transacional de atualização não encontrado.' }
+    & $Applier -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
+    if ($LASTEXITCODE -ne 0) { throw "Aplicador transacional de atualização falhou com código $LASTEXITCODE." }
 }
 
 if (-not $NonPortable) {
