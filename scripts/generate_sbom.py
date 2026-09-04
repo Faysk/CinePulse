@@ -42,7 +42,7 @@ def build_sbom() -> dict:
     components.extend([
         _component("Demucs", demucs["version"]),
         _component("PyTorch", demucs["torch_version"]),
-        _component("torchaudio", demucs["torchaudio_version"]),
+        _component("SoundFile", demucs["soundfile_version"]),
     ])
     for weight in demucs.get("weights", []):
         components.append(_component(f"Demucs weight {weight['file']}", demucs["version"], kind="file", hashes=[{"alg": "SHA-256", "content": weight["sha256"]}]))
@@ -56,7 +56,8 @@ def build_sbom() -> dict:
             "component": {"type": "application", "name": project["name"], "version": project["version"]},
             "properties": [
                 {"name": "cinepulse:scope", "value": "direct runtime, managed tools, model artifacts"},
-                {"name": "cinepulse:transitive-demucs-lock", "value": "not-yet-complete"},
+                {"name": "cinepulse:transitive-demucs-lock", "value": "hash-locked-windows-python-3.14"},
+                {"name": "cinepulse:cuda-policy", "value": demucs["cuda_policy"]},
             ],
         },
         "components": components,
