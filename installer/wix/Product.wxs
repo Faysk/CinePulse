@@ -1,5 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Id="CinePulse.Studio"
     Name="CinePulse"
@@ -12,6 +13,12 @@
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
     <Icon Id="CinePulseIcon" SourceFile="!(bindpath.Payload)\assets\cinepulse.ico" />
     <Property Id="ARPPRODUCTICON" Value="CinePulseIcon" />
+
+    <!-- Installer v2 uses the standard InstallDir wizard so the user explicitly
+         chooses the root that will own code, Python, AI runtimes, data, cache
+         and temp. The default remains per-user/writable and needs no admin. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="installer\wix\license.rtf" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
