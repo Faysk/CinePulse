@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +92,78 @@ class StorageResilienceTests(unittest.TestCase):
                 stager.copy(source, destination, validator=reject)
             self.assertFalse(destination.exists())
             self.assertTrue((destination.parent / f".{destination.name}.staging.partial").exists())
+
+    def test_staging_crash_after_promote_reconciles_without_recopy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "master.mkv"
+            destination = root / "external" / "master.mkv"
+            source.write_bytes(bytes(range(128)) * 4)
+            stager = ResumableStager(guard=AllowGuard(), chunk_size=32)
+
+            with self.assertRaisesRegex(StagingError, "after staged promotion"):
+                stager.copy(source, destination, verify_checksum=True, fault_after_promote=True)
+
+            partial = destination.parent / f".{destination.name}.staging.partial"
+            state_path = destination.parent / f".{destination.name}.staging.json"
+            self.assertTrue(destination.is_file())
+            self.assertFalse(partial.exists())
+            crashed_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertFalse(crashed_state["completed"])
+            self.assertEqual(source.stat().st_size, crashed_state["copied_bytes"])
+
+            progress_calls: list[tuple[int, int]] = []
+            validated: list[Path] = []
+            result = stager.copy(
+                source,
+                destination,
+                verify_checksum=True,
+                progress=lambda copied, total: progress_calls.append((copied, total)),
+                validator=lambda path: validated.append(path),
+            )
+            self.assertEqual(destination, result)
+            self.assertEqual([], progress_calls, "reconciliation must not copy the source again")
+            self.assertEqual([destination.resolve()], validated)
+            self.assertEqual(source.read_bytes(), destination.read_bytes())
+            completed_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertTrue(completed_state["completed"])
+            self.assertIsNotNone(completed_state["checksum"])
+
+    def test_staging_reconciliation_blocks_corrupted_promoted_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "master.mkv"
+            destination = root / "external" / "master.mkv"
+            source.write_bytes(b"A" * 256)
+            stager = ResumableStager(guard=AllowGuard(), chunk_size=32)
+
+            with self.assertRaisesRegex(StagingError, "after staged promotion"):
+                stager.copy(source, destination, fault_after_promote=True)
+            destination.write_bytes(b"B" * 256)
+
+            with self.assertRaisesRegex(StagingError, "diverge da origem"):
+                stager.copy(source, destination)
+            self.assertEqual(b"B" * 256, destination.read_bytes(), "invalid promoted destination must not be overwritten silently")
+
+    def test_completed_staging_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "master.mkv"
+            destination = root / "stage" / "master.mkv"
+            source.write_bytes(b"stable-media")
+            stager = ResumableStager(guard=AllowGuard(), chunk_size=4)
+            stager.copy(source, destination, verify_checksum=True)
+
+            progress_calls: list[tuple[int, int]] = []
+            result = stager.copy(
+                source,
+                destination,
+                verify_checksum=True,
+                progress=lambda copied, total: progress_calls.append((copied, total)),
+            )
+            self.assertEqual(destination, result)
+            self.assertEqual([], progress_calls)
+            self.assertEqual(source.read_bytes(), destination.read_bytes())
 
 
 if __name__ == "__main__":
