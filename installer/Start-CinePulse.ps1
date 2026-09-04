@@ -85,8 +85,11 @@ if ($InstallOnly) {
 function Apply-PendingUpdate {
     $Applier = Join-Path $PSScriptRoot 'Apply-CinePulseUpdate.ps1'
     if (-not (Test-Path -LiteralPath $Applier)) { throw 'Aplicador transacional de atualização não encontrado.' }
-    & $Applier -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
-    if ($LASTEXITCODE -ne 0) { throw "Aplicador transacional de atualização falhou com código $LASTEXITCODE." }
+    try {
+        & $Applier -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
+    } catch {
+        throw "Aplicador transacional de atualização falhou. $($_.Exception.Message)"
+    }
 }
 
 if (-not $NonPortable) {
