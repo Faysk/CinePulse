@@ -58,9 +58,9 @@ def _asset_input(layer: OverlayLayer, input_index: int, fps: float) -> AssetInpu
     if layer.asset.media_kind == "png":
         args = ("-loop", "1", "-framerate", _ff(fps, 3), "-i", layer.asset.path)
     elif layer.asset.media_kind == "gif":
-        # The GIF demuxer is looped at the stream level. The final overlay follows
-        # the base video duration, so no giant expanded cache is created.
-        args = ("-stream_loop", "-1", "-i", layer.asset.path)
+        # Loop at demuxer level when requested; a non-looping GIF intentionally
+        # disappears after EOF through overlay eof_action=pass.
+        args = (("-stream_loop", "-1") if layer.asset.loop else ()) + ("-i", layer.asset.path)
     else:
         raise OverlayFfmpegError(f"Asset não suportado: {layer.asset.media_kind}")
     return AssetInputPlan(layer.id, int(input_index), args)
@@ -116,8 +116,6 @@ def _visualizer_filter(
     elif spec.style == "bars":
         filters.append(f"showfreqs=s={width}x{height}:mode=bar:ascale=log:fscale=log:colors=white")
     elif spec.style == "spectrum":
-        # A frequency curve gives the creator a clean, recolorable spectrum on a
-        # transparent background and is cheaper than a scrolling spectrogram.
         filters.append(f"showfreqs=s={width}x{height}:mode=line:ascale=log:fscale=log:colors=white")
     else:
         raise OverlayFfmpegError(f"Visualizador não suportado: {spec.style}")
@@ -142,12 +140,6 @@ def build_overlay_ffmpeg_plan(
     base_video_label: str,
     audio_label: str | None,
 ) -> OverlayFfmpegPlan:
-    """Build deterministic extra inputs and a filter-complex fragment.
-
-    The caller owns the base video/audio graph. This function only appends the
-    composition fragment and returns the final video label. Assets are streamed
-    and looped; GIF frames are never expanded to hours of temporary images.
-    """
     scene.validate()
     if canvas_width <= 0 or canvas_height <= 0 or fps <= 0:
         raise OverlayFfmpegError("Canvas/FPS inválidos para Overlay Composer.")
