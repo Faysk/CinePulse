@@ -1,0 +1,101 @@
+name: Overlay Composer Preview
+
+on:
+  push:
+    branches: [preview-overlay-composer]
+    paths:
+      - 'src/cinepulse/overlay_*.py'
+      - 'src/cinepulse/studio.py'
+      - 'src/cinepulse/ui/overlay_view.py'
+      - 'src/cinepulse/ui/visual_view.py'
+      - 'tests/test_overlay_*.py'
+      - 'tests/integration_overlay_composer.py'
+      - 'tests/integration_overlay_longform.py'
+      - 'scripts/integrate_overlay_*.py'
+      - '.github/workflows/overlay-studio-integrate.yml'
+      - '.github/workflows/preview-overlay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: overlay-composer-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  overlay-unit:
+    name: Overlay unit · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Verify temporary integration scaffolding is absent
+        run: >-
+          python -c "from pathlib import Path;
+          forbidden=('scripts/integrate_overlay_studio.py','scripts/integrate_overlay_phase8_ui.py','scripts/integrate_overlay_phase8_handle.py','scripts/integrate_overlay_phase9_ui.py','.github/workflows/overlay-studio-integrate.yml');
+          present=[item for item in forbidden if Path(item).exists()];
+          assert not present, f'temporary integration scaffolding present: {present}';
+          print('CINEPULSE_OVERLAY_CLEAN_TREE_OK')"
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: Compile Preview integration
+        run: python -m compileall -q src/cinepulse/overlay_composer.py src/cinepulse/overlay_assets.py src/cinepulse/overlay_preview.py src/cinepulse/overlay_layout.py src/cinepulse/overlay_editor.py src/cinepulse/overlay_ffmpeg.py src/cinepulse/overlay_runtime.py src/cinepulse/overlay_presets.py src/cinepulse/overlay_longform.py src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/ui/visual_view.py
+      - name: Overlay unit persistence and longform tests
+        run: python -m unittest tests.test_overlay_composer tests.test_overlay_assets tests.test_overlay_preview tests.test_overlay_editor tests.test_overlay_ffmpeg tests.test_overlay_runtime tests.test_overlay_presets tests.test_overlay_longform tests.test_overlay_studio_contract -v
+
+  overlay-media-linux:
+    name: Overlay media integration · Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: PNG GIF waveform and mirrored bars integration
+        run: python tests/integration_overlay_composer.py
+
+  overlay-media-windows:
+    name: Overlay media integration · Windows
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install FFmpeg
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: PNG GIF waveform and mirrored bars integration
+        run: python tests/integration_overlay_composer.py
+
+  overlay-longform-linux:
+    name: Overlay streaming soak · Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: 30 second streaming soak without temp frame expansion
+        run: python tests/integration_overlay_longform.py
