@@ -20,7 +20,7 @@ jobs:
   lock-windows-runtime:
     if: github.actor == 'Faysk'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,28 +48,38 @@ jobs:
           "TMP=$PWD\temp\lock-refresh" | Out-File $env:GITHUB_ENV -Append
           New-Item -ItemType Directory -Path "$PWD\temp\lock-refresh" -Force | Out-Null
           & $uv --version
-      - name: Compile core Windows Python 3.14 hash lock
+          if ($LASTEXITCODE -ne 0) { throw 'uv bootstrap failed' }
+      - name: Compile core Windows Python 3.14.7 hash lock from scratch
         shell: pwsh
         run: |
+          Remove-Item -LiteralPath requirements.lock -Force -ErrorAction SilentlyContinue
           & $env:CINEPULSE_UV pip compile pyproject.toml `
-            --generate-hashes --python-version 3.14 --python-platform windows `
+            --generate-hashes --python-version 3.14.7 --python-platform x86_64-pc-windows-msvc `
             --output-file requirements.lock
           if ($LASTEXITCODE -ne 0) { throw 'core lock compile failed' }
-      - name: Compile neural Windows Python 3.14 CUDA hash lock
+      - name: Compile neural Windows Python 3.14.7 CUDA hash lock from scratch
         shell: pwsh
         run: |
+          Remove-Item -LiteralPath requirements-neural.lock -Force -ErrorAction SilentlyContinue
           & $env:CINEPULSE_UV pip compile requirements-neural.in `
-            --generate-hashes --python-version 3.14 --python-platform windows `
+            --generate-hashes --python-version 3.14.7 --python-platform x86_64-pc-windows-msvc `
             --output-file requirements-neural.lock
           if ($LASTEXITCODE -ne 0) { throw 'neural lock compile failed' }
-      - name: Prove both locks resolve in fresh Python 3.14 venvs
+      - name: Prove core lock installs with hashes in fresh Python 3.14.7 venv
+        shell: pwsh
+        run: |
+          python -m venv .runtime\lock-proof-core
+          if ($LASTEXITCODE -ne 0) { throw 'core proof venv creation failed' }
+          & .runtime\lock-proof-core\Scripts\python.exe -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'core lock real install failed' }
+          & .runtime\lock-proof-core\Scripts\python.exe -c "import numpy, sys; print('CINEPULSE_CORE_LOCK_PROOF', sys.version.split()[0], numpy.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'core lock import proof failed' }
+      - name: Prove neural lock resolves in fresh Python 3.14.7 venv
         shell: pwsh
         run: |
           $manifest = Get-Content installer/bootstrap-manifest.json -Raw | ConvertFrom-Json
-          python -m venv .runtime\lock-proof-core
-          & $env:CINEPULSE_UV pip install --python .runtime\lock-proof-core\Scripts\python.exe --require-hashes -r requirements.lock --dry-run
-          if ($LASTEXITCODE -ne 0) { throw 'core lock dry-run failed' }
           python -m venv .runtime\lock-proof-neural
+          if ($LASTEXITCODE -ne 0) { throw 'neural proof venv creation failed' }
           & $env:CINEPULSE_UV pip install --python .runtime\lock-proof-neural\Scripts\python.exe --require-hashes --index $manifest.demucs.torch_index -r requirements-neural.lock --dry-run
           if ($LASTEXITCODE -ne 0) { throw 'neural lock dry-run failed' }
       - name: Verify pinned runtime contract
@@ -98,7 +108,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add requirements.lock requirements-neural.lock
-          git commit -m 'installer v2: lock Python 3.14 CUDA 13.2 runtime'
+          git commit -m 'installer v2: refresh clean Python 3.14.7 runtime locks'
           git fetch origin installer-v2-self-contained
           git rebase origin/installer-v2-self-contained
           git push origin HEAD:installer-v2-self-contained
