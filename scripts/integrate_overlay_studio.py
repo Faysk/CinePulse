@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STUDIO = ROOT / "src" / "cinepulse" / "studio.py"
-INTEGRATION_REVISION = 2
+INTEGRATION_REVISION = 3
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
