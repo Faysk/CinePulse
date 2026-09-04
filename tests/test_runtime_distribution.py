@@ -23,19 +23,67 @@ class RuntimeDistributionTests(unittest.TestCase):
             path = Path(directory) / "instance.json"
             first = InstanceGuard(path)
             second = InstanceGuard(path)
-            self.assertTrue(first.acquire())
-            self.assertFalse(second.acquire())
-            first.release()
-            self.assertTrue(second.acquire())
-            second.release()
+            if __import__("os").name == "nt":
+                self.assertTrue(first.acquire())
+                self.assertFalse(second.acquire())
+                first.release()
+                self.assertTrue(second.acquire())
+                second.release()
+            else:
+                self.assertTrue(first.acquire())
+                self.assertFalse(second.acquire())
+                first.release()
+                self.assertTrue(second.acquire())
+                second.release()
 
-    def test_instance_guard_recovers_stale_lock(self) -> None:
+    def test_file_guard_recovers_dead_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "instance.json"
             path.write_text(json.dumps({"schema": 1, "pid": 99999999}), encoding="utf-8")
             guard = InstanceGuard(path)
-            self.assertTrue(guard.acquire())
+            with patch("cinepulse.runtime_distribution.process_alive", return_value=False):
+                self.assertTrue(guard._acquire_file_lock())
+            self.assertTrue(list(Path(directory).glob("instance.json.stale-*")))
             guard.release()
+
+    def test_file_guard_recovers_pid_reuse_by_start_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "instance.json"
+            path.write_text(
+                json.dumps({
+                    "schema": 2,
+                    "pid": 4242,
+                    "process_start": "old-process",
+                    "nonce": "old-owner",
+                }),
+                encoding="utf-8",
+            )
+            guard = InstanceGuard(path)
+            with (
+                patch("cinepulse.runtime_distribution.process_alive", return_value=True),
+                patch("cinepulse.runtime_distribution.process_start_token", return_value="reused-pid"),
+            ):
+                self.assertTrue(guard._acquire_file_lock())
+            current = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotEqual(current["nonce"], "old-owner")
+            guard.release()
+
+    def test_file_guard_release_does_not_delete_foreign_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "instance.json"
+            guard = InstanceGuard(path)
+            with patch("cinepulse.runtime_distribution.process_start_token", return_value="self-token"):
+                self.assertTrue(guard._acquire_file_lock())
+            foreign = {
+                "schema": 2,
+                "pid": 999,
+                "process_start": "foreign",
+                "nonce": "foreign-owner",
+            }
+            path.write_text(json.dumps(foreign), encoding="utf-8")
+            guard.release()
+            self.assertTrue(path.is_file())
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["nonce"], "foreign-owner")
 
     @patch("cinepulse.runtime_distribution.shutil.which")
     def test_powershell_resolver_prefers_pwsh(self, which) -> None:
