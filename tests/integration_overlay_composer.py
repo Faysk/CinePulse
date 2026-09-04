@@ -68,6 +68,23 @@ def _render(ffmpeg: str, output: Path, scene: OverlayScene) -> None:
     _run(command)
 
 
+def _verify_output(ffmpeg: str, ffprobe: str, output: Path) -> None:
+    payload = _probe(ffprobe, output)
+    streams = payload.get("streams", [])
+    video = next(stream for stream in streams if stream.get("codec_type") == "video")
+    audio = next(stream for stream in streams if stream.get("codec_type") == "audio")
+    if (video.get("width"), video.get("height")) != (640, 360):
+        raise RuntimeError(f"wrong output size: {video}")
+    if audio.get("codec_type") != "audio":
+        raise RuntimeError("audio stream missing")
+    duration = float(payload.get("format", {}).get("duration") or 0.0)
+    if not 1.90 <= duration <= 2.10:
+        raise RuntimeError(f"unexpected duration: {duration}")
+    frame = _decode_rgb(ffmpeg, output)
+    if float(frame.std()) < 8.0:
+        raise RuntimeError("overlay output remained visually flat")
+
+
 def main() -> None:
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
@@ -80,6 +97,7 @@ def main() -> None:
         gif = root / "character.gif"
         png_output = root / "png-waveform.mkv"
         gif_output = root / "gif-waveform.mkv"
+        bars_output = root / "mirrored-bars.mkv"
 
         _run([
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
@@ -98,7 +116,9 @@ def main() -> None:
             kind="visualizer",
             z_index=20,
             transform=LayerTransform(NormalizedRect(0.38, 0.82, 0.40, 0.10), opacity=0.85, preserve_aspect=False),
-            visualizer=VisualizerSpec(style="waveform", color="#F2E5C9", sensitivity=1.2, focus="bass"),
+            visualizer=VisualizerSpec(
+                style="waveform", color="#F2E5C9", sensitivity=1.2, focus="bass", thickness=0.72
+            ),
         )
         png_layer = make_asset_layer(
             str(png), layer_id="asset", rect=NormalizedRect(0.73, 0.53, 0.18, 0.35), z_index=10
@@ -110,23 +130,31 @@ def main() -> None:
         )
         _render(ffmpeg, gif_output, OverlayScene((gif_layer, waveform)))
 
-        for output in (png_output, gif_output):
-            payload = _probe(ffprobe, output)
-            streams = payload.get("streams", [])
-            video = next(stream for stream in streams if stream.get("codec_type") == "video")
-            audio = next(stream for stream in streams if stream.get("codec_type") == "audio")
-            if (video.get("width"), video.get("height")) != (640, 360):
-                raise RuntimeError(f"wrong output size: {video}")
-            if audio.get("codec_type") != "audio":
-                raise RuntimeError("audio stream missing")
-            duration = float(payload.get("format", {}).get("duration") or 0.0)
-            if not 1.90 <= duration <= 2.10:
-                raise RuntimeError(f"unexpected duration: {duration}")
-            frame = _decode_rgb(ffmpeg, output)
-            if float(frame.std()) < 8.0:
-                raise RuntimeError("overlay output remained visually flat")
+        bars = OverlayLayer(
+            id="bars",
+            name="Mirrored bars",
+            kind="visualizer",
+            z_index=20,
+            transform=LayerTransform(NormalizedRect(0.18, 0.70, 0.64, 0.18), opacity=0.80, preserve_aspect=False),
+            visualizer=VisualizerSpec(
+                style="bars",
+                color="#FFAA44",
+                secondary_color="#44AAFF",
+                bars=24,
+                mirror=True,
+                sensitivity=1.15,
+                focus="beats",
+            ),
+        )
+        _render(ffmpeg, bars_output, OverlayScene((bars,)))
 
-        print("CINEPULSE_OVERLAY_COMPOSER_OK png=pass gif=pass waveform=pass duration=2s size=640x360 audio=pass")
+        for output in (png_output, gif_output, bars_output):
+            _verify_output(ffmpeg, ffprobe, output)
+
+        print(
+            "CINEPULSE_OVERLAY_COMPOSER_OK "
+            "png=pass gif=pass waveform=pass mirrored_bars=pass duration=2s size=640x360 audio=pass"
+        )
 
 
 if __name__ == "__main__":
