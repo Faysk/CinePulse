@@ -53,6 +53,13 @@ def _writer_workflows() -> list[str]:
     return writers
 
 
+def _protected_update_roots(applier_text: str) -> set[str]:
+    match = re.search(r"\$ProtectedTopLevel\s*=\s*@\(([^)]*)\)", applier_text, re.DOTALL)
+    if not match:
+        return set()
+    return set(re.findall(r"'([^']+)'|\"([^\"]+)\"", match.group(1)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Coleta e valida evidência estática para a auditoria final do CinePulse")
     parser.add_argument("--output", default="artifacts/ci/final-audit-static.json")
@@ -74,6 +81,8 @@ def main() -> int:
     )
     color_text = (ROOT / "src" / "cinepulse" / "color_pipeline.py").read_text(encoding="utf-8")
     installer_text = (ROOT / "installer" / "Start-CinePulse.ps1").read_text(encoding="utf-8-sig")
+    update_applier_path = ROOT / "installer" / "Apply-CinePulseUpdate.ps1"
+    update_applier_text = update_applier_path.read_text(encoding="utf-8-sig") if update_applier_path.is_file() else ""
     portable_text = (ROOT / "scripts" / "Build-Portable.ps1").read_text(encoding="utf-8-sig")
     msi_text = (ROOT / "scripts" / "Build-Msi.ps1").read_text(encoding="utf-8-sig")
     rc_acceptance_text = (ROOT / "scripts" / "Invoke-RcAcceptance.ps1").read_text(encoding="utf-8-sig")
@@ -102,8 +111,23 @@ def main() -> int:
     lossless_intermediates = "return True" in color_text and "All active visual intermediates use FFV1" in color_text
     recovery_shadow_default = "ring: int = 1" in rollout_text and "recovery_worker: bool = False" in rollout_text and "recovery_discovery: bool = False" in rollout_text
     installer_uses_neural_lock = "requirements-neural.lock" in installer_text and "--require-hashes" in installer_text
-    neural_lock_updatable = all(token in installer_text for token in ("'requirements-neural.in'", "'requirements-neural.lock'"))
+
+    # The current updater no longer maintains a fragile explicit root-file list.
+    # It validates the incoming manifest, replaces every non-protected top-level
+    # entry, and validates the resulting tree again. Therefore top-level neural
+    # lock files participate automatically as long as they are packaged and are
+    # not part of the protected mutable-root allowlist.
+    protected_update_roots = _protected_update_roots(update_applier_text)
     neural_lock_packaged = all(token in portable_text for token in ("'requirements-neural.in'", "'requirements-neural.lock'"))
+    neural_lock_updatable = (
+        update_applier_path.is_file()
+        and neural_lock_packaged
+        and "Get-ManagedTopLevelEntries -Root $Source" in update_applier_text
+        and "Get-ManagedTopLevelEntries -Root $ProjectRoot" in update_applier_text
+        and update_applier_text.count("Test-PackageManifest -PackageRoot") >= 2
+        and "requirements-neural.in" not in protected_update_roots
+        and "requirements-neural.lock" not in protected_update_roots
+    )
     gpu_gate_guarded = all(token in gpu_workflow for token in ("self-hosted", "cinepulse-gpu", "pull_request:", "github.event.pull_request.head.repo.full_name == github.repository"))
     gpu_gate_release_aligned = all(token in gpu_workflow for token in ("python-version: '3.14.7'", "--require-hashes", "Start-CinePulse.ps1 -InstallOnly", "Test-NeuralInstaller.ps1"))
     windows_distribution_gate = all(token in rc_workflow for token in ("pull_request:", "Build-Portable.ps1", "Build-Msi.ps1", "Test-MsiLifecycle.ps1"))
@@ -165,12 +189,13 @@ def main() -> int:
     }
 
     payload = {
-        "schema": 4,
+        "schema": 5,
         "project_version": project_version,
         "declared_versions": declared_versions,
         "studio_lines": _line_count(ROOT / "src" / "cinepulse" / "studio.py"),
         "loop_engine_lines": _line_count(ROOT / "src" / "cinepulse" / "loop_engine.py"),
         "update_channel_mode": "signed" if manifest_url else "disabled",
+        "update_protected_roots": sorted(protected_update_roots),
         "runtime_locked_packages": runtime_locked,
         "runtime_locked_package_count": len(runtime_locked),
         "neural_locked_packages": neural_locked,
