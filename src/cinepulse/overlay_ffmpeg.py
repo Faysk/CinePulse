@@ -42,15 +42,15 @@ def _ff(value: float, digits: int = 6) -> str:
     return text or "0"
 
 
-def _color_coefficients(color: str) -> tuple[str, str, str]:
+def _ffmpeg_color(color: str) -> str:
     value = color.strip().lstrip("#")
     if len(value) != 6:
         raise OverlayFfmpegError("Cor inválida para visualizador.")
     try:
-        red, green, blue = (int(value[index : index + 2], 16) / 255.0 for index in (0, 2, 4))
-    except (ValueError, TypeError) as exc:
+        int(value, 16)
+    except ValueError as exc:
         raise OverlayFfmpegError("Cor inválida para visualizador.") from exc
-    return _ff(red, 4), _ff(green, 4), _ff(blue, 4)
+    return "0x" + value.upper()
 
 
 def _asset_input(layer: OverlayLayer, input_index: int, fps: float) -> AssetInputPlan:
@@ -58,8 +58,6 @@ def _asset_input(layer: OverlayLayer, input_index: int, fps: float) -> AssetInpu
     if layer.asset.media_kind == "png":
         args = ("-loop", "1", "-framerate", _ff(fps, 3), "-i", layer.asset.path)
     elif layer.asset.media_kind == "gif":
-        # Loop at demuxer level when requested; a non-looping GIF intentionally
-        # disappears after EOF through overlay eof_action=pass.
         args = (("-stream_loop", "-1") if layer.asset.loop else ()) + ("-i", layer.asset.path)
     else:
         raise OverlayFfmpegError(f"Asset não suportado: {layer.asset.media_kind}")
@@ -100,34 +98,86 @@ def _audio_focus_filters(spec: VisualizerSpec) -> list[str]:
     return filters
 
 
-def _visualizer_filter(
+def _thickness_filters(spec: VisualizerSpec, *, line_style: bool) -> list[str]:
+    if not line_style:
+        return []
+    # showwaves/showfreqs do not expose line thickness directly. Repeating the
+    # official 3x3 dilation filter expands the opaque line deterministically.
+    # The normalized model range 0.02..1 maps to zero..three passes.
+    passes = max(0, min(3, int(round(float(spec.thickness) * 3.0))))
+    return ["dilation"] * passes
+
+
+def _visualizer_filters(
     audio_source: str,
     layer: OverlayLayer,
     width: int,
     height: int,
     fps: float,
     label: str,
-) -> str:
+) -> tuple[str, ...]:
     assert layer.visualizer is not None
     spec = layer.visualizer
-    filters = _audio_focus_filters(spec)
+    primary = _ffmpeg_color(spec.color)
+    secondary = _ffmpeg_color(spec.secondary_color)
+    source_filters = _audio_focus_filters(spec)
+
     if spec.style == "waveform":
-        filters.append(f"showwaves=s={width}x{height}:mode=line:rate={_ff(fps, 3)}:colors=white")
-    elif spec.style == "bars":
-        filters.append(f"showfreqs=s={width}x{height}:mode=bar:ascale=log:fscale=log:colors=white")
-    elif spec.style == "spectrum":
-        filters.append(f"showfreqs=s={width}x{height}:mode=line:ascale=log:fscale=log:colors=white")
-    else:
+        source_filters.append(
+            f"showwaves=s={width}x{height}:mode=line:rate={_ff(fps, 3)}:colors={primary}"
+        )
+        source_filters.extend(_thickness_filters(spec, line_style=True))
+        source_filters.extend(
+            (
+                "format=rgba",
+                "colorkey=0x000000:0.05:0.0",
+                f"colorchannelmixer=aa={_ff(layer.transform.opacity)}",
+            )
+        )
+        return (f"{_label(audio_source)}{','.join(source_filters)}[{label}]",)
+
+    if spec.style not in {"bars", "spectrum"}:
         raise OverlayFfmpegError(f"Visualizador não suportado: {spec.style}")
-    red, green, blue = _color_coefficients(spec.color)
-    filters.extend(
+
+    mirrored = bool(spec.mirror)
+    generated_height = max(2, math.ceil(height / 2)) if mirrored else height
+    generated_width = width
+    if spec.style == "bars":
+        generated_width = max(4, min(int(spec.bars), width))
+        mode = "bar"
+    else:
+        mode = "line"
+
+    source_filters.append(
+        f"showfreqs=s={generated_width}x{generated_height}:mode={mode}:ascale=log:fscale=log:"
+        f"colors={primary}|{secondary}:cmode=combined"
+    )
+    if generated_width != width:
+        # Pixel-preserving enlargement turns the chosen spectral bins into the
+        # exact creator-facing bar count instead of thousands of 1px FFT bins.
+        source_filters.append(f"scale={width}:{generated_height}:flags=neighbor")
+    source_filters.extend(_thickness_filters(spec, line_style=spec.style == "spectrum"))
+    source_filters.extend(
         (
             "format=rgba",
             "colorkey=0x000000:0.05:0.0",
-            f"colorchannelmixer=rr={red}:gg={green}:bb={blue}:aa={_ff(layer.transform.opacity)}",
+            f"colorchannelmixer=aa={_ff(layer.transform.opacity)}",
         )
     )
-    return f"{_label(audio_source)}{','.join(filters)}[{label}]"
+
+    if not mirrored:
+        return (f"{_label(audio_source)}{','.join(source_filters)}[{label}]",)
+
+    half = f"{label}_half"
+    top_raw = f"{label}_top_raw"
+    bottom = f"{label}_bottom"
+    top = f"{label}_top"
+    return (
+        f"{_label(audio_source)}{','.join(source_filters)}[{half}]",
+        f"[{half}]split=2[{top_raw}][{bottom}]",
+        f"[{top_raw}]vflip[{top}]",
+        f"[{top}][{bottom}]vstack=inputs=2,scale={width}:{height}:flags=neighbor[{label}]",
+    )
 
 
 def build_overlay_ffmpeg_plan(
@@ -165,8 +215,8 @@ def build_overlay_ffmpeg_plan(
             split_labels = [f"ov_audio_{index}" for index in range(len(visualizer_layers))]
             outputs = "".join(f"[{label}]" for label in split_labels)
             filters.append(f"{_label(audio_label)}asplit={len(split_labels)}{outputs}")
-            for layer, label in zip(visualizer_layers, split_labels):
-                audio_sources[layer.id] = label
+            for layer, split_label in zip(visualizer_layers, split_labels):
+                audio_sources[layer.id] = split_label
 
     prepared_labels: dict[str, str] = {}
     for index, layer in enumerate(active):
@@ -175,7 +225,7 @@ def build_overlay_ffmpeg_plan(
         if layer.kind == "asset":
             filters.append(_asset_filter(layer, index_by_id[layer.id], width, height, label))
         else:
-            filters.append(_visualizer_filter(audio_sources[layer.id], layer, width, height, fps, label))
+            filters.extend(_visualizer_filters(audio_sources[layer.id], layer, width, height, fps, label))
         prepared_labels[layer.id] = label
 
     current = base_video_label.strip("[]")
