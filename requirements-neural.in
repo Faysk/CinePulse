@@ -1,8 +1,10 @@
-# CinePulse optional neural runtime inputs — Windows x64 / Python 3.13.
-# The generated requirements-neural.lock is the install surface used by 1.0.
---extra-index-url https://download.pytorch.org/whl/cu126
+# CinePulse neural runtime inputs — Windows x64 / Python 3.14.
+# Policy: latest stable stack proven by the release gates, then exact hash-lock.
+# CUDA is provided by the local PyTorch wheel/runtime; no global CUDA Toolkit.
+# Demucs 4.1.0 does not require torchaudio for separation; that dependency is
+# only part of its training extra, which CinePulse does not install.
+--extra-index-url https://download.pytorch.org/whl/cu132
 
-torch==2.11.0+cu126
-torchaudio==2.11.0+cu126
+torch==2.13.0+cu132
 demucs==4.1.0
-soundfile
+soundfile==0.14.0

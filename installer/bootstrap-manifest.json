@@ -1,36 +1,41 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "runtime_policy": "latest-stable-tested-at-release",
   "python": {
-    "version": "3.13.7"
+    "version": "3.14.7"
   },
   "uv": {
-    "version": "0.12.1",
-    "url": "https://github.com/astral-sh/uv/releases/download/0.12.1/uv-x86_64-pc-windows-msvc.zip",
-    "sha256": "8fcb0cb46e1229065e344758980924e569bef5882ef45f46fada8fb24e06b74a"
+    "version": "0.12.9",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-pc-windows-msvc.zip",
+    "sha256": "ddbfcee1ac615a0499f6aa97b5ec8ebdf3ee4a7714a48055ec2ba0030e3cf810"
   },
   "ffmpeg": {
-    "version": "9.0",
-    "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0/ffmpeg-9.0-full_build.zip",
-    "sha256": "f42f0c4b04eae3ac918707ff66e3e0ff0cee527bfa6d322624d4bc1160d5055e",
+    "version": "9.0.1",
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-full_build.zip",
+    "sha256": "2e8e28af97c2ae338ccef92e36da9b2a4cd21d0cad9dde093545606cb07f5b00",
     "license": "GPL-3.0"
   },
   "real_esrgan": {
     "version": "0.2.5.0-ncnn-20220424",
     "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip",
     "sha256": "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d",
-    "license": "BSD-3-Clause"
+    "license": "BSD-3-Clause",
+    "selection_note": "latest stable upstream portable NCNN executable"
   },
   "rife": {
     "version": "ncnn-20221029",
     "url": "https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-windows.zip",
     "sha256": "d8e4d772d26cd8006ef0ad0bc82eb191b53c68677d1ae2f42506d74cbbbea606",
-    "license": "MIT"
+    "license": "MIT",
+    "selection_note": "latest stable upstream portable NCNN release"
   },
   "demucs": {
     "version": "4.1.0",
-    "torch_version": "2.11.0+cu126",
-    "torchaudio_version": "2.11.0+cu126",
-    "torch_index": "https://download.pytorch.org/whl/cu126",
+    "torch_version": "2.13.0+cu132",
+    "soundfile_version": "0.14.0",
+    "cuda_runtime": "13.2",
+    "torch_index": "https://download.pytorch.org/whl/cu132",
+    "cuda_policy": "local-pytorch-runtime-no-global-toolkit",
     "weights": [
       {
         "file": "f7e0c4bc-ba3fe64a.th",

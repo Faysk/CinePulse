@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.0.0`. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. Em máquinas híbridas, o CinePulse prioriza a GPU NVIDIA dedicada desde a abertura. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
+> Estado: `1.1.0`. O instalador Windows 1.1 é autocontido por diretório: Python, runtime, componentes, modelos, dados, caches e temporários ficam sob a pasta do CinePulse escolhida pelo usuário. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
 
 ## O que já funciona
 
@@ -27,13 +27,28 @@ CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora ví
 - intermediários visuais lossless, promoção atômica de artefatos e normalização LUFS em duas passagens;
 - infraestrutura de recuperação crash-safe com manifesto/lease/checkpoints; descoberta/retomada genérica fica em Preview/shadow até aceite físico;
 - gerenciador de IA local com capacidades integradas separadas de arquivos experimentais, seleção segura, licenças e instalação verificada;
-- dependências neurais transitivas fixadas em lock com hashes no pacote distribuído.
+- dependências core e neurais fixadas em locks com hashes no pacote distribuído;
+- instalador Windows com diretório selecionável e ciclo install/repair/uninstall validado em pasta não padrão.
 
 ## Início rápido no Windows
 
-1. Para a experiência mais simples, instale o MSI. Ele cria atalhos no Menu Iniciar e na Área de Trabalho e abre uma janela visível para preparar todos os componentes.
+1. Para a experiência mais simples, instale o MSI e escolha a pasta desejada no assistente. O CinePulse mantém o runtime e os dados dessa instalação sob essa raiz.
 2. No pacote portátil, extraia o ZIP e execute `Install-CinePulse.cmd` uma vez. A janela mostra as etapas, grava `data/logs/installer.log` e cria o atalho da Área de Trabalho.
-3. No portátil, abra por `CinePulse.cmd`; no MSI, use os atalhos instalados, que acionam o launcher não-portátil dedicado. A interface só abre quando os componentes obrigatórios estiverem prontos.
+3. No portátil, abra por `CinePulse.cmd`; no MSI, use os atalhos instalados, que acionam o launcher dedicado. A interface só abre quando os componentes obrigatórios estiverem prontos.
+
+### Contrato autocontido do 1.1
+
+Se a instalação for feita, por exemplo, em `D:\CinePulse`, o CinePulse direciona para essa raiz:
+
+- `.runtime` — Python gerenciado e runtimes privados;
+- `components` — FFmpeg, Real-ESRGAN, RIFE e componentes locais;
+- `data` — configurações, logs e dados mutáveis;
+- `cache` — caches de uv/pip, Torch, Hugging Face, Numba, Matplotlib e bytecode;
+- `temp` — `TEMP`, `TMP`, `TMPDIR` e temporários do Python/processamento.
+
+O processo também usa `PYTHONNOUSERSITE=1`, evitando consumir pacotes Python do perfil global do usuário. O CinePulse não instala CUDA Toolkit globalmente; o runtime CUDA necessário ao caminho neural vem com o PyTorch fixado pelo projeto. O driver NVIDIA continua sendo responsabilidade do Windows/usuário porque é um driver de sistema.
+
+O runtime de referência do instalador 1.1 usa **CPython 3.14.7**, core lock hashado e stack neural validada com **PyTorch 2.13.0 + CUDA 13.2**, **Demucs 4.1.0** e **SoundFile 0.14.0**. TorchAudio não faz parte do runtime mínimo exigido.
 
 Para reutilizar os componentes da instalação de desenvolvimento existente, sem copiá-los para o Git:
 
@@ -65,7 +80,7 @@ Modelos e binários não ficam neste repositório. O catálogo informa finalidad
 
 O perfil estável atual é conservador: possui teto de contrato em 8K/120 fps, mas cargas extremas continuam condicionadas à capacidade real do encoder/GPU e aos gates físicos do hardware alvo. 10K/12K e 144/240/480 fps permanecem experimentais até existir matriz comprovada de encoder/hardware. O tempo, o tamanho e a compatibilidade dependem de resolução de origem, duração, GPU, VRAM, codec e plataforma de destino. Interpolação não cria detalhe verdadeiro; upscale não recupera informação que não existe na fonte.
 
-A recuperação genérica de jobs é entregue em modo Preview/shadow por padrão. O código mantém manifestos duráveis, checkpoints, lease/heartbeat, validação e mecanismos de migração, mas o Stable 1.0 não promete retomada genérica pela interface sem o aceite físico correspondente.
+A recuperação genérica de jobs é entregue em modo Preview/shadow por padrão. O código mantém manifestos duráveis, checkpoints, lease/heartbeat, validação e mecanismos de migração, mas o Stable 1.1 não promete retomada genérica pela interface sem o aceite físico correspondente.
 
 O canal remoto de auto-update do portátil fica desativado por padrão no build estável. Quando ativado para distribuição, ele exige manifesto assinado e configuração explícita de confiança; instalações MSI continuam sendo atualizadas por um MSI mais novo.
 
@@ -87,7 +102,7 @@ Para montar o ZIP portátil reproduzível:
 .\scripts\Build-Portable.ps1
 ```
 
-O pacote-base não embute modelos. Na primeira abertura, baixa um Python gerenciado pelo CinePulse, FFmpeg, Real-ESRGAN, RIFE, PyTorch/Demucs e os pesos usados. O runtime distribuído não usa o Python do sistema como base. Dependências neurais são resolvidas a partir do lock hashado incluído no pacote; downloads bootstrap com hash conhecido são verificados antes de liberar a interface.
+O pacote-base não embute modelos. Na primeira abertura, baixa um Python gerenciado pelo CinePulse, FFmpeg, Real-ESRGAN, RIFE, PyTorch/Demucs e os pesos usados. O runtime distribuído não usa o Python do sistema como base. Dependências core e neurais são resolvidas a partir dos locks hashados incluídos no pacote; downloads bootstrap com hash conhecido são verificados antes de liberar a interface.
 
 Para gerar também o instalador Windows:
 

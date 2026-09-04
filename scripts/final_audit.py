@@ -80,7 +80,10 @@ def main() -> int:
         and str(channel.get("manifest_signature_url") or "").strip().startswith("https://")
     )
     update_policy_safe = not manifest_url or signed_channel
-    neural_required = {"torch", "torchaudio", "demucs", "soundfile"}
+    # CinePulse installs only the packages required for Demucs separation.
+    # torchaudio belongs to Demucs' training surface and is intentionally not
+    # part of the production runtime lock.
+    neural_required = {"torch", "demucs", "soundfile"}
     neural_lock_complete = (
         neural_lock_path.is_file()
         and neural_required.issubset(set(neural_locked))
