@@ -1,0 +1,59 @@
+name: Audit Final Hardening Patch
+
+on:
+  push:
+    branches: [audit-final-hardening]
+    paths:
+      - 'scripts/_audit_final_hardening_patch.py'
+      - '.github/workflows/audit-final-hardening-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit-final-hardening
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Apply final hardening patch
+        run: python scripts/_audit_final_hardening_patch.py
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          foreach ($Path in @('installer/Start-CinePulse.ps1','installer/Apply-CinePulseUpdate.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $Path), [ref]$null, [ref]$errors)
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "PowerShell parse failed: $Path" }
+          }
+      - name: Verify final markers
+        shell: pwsh
+        run: |
+          $start = Get-Content installer/Start-CinePulse.ps1 -Raw
+          $applier = Get-Content installer/Apply-CinePulseUpdate.ps1 -Raw
+          foreach ($Needle in @('uv-state.json','$ExpectedSha256','$RuntimeRebuilt = $false','$RuntimeRebuilt = $true','$RuntimePackagesHealthy','-not $RuntimePackagesHealthy')) {
+            if (-not $start.Contains($Needle)) { throw "Start hardening marker missing: $Needle" }
+          }
+          foreach ($Needle in @('HashSet[string]','caminho duplicado','arquivo gerenciado não listado no manifesto')) {
+            if (-not $applier.Contains($Needle)) { throw "Updater manifest marker missing: $Needle" }
+          }
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --quiet -- installer/Start-CinePulse.ps1 installer/Apply-CinePulseUpdate.ps1; then
+            echo 'Final hardening already applied.'
+            exit 0
+          fi
+          git add installer/Start-CinePulse.ps1 installer/Apply-CinePulseUpdate.ps1
+          git commit -m 'fix: complete bootstrap self-heal and exact updater manifest'
+          git pull --rebase origin audit-final-hardening
+          git push origin HEAD:audit-final-hardening
