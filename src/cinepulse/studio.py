@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import hashlib
@@ -5711,7 +5711,7 @@ class VideoOptimizerStudio:
         if installation_mode(APP_DIR) == "installed":
             self._set_feedback(
                 "info", "Instalação gerenciada pelo MSI",
-                "Esta cópia não sobrescreve arquivos instalados. Atualize instalando um MSI CinePulse mais recente; seus dados e componentes permanecem em %LOCALAPPDATA%\\CinePulse.",
+                "Esta cópia não sobrescreve arquivos instalados. Atualize instalando um MSI CinePulse mais recente; dados, componentes, cache e temporários permanecem dentro da pasta CinePulse escolhida na instalação.",
                 category="Atualização",
             )
             return
