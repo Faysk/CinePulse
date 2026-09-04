@@ -64,6 +64,48 @@ class OverlayPreviewTests(unittest.TestCase):
         self.assertGreater(int(np.count_nonzero(frame[..., 3])), 0)
         self.assertGreater(int(np.count_nonzero(frame[..., 3] == 0)), 0)
 
+    def test_spectrum_is_a_curve_not_filled_bar_columns(self) -> None:
+        spec = VisualizerSpec(
+            style="spectrum",
+            color="#FF8844",
+            secondary_color="#44AAFF",
+            thickness=0.30,
+            mirror=False,
+        )
+        frame = render_visualizer_rgba(
+            240,
+            90,
+            spec,
+            AudioReactiveState((0.85, 0.62, 0.44), 0.75, 0.30, 0.18),
+        )
+        alpha = frame[..., 3] > 0
+        active_columns = np.where(np.any(alpha, axis=0))[0]
+        self.assertGreater(len(active_columns), 220)
+        # A line spectrum should remain sparse; filled bars would occupy a much
+        # larger fraction of the 240x90 surface.
+        self.assertLess(float(np.mean(alpha)), 0.22)
+
+    def test_mirrored_spectrum_occupies_both_halves(self) -> None:
+        spec = VisualizerSpec(
+            style="spectrum",
+            color="#FF0000",
+            secondary_color="#0000FF",
+            thickness=0.35,
+            mirror=True,
+        )
+        frame = render_visualizer_rgba(
+            220,
+            100,
+            spec,
+            AudioReactiveState((0.9, 0.7, 0.5), 0.8, 0.4, 0.33),
+        )
+        alpha = frame[..., 3]
+        self.assertGreater(int(np.count_nonzero(alpha[:50])), 0)
+        self.assertGreater(int(np.count_nonzero(alpha[50:])), 0)
+        colors = frame[alpha > 0, :3]
+        # Horizontal gradient should expose more than a single RGB value.
+        self.assertGreater(len(np.unique(colors, axis=0)), 8)
+
     def test_scene_composes_asset_and_visualizer_in_z_order(self) -> None:
         base = np.zeros((100, 200, 3), dtype=np.uint8)
         asset = make_asset_layer(
