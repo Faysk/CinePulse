@@ -6,6 +6,9 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/gpu-acceptance.yml'
+      - 'installer/**'
+      - 'requirements*.lock'
+      - 'requirements-neural.in'
       - 'src/cinepulse/rife_engine.py'
       - 'src/cinepulse/rife_safe_runner.py'
       - 'src/cinepulse/job_lease.py'
@@ -13,7 +16,9 @@ on:
       - 'src/cinepulse/stage_adapter.py'
       - 'src/cinepulse/frame_quality.py'
       - 'src/cinepulse/storage_resilience.py'
+      - 'src/cinepulse/stem_engine.py'
       - 'tests/recovery_gpu_acceptance.py'
+      - 'tests/integration_smoke.py'
 
 permissions:
   contents: read
@@ -29,17 +34,40 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'Faysk')
     runs-on: [self-hosted, Windows, X64, cinepulse-gpu]
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
-      - name: Install project
-        run: python -m pip install --disable-pip-version-check --editable .
+          python-version: '3.14.7'
       - name: GPU inventory
         shell: pwsh
-        run: nvidia-smi
+        run: |
+          nvidia-smi
+          if ($LASTEXITCODE -ne 0) { throw 'NVIDIA driver/GPU unavailable.' }
+      - name: Install hash-locked audit runtime
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          if ($LASTEXITCODE -ne 0) { throw 'pytest install failed.' }
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'Hash-locked core runtime install failed.' }
+          python -m pip install --disable-pip-version-check --no-deps --editable .
+          if ($LASTEXITCODE -ne 0) { throw 'CinePulse editable install failed.' }
+          python -c "import cinepulse, sys; print('CINEPULSE_GPU_AUDIT_RUNTIME', cinepulse.__version__, sys.version.split()[0])"
+          if ($LASTEXITCODE -ne 0) { throw 'CinePulse runtime import failed.' }
+      - name: Bootstrap local production components
+        shell: pwsh
+        run: |
+          ./installer/Start-CinePulse.ps1 -InstallOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Self-contained component bootstrap failed.' }
+      - name: Verify isolated environment and neural lock
+        shell: pwsh
+        run: |
+          ./scripts/Test-IsolatedEnvironment.ps1 -Python (Get-Command python).Source
+          if ($LASTEXITCODE -ne 0) { throw 'Environment isolation failed.' }
+          ./scripts/Test-NeuralInstaller.ps1 -Python (Get-Command python).Source
+          if ($LASTEXITCODE -ne 0) { throw 'Neural runtime resolver failed.' }
       - name: GPU gate
         run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
       - name: Recovery RIFE 8K UHD acceptance
@@ -52,4 +80,5 @@ jobs:
           path: |
             artifacts/ci/*.json
             data/test-runs/**/report.json
+            data/logs/installer.log
           if-no-files-found: warn
