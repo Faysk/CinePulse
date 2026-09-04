@@ -56,6 +56,18 @@ class RenderWorkerTests(unittest.TestCase):
             self.assertEqual("cancelled", result.state)
             self.assertTrue((root / "manifest.json").is_file())
 
+    def test_cancel_after_pause_request_reaches_cancelled_through_valid_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            worker = self._worker(root)
+            worker.commands.submit(WorkerCommand.create("job-1", "pause"))
+            worker.commands.submit(WorkerCommand.create("job-1", "cancel"))
+            result = worker.run(lambda context: context.checkpoint(phase="rife", unit="segment-1"))
+            self.assertEqual("cancelled", result.state)
+            stored = JobStore(root / "manifest.json").load()
+            self.assertEqual("cancelled", stored.state)
+            self.assertEqual("worker_cancelled", stored.reason)
+
     def test_executor_failure_is_structured_and_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
