@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from tkinter import DoubleVar, PhotoImage, StringVar, ttk
 
+from ..overlay_composer import OverlayScene, OverlaySceneError
+from .overlay_view import OverlayComposerView
 from .preview import effect_thumbnail, to_ppm_bytes
 from .polish_view import register_responsive_split
 from .visual_lab import (
@@ -247,9 +249,42 @@ def build_visual_tab(studio, parent, *, effect_names, audio_focus_options, trans
     ttk.Label(source_row, textvariable=studio.visual_preview_source_text, style="CardMuted.TLabel").pack(side="left")
     ttk.Button(source_row, text="Gerar preview real", command=lambda: studio._start(True)).pack(side="right")
 
+    # --- Overlay Composer Preview -------------------------------------
+    initial_overlay_scene = OverlayScene()
+    overlay_payload = getattr(studio, "overlay_scene_json", "")
+    if overlay_payload:
+        try:
+            initial_overlay_scene = OverlayScene.from_json(overlay_payload)
+        except OverlaySceneError:
+            initial_overlay_scene = OverlayScene()
+
+    def overlay_base_frame():
+        frame = getattr(studio, "_visual_preview_source", None)
+        if frame is None:
+            frame = getattr(studio, "_home_preview_source", None)
+        return None if frame is None else frame.copy()
+
+    def overlay_changed(scene: OverlayScene) -> None:
+        studio.overlay_scene = scene
+        studio.overlay_scene_json = scene.to_json()
+        if hasattr(studio, "_update_summary"):
+            studio._update_summary()
+
+    studio.overlay_scene = initial_overlay_scene
+    studio.overlay_scene_json = initial_overlay_scene.to_json()
+    studio.overlay_composer_view = OverlayComposerView(
+        right,
+        scene=initial_overlay_scene,
+        on_scene_change=overlay_changed,
+        base_frame_provider=overlay_base_frame,
+        timeline_provider=lambda: float(studio.visual_preview_position.get()) / 100.0 * 6.0,
+    )
+    studio.overlay_composer_view.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+    studio.visual_preview_position.trace_add("write", lambda *_args: studio.overlay_composer_view._refresh_canvas())
+
     # --- Quick comparisons --------------------------------------------
     variants = ttk.Frame(right, style="Card.TFrame", padding=12)
-    variants.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+    variants.grid(row=2, column=0, sticky="ew", pady=(10, 0))
     ttk.Label(variants, text="Comparar efeitos", style="CardTitle.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
     ttk.Label(
         variants,
@@ -271,13 +306,14 @@ def build_visual_tab(studio, parent, *, effect_names, audio_focus_options, trans
 
     # --- Explanation strip --------------------------------------------
     explanation = ttk.Frame(right, style="Card.TFrame", padding=12)
-    explanation.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+    explanation.grid(row=3, column=0, sticky="ew", pady=(10, 0))
     ttk.Label(explanation, text="O que este preview representa", style="CardTitle.TLabel").pack(anchor="w")
     ttk.Label(
         explanation,
         text=(
             "O quadro usa o motor VFX real e os controles atuais de cor, intensidade, área, foco, suavização e expressão. "
-            "A reação musical interativa usa um sinal demonstrativo; transição, stems, codec, RIFE/Real-ESRGAN e áudio final só são validados no preview renderizado."
+            "O Overlay Composer usa PNG/GIF reais e um visualizador reativo demonstrativo; o mesmo layout normalizado é usado pelo plano FFmpeg final. "
+            "Transição, stems, codec, RIFE/Real-ESRGAN e áudio final só são validados no preview renderizado."
         ),
         style="CardMuted.TLabel",
         wraplength=760,

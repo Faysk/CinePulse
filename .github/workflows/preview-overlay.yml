@@ -1,0 +1,251 @@
+name: Overlay Composer Preview
+
+on:
+  push:
+    branches: [preview-overlay-composer-clean]
+    paths:
+      - 'src/cinepulse/overlay_*.py'
+      - 'src/cinepulse/studio.py'
+      - 'src/cinepulse/ui/overlay_view.py'
+      - 'src/cinepulse/ui/visual_view.py'
+      - 'tests/test_overlay_*.py'
+      - 'tests/integration_overlay_composer.py'
+      - 'tests/integration_overlay_longform.py'
+      - 'scripts/Invoke-OverlayAcceptance.ps1'
+      - 'docs/OVERLAY_COMPOSER_ACCEPTANCE.md'
+      - 'docs/OVERLAY_COMPOSER_PREVIEW.md'
+      - 'docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md'
+      - '.github/workflows/preview-overlay.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/cinepulse/overlay_*.py'
+      - 'src/cinepulse/studio.py'
+      - 'src/cinepulse/ui/overlay_view.py'
+      - 'src/cinepulse/ui/visual_view.py'
+      - 'tests/test_overlay_*.py'
+      - 'tests/integration_overlay_composer.py'
+      - 'tests/integration_overlay_longform.py'
+      - 'scripts/Invoke-OverlayAcceptance.ps1'
+      - 'docs/OVERLAY_COMPOSER_ACCEPTANCE.md'
+      - 'docs/OVERLAY_COMPOSER_PREVIEW.md'
+      - 'docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md'
+      - '.github/workflows/preview-overlay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: overlay-composer-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  overlay-isolation:
+    name: Overlay branch isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fetch current main
+        run: git fetch origin main --no-tags
+      - name: Reject unrelated branch changes
+        run: >-
+          python -c "import fnmatch, subprocess;
+          changed=subprocess.check_output(['git','diff','--name-only','origin/main...HEAD'], text=True).splitlines();
+          exact={'.github/workflows/preview-overlay.yml','docs/OVERLAY_COMPOSER_ACCEPTANCE.md','docs/OVERLAY_COMPOSER_PREVIEW.md','docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md','scripts/Invoke-OverlayAcceptance.ps1','src/cinepulse/studio.py','src/cinepulse/ui/overlay_view.py','src/cinepulse/ui/visual_view.py','tests/integration_overlay_composer.py','tests/integration_overlay_longform.py'};
+          patterns=('src/cinepulse/overlay_*.py','tests/test_overlay_*.py');
+          unexpected=[path for path in changed if path not in exact and not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)];
+          assert not unexpected, f'unrelated changes in Overlay Preview branch: {unexpected}';
+          print(f'CINEPULSE_OVERLAY_ISOLATION_OK files={len(changed)}')"
+
+  overlay-unit:
+    name: Overlay unit · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Verify temporary integration scaffolding is absent
+        run: >-
+          python -c "from pathlib import Path;
+          forbidden=('scripts/integrate_overlay_studio.py','scripts/integrate_overlay_phase8_ui.py','scripts/integrate_overlay_phase8_handle.py','scripts/integrate_overlay_phase9_ui.py','.github/workflows/overlay-studio-integrate.yml');
+          present=[item for item in forbidden if Path(item).exists()];
+          assert not present, f'temporary integration scaffolding present: {present}';
+          print('CINEPULSE_OVERLAY_CLEAN_TREE_OK')"
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: Compile Preview integration
+        run: python -m compileall -q src/cinepulse/overlay_composer.py src/cinepulse/overlay_assets.py src/cinepulse/overlay_preview.py src/cinepulse/overlay_layout.py src/cinepulse/overlay_editor.py src/cinepulse/overlay_ffmpeg.py src/cinepulse/overlay_runtime.py src/cinepulse/overlay_presets.py src/cinepulse/overlay_longform.py src/cinepulse/studio.py src/cinepulse/ui/overlay_view.py src/cinepulse/ui/visual_view.py
+      - name: Overlay unit persistence and longform tests
+        run: python -m unittest tests.test_overlay_composer tests.test_overlay_assets tests.test_overlay_preview tests.test_overlay_editor tests.test_overlay_ffmpeg tests.test_overlay_runtime tests.test_overlay_presets tests.test_overlay_longform tests.test_overlay_studio_contract -v
+      - name: Generate manual acceptance evidence pack
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'overlay-manual-acceptance'
+          ./scripts/Invoke-OverlayAcceptance.ps1 -GenerateOnly -SessionRoot $root
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'environment.json'))) { throw 'environment.json was not generated' }
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'ACCEPTANCE.md'))) { throw 'ACCEPTANCE.md was not generated' }
+          Write-Host 'CINEPULSE_OVERLAY_MANUAL_HARNESS_OK'
+
+  overlay-media-linux:
+    name: Overlay media integration · Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: PNG GIF waveform and mirrored bars integration
+        run: python tests/integration_overlay_composer.py
+
+  overlay-media-windows:
+    name: Overlay media integration · Windows
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install FFmpeg
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: PNG GIF waveform and mirrored bars integration
+        run: python tests/integration_overlay_composer.py
+
+  overlay-longform-linux:
+    name: Overlay streaming soak · Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: 30 second streaming soak without temp frame expansion
+        run: python tests/integration_overlay_longform.py
+
+  overlay-preview-package:
+    name: Windows Preview portable package
+    needs: [overlay-unit, overlay-media-windows]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build and stamp Preview package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.0.0-preview-overlay.${{ github.run_number }}'
+          $python = (Get-Command python -ErrorAction Stop).Source
+          ./scripts/Build-Portable.ps1 -Version $version -BuildPython $python -SkipTests
+
+          $archive = Join-Path $PWD "dist/CinePulse-$version-windows-portable.zip"
+          if (-not (Test-Path -LiteralPath $archive)) { throw "Portable archive missing: $archive" }
+
+          $stage = Join-Path $env:RUNNER_TEMP 'cinepulse-overlay-preview-package'
+          $verify = Join-Path $env:RUNNER_TEMP 'cinepulse-overlay-preview-verify'
+          Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $verify -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $stage -Force
+          $packageRoot = Join-Path $stage 'CinePulse'
+          if (-not (Test-Path -LiteralPath $packageRoot)) { throw 'Portable ZIP does not contain CinePulse root.' }
+
+          $scriptsRoot = Join-Path $packageRoot 'scripts'
+          New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
+          Copy-Item -LiteralPath './scripts/Invoke-OverlayAcceptance.ps1' -Destination (Join-Path $scriptsRoot 'Invoke-OverlayAcceptance.ps1') -Force
+
+          $buildInfo = [ordered]@{
+            schema = 1
+            channel = 'preview'
+            feature = 'overlay-composer'
+            version = $version
+            git_sha = '${{ github.sha }}'
+            git_ref = '${{ github.ref }}'
+            workflow_run_id = '${{ github.run_id }}'
+            workflow_run_number = '${{ github.run_number }}'
+            pull_request = '${{ github.event.pull_request.number }}'
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+          }
+          $buildInfo | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $packageRoot 'PREVIEW-BUILD.json') -Encoding UTF8
+
+          $integrity = [ordered]@{}
+          Get-ChildItem -LiteralPath $packageRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+            $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace('\', '/')
+            if ($relative -ne 'cinepulse-files.json') {
+              $integrity[$relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{ schema = 1; files = $integrity } | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $packageRoot 'cinepulse-files.json') -Encoding UTF8
+
+          Remove-Item -LiteralPath $archive -Force
+          Compress-Archive -LiteralPath $packageRoot -DestinationPath $archive -CompressionLevel Optimal
+          $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          $outerManifest = [ordered]@{
+            schema = 1
+            channel = 'preview'
+            feature = 'overlay-composer'
+            version = $version
+            file = Split-Path -Leaf $archive
+            sha256 = $sha256
+            git_sha = '${{ github.sha }}'
+            workflow_run_id = '${{ github.run_id }}'
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+          }
+          $manifest = Join-Path $PWD "dist/CinePulse-$version-preview-build.json"
+          $outerManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifest -Encoding UTF8
+
+          New-Item -ItemType Directory -Path $verify -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $verify -Force
+          $verifyRoot = Join-Path $verify 'CinePulse'
+          $required = @(
+            '.cinepulse-portable',
+            'CinePulse.cmd',
+            'PREVIEW-BUILD.json',
+            'cinepulse-files.json',
+            'scripts/Invoke-OverlayAcceptance.ps1',
+            'docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md',
+            'src/cinepulse/overlay_composer.py',
+            'src/cinepulse/ui/overlay_view.py'
+          )
+          foreach ($relative in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $verifyRoot $relative))) {
+              throw "Preview package missing required file: $relative"
+            }
+          }
+          Write-Host "CINEPULSE_OVERLAY_PREVIEW_PACKAGE_OK version=$version sha256=$sha256"
+      - name: Upload Windows Preview package
+        uses: actions/upload-artifact@v6
+        with:
+          name: CinePulse-Overlay-Preview-Windows-${{ github.sha }}
+          path: |
+            dist/CinePulse-1.0.0-preview-overlay.${{ github.run_number }}-windows-portable.zip
+            dist/CinePulse-1.0.0-preview-overlay.${{ github.run_number }}-preview-build.json
+          if-no-files-found: error
+          retention-days: 14
