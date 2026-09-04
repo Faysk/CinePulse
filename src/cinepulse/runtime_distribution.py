@@ -6,9 +6,11 @@ import os
 import shutil
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from .job_lease import process_start_token
 from .safe_output import process_alive
 
 
@@ -54,12 +56,7 @@ def instance_mutex_name() -> str:
 
 
 def _windows_mutex_api():
-    """Return Win32 mutex functions with pointer-sized signatures.
-
-    ctypes assumes ``c_int`` for an undeclared function result.  A Windows
-    HANDLE is pointer-sized, so leaving CreateMutexW untyped can truncate the
-    handle in a 64-bit process and make ReleaseMutex/CloseHandle unreliable.
-    """
+    """Return Win32 mutex functions with pointer-sized signatures."""
     import ctypes
     from ctypes import wintypes
 
@@ -74,16 +71,13 @@ def _windows_mutex_api():
 
 
 class InstanceGuard:
-    """Single-instance guard.
-
-    Windows uses a per-user named mutex. Other platforms use an atomic PID lock,
-    which also makes the behavior testable in CI without pretending to emulate Win32.
-    """
+    """Single-instance guard with explicit ownership on every platform."""
 
     def __init__(self, lock_path: Path) -> None:
         self.lock_path = Path(lock_path)
         self._handle: int | None = None
         self._owns_file = False
+        self._file_nonce: str | None = None
 
     def acquire(self) -> bool:
         if os.name == "nt":
@@ -103,29 +97,62 @@ class InstanceGuard:
             return True
         return self._acquire_file_lock()
 
+    @staticmethod
+    def _record_is_live(record: dict) -> bool:
+        try:
+            pid = int(record.get("pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        if not process_alive(pid):
+            return False
+        recorded_token = record.get("process_start")
+        if recorded_token:
+            current_token = process_start_token(pid)
+            if current_token is not None and current_token != recorded_token:
+                return False
+        # Legacy schema-1 records do not have a start token. Keep them
+        # conservative while that PID is alive; all newly written locks carry
+        # a token and therefore recover correctly from PID reuse.
+        return True
+
     def _acquire_file_lock(self) -> bool:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"schema": 1, "pid": os.getpid(), "started_at": time.time()}
-        for _ in range(2):
+        nonce = uuid.uuid4().hex
+        payload = {
+            "schema": 2,
+            "pid": os.getpid(),
+            "process_start": process_start_token(os.getpid()),
+            "nonce": nonce,
+            "started_at": time.time(),
+        }
+        for _ in range(3):
             try:
                 descriptor = os.open(self.lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             except FileExistsError:
                 try:
                     current = json.loads(self.lock_path.read_text(encoding="utf-8"))
-                    pid = int(current.get("pid") or 0)
                 except (OSError, ValueError, TypeError):
-                    pid = 0
-                if process_alive(pid):
+                    current = {}
+                if self._record_is_live(current):
                     return False
+                evidence = self.lock_path.with_name(f"{self.lock_path.name}.stale-{time.time_ns()}")
                 try:
-                    self.lock_path.unlink()
+                    os.replace(self.lock_path, evidence)
                 except FileNotFoundError:
                     pass
                 continue
             else:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                    json.dump(payload, stream)
+                try:
+                    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+                        json.dump(payload, stream, sort_keys=True)
+                        stream.write("\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                except BaseException:
+                    self.lock_path.unlink(missing_ok=True)
+                    raise
                 self._owns_file = True
+                self._file_nonce = nonce
                 return True
         return False
 
@@ -140,10 +167,13 @@ class InstanceGuard:
             self._handle = None
         if self._owns_file:
             try:
-                self.lock_path.unlink()
-            except FileNotFoundError:
-                pass
+                current = json.loads(self.lock_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                current = {}
+            if current.get("nonce") == self._file_nonce:
+                self.lock_path.unlink(missing_ok=True)
             self._owns_file = False
+            self._file_nonce = None
 
     def __enter__(self) -> "InstanceGuard":
         if not self.acquire():
