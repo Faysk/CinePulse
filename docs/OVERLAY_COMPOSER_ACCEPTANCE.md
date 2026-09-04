@@ -8,17 +8,14 @@
 
 **Automated Preview gates: GREEN** na branch isolada baseada diretamente em `main`.
 
-Evidência autoritativa da branch antes da abertura do PR:
+Evidência autoritativa atual:
 
-- workflow: `Overlay Composer Preview`;
-- run: **33894800962**;
-- commit funcional/gates: `26a1896952dca8755ff5cc3fdcf58cfacaf39f44`;
+- head: `961a3764010b0a46ee1bed29b285e2491482242e`;
+- `Overlay Composer Preview` run **33900543902** — **PASS**;
+- `Quality` run **33900544449** — **PASS**;
 - base: `main` em `04a3ae829412177e78249523b0f57ed4f300fbcd`.
 
-O PR #3 também executou os gates no contexto real de `pull_request` contra `main` e passou integralmente:
-
-- `Overlay Composer Preview` run **33895068104** — **6/6 PASS**;
-- `Quality` run **33895068107** — **6/6 PASS**.
+O run Overlay atual também executa no Windows o helper `scripts/Invoke-OverlayAcceptance.ps1 -GenerateOnly` e exige que ele produza `environment.json` e `ACCEPTANCE.md`. Esse passo passou no job Windows.
 
 A branch limpa foi criada para eliminar histórico e arquivos não relacionados que existiam na branch experimental anterior. O gate de isolamento compara `origin/main...HEAD` e rejeita qualquer arquivo fora do allowlist do Overlay Composer.
 
@@ -26,20 +23,21 @@ A branch limpa foi criada para eliminar histórico e arquivos não relacionados 
 
 ### Overlay Composer Preview
 
-Tanto o run de branch isolada quanto o run do PR concluíram com sucesso:
+Run `33900543902` concluiu com sucesso:
 
 - `Overlay branch isolation` — PASS;
 - `Overlay unit · ubuntu-latest` — PASS;
 - `Overlay unit · windows-latest` — PASS;
 - `Overlay media integration · Linux` — PASS;
 - `Overlay media integration · Windows` — PASS;
-- `Overlay streaming soak · Linux` — PASS.
+- `Overlay streaming soak · Linux` — PASS;
+- `Generate manual acceptance evidence pack` no Windows — PASS.
 
-No job unit Ubuntu, **52 testes** passaram no snapshot isolado da `main`; o mesmo conjunto passou no job Windows.
+No job unit Ubuntu, **52 testes** passam no snapshot isolado da `main`; o mesmo conjunto passa no job Windows.
 
 ### Quality geral do CinePulse no PR
 
-Run `33895068107` passou em todos os jobs:
+Run `33900544449` passou integralmente:
 
 - Source · Ubuntu · Python 3.11 — PASS;
 - Source · Ubuntu · Python 3.13 — PASS;
@@ -110,6 +108,18 @@ O número de inputs auxiliares depende da quantidade de assets/visualizers, não
 
 Também existe um soak FFmpeg real de **30 segundos** em Linux com PNG + GIF loopado + múltiplos visualizers, escrevendo em sink `null` e verificando ausência de expansão de sequência temporária de overlay.
 
+#### Harness físico Windows
+
+`scripts/Invoke-OverlayAcceptance.ps1` gera uma sessão local em `artifacts/overlay-acceptance/` contendo:
+
+- `environment.json` com inventário de máquina/runtime;
+- `ACCEPTANCE.md` com checklist físico/perceptual;
+- opcionalmente `soak-samples.csv` e `soak-summary.json` quando usado com `-MonitorMinutes`.
+
+O helper coleta, quando disponível, branch/head, working tree, Windows, PowerShell, Python, FFmpeg, CPU, RAM, displays, DPI do registro, NVIDIA/VRAM/temperatura, discos e espaço livre.
+
+O helper **não decide automaticamente** se uma temperatura é segura nem promove a feature por conta própria.
+
 ## Garantias que NÃO estamos declarando
 
 Os gates acima **não** significam que qualquer projeto 4K/8K/12K ou qualquer composição de 2 h terá tempo de render, VRAM ou consumo de CPU constantes.
@@ -129,12 +139,15 @@ A arquitetura evita crescimento de scratch proporcional ao número de frames do 
 - confirmar qualidade/performance com o encoder usado normalmente pelo CinePulse;
 - revisar visualmente safe areas para o destino real antes de publicar.
 
+O procedimento operacional está em `docs/OVERLAY_COMPOSER_MANUAL_ACCEPTANCE.md`.
+
 ## Rollout
 
 1. Manter o PR #3 como **draft**.
-2. Executar gates manuais/perceptuais na máquina real.
-3. Registrar problemas encontrados sem promover a feature silenciosamente.
-4. Somente depois decidir se a feature entra em Stable, permanece Preview ou recebe nova rodada de polimento.
+2. Executar `scripts/Invoke-OverlayAcceptance.ps1` na máquina física antes da sessão.
+3. Executar gates manuais/perceptuais e preencher o `ACCEPTANCE.md` gerado.
+4. Registrar problemas encontrados sem promover a feature silenciosamente.
+5. Somente depois decidir se a feature entra em Stable, permanece Preview ou recebe nova rodada de polimento.
 
 ## Regra de promoção
 
