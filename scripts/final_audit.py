@@ -43,6 +43,16 @@ def _extract(pattern: str, text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _writer_workflows() -> list[str]:
+    writers: list[str] = []
+    workflow_root = ROOT / ".github" / "workflows"
+    for path in sorted(workflow_root.glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        if "contents: write" in text:
+            writers.append(path.name)
+    return writers
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Coleta e valida evidência estática para a auditoria final do CinePulse")
     parser.add_argument("--output", default="artifacts/ci/final-audit-static.json")
@@ -71,6 +81,9 @@ def main() -> int:
     rollout_text = (ROOT / "src" / "cinepulse" / "recovery_rollout.py").read_text(encoding="utf-8")
     gpu_workflow = (ROOT / ".github/workflows/gpu-acceptance.yml").read_text(encoding="utf-8")
     rc_workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
+    quality_workflow = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+    installer_acceptance = (ROOT / ".github/workflows/installer-v2-acceptance.yml").read_text(encoding="utf-8")
+    publisher_workflow = (ROOT / ".github/workflows/publish-release.yml").read_text(encoding="utf-8")
 
     manifest_url = str(channel.get("manifest_url") or "").strip()
     signed_channel = bool(
@@ -80,9 +93,6 @@ def main() -> int:
         and str(channel.get("manifest_signature_url") or "").strip().startswith("https://")
     )
     update_policy_safe = not manifest_url or signed_channel
-    # CinePulse installs only the packages required for Demucs separation.
-    # torchaudio belongs to Demucs' training surface and is intentionally not
-    # part of the production runtime lock.
     neural_required = {"torch", "demucs", "soundfile"}
     neural_lock_complete = (
         neural_lock_path.is_file()
@@ -95,7 +105,22 @@ def main() -> int:
     neural_lock_updatable = all(token in installer_text for token in ("'requirements-neural.in'", "'requirements-neural.lock'"))
     neural_lock_packaged = all(token in portable_text for token in ("'requirements-neural.in'", "'requirements-neural.lock'"))
     gpu_gate_guarded = all(token in gpu_workflow for token in ("self-hosted", "cinepulse-gpu", "pull_request:", "github.event.pull_request.head.repo.full_name == github.repository"))
+    gpu_gate_release_aligned = all(token in gpu_workflow for token in ("python-version: '3.14.7'", "--require-hashes", "Start-CinePulse.ps1 -InstallOnly", "Test-NeuralInstaller.ps1"))
     windows_distribution_gate = all(token in rc_workflow for token in ("pull_request:", "Build-Portable.ps1", "Build-Msi.ps1", "Test-MsiLifecycle.ps1"))
+    rc_version_bound_to_code = all(token in rc_workflow for token in ("tomllib", "Version mismatch: pyproject=", "does not match repository version", "GITHUB_REF_TYPE", "REQUESTED_VERSION"))
+    quality_release_python = (
+        "'3.14.7'" in quality_workflow
+        and quality_workflow.count("python-version: '3.14.7'") >= 2
+        and "--profile cpu" in quality_workflow
+        and "--profile media" in quality_workflow
+    )
+    installer_acceptance_permanent = (
+        "pull_request:" in installer_acceptance
+        and installer_acceptance.count("branches: [main]") >= 2
+        and "installer-v2-self-contained" not in installer_acceptance
+        and "CINEPULSE_VERSION" in installer_acceptance
+        and "-Version 1.1.0" not in installer_acceptance
+    )
 
     declared_versions = {
         "pyproject": project_version,
@@ -111,8 +136,11 @@ def main() -> int:
         ROOT / ".github/workflows/neural-lock.yml",
         ROOT / ".github/workflows/release-metadata.yml",
         ROOT / ".github/workflows/overlay-studio-integrate.yml",
+        ROOT / ".github/workflows/installer-v2-runtime-locks.yml",
     )
     temporary_writer_workflows_absent = not any(path.exists() for path in temporary_writer_workflows)
+    writer_workflows = _writer_workflows()
+    permanent_writer_allowlist_safe = writer_workflows == ["publish-release.yml"] and "github.ref == 'refs/heads/main'" in publisher_workflow
 
     checks = {
         "pytest_src_path_configured": "src" in pytest_config.get("pythonpath", []),
@@ -126,13 +154,18 @@ def main() -> int:
         "visual_intermediates_lossless": lossless_intermediates,
         "recovery_stable_default_shadow_only": recovery_shadow_default,
         "windows_distribution_pr_gate_present": windows_distribution_gate,
+        "release_candidate_version_bound_to_code": rc_version_bound_to_code,
+        "quality_tests_actual_release_python": quality_release_python,
+        "installer_acceptance_is_permanent_main_gate": installer_acceptance_permanent,
         "physical_gpu_pr_gate_guarded": gpu_gate_guarded,
+        "physical_gpu_gate_uses_release_runtime": gpu_gate_release_aligned,
         "release_version_metadata_synchronized": version_metadata_synchronized,
         "temporary_branch_writer_workflows_absent": temporary_writer_workflows_absent,
+        "permanent_write_workflow_allowlist_safe": permanent_writer_allowlist_safe,
     }
 
     payload = {
-        "schema": 3,
+        "schema": 4,
         "project_version": project_version,
         "declared_versions": declared_versions,
         "studio_lines": _line_count(ROOT / "src" / "cinepulse" / "studio.py"),
@@ -142,6 +175,7 @@ def main() -> int:
         "runtime_locked_package_count": len(runtime_locked),
         "neural_locked_packages": neural_locked,
         "neural_locked_package_count": len(neural_locked),
+        "writer_workflows": writer_workflows,
         "render_plan_resolved_audit_codes": resolved,
         "render_plan_pending_audit_codes": pending,
         "checks": checks,
