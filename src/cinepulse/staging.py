@@ -86,6 +86,89 @@ class ResumableStager:
             raise StagingError("schema de staging inválido")
         return CopyState(**payload)
 
+    @staticmethod
+    def _state_matches_contract(
+        state: CopyState,
+        *,
+        source: Path,
+        source_size: int,
+        source_mtime_ns: int,
+        source_volume: str,
+        destination: Path,
+        destination_volume: str,
+    ) -> bool:
+        return (
+            state.source == str(source)
+            and state.source_size == source_size
+            and state.source_mtime_ns == source_mtime_ns
+            and state.source_volume == source_volume
+            and state.destination == str(destination)
+            and state.destination_volume == destination_volume
+            and state.total_bytes == source_size
+        )
+
+    @staticmethod
+    def _completed_state(
+        *,
+        source: Path,
+        source_size: int,
+        source_mtime_ns: int,
+        source_volume: str,
+        destination: Path,
+        destination_volume: str,
+        checksum: str | None,
+    ) -> CopyState:
+        return CopyState(
+            source=str(source),
+            source_size=source_size,
+            source_mtime_ns=source_mtime_ns,
+            source_volume=source_volume,
+            destination=str(destination),
+            destination_volume=destination_volume,
+            copied_bytes=source_size,
+            total_bytes=source_size,
+            updated_at=time.time(),
+            completed=True,
+            checksum=checksum,
+        )
+
+    def _validate_promoted_destination(
+        self,
+        source: Path,
+        destination: Path,
+        state: CopyState,
+        *,
+        verify_checksum: bool,
+        validator: Callable[[Path], None] | None,
+        require_content_match: bool,
+    ) -> str | None:
+        if not destination.is_file():
+            raise StagingError("checkpoint indica promoção concluída, mas o destino não existe")
+        if destination.stat().st_size != state.source_size:
+            raise StagingError("destino promovido possui tamanho divergente; recusando sobrescrever")
+
+        checksum = state.checksum
+        if require_content_match:
+            # This path is only used to reconcile the narrow crash window after
+            # atomic promotion and before completed=true is persisted. Hashing is
+            # intentionally mandatory here so an unrelated/corrupted destination
+            # is never accepted merely because its size matches.
+            expected = checksum or sha256_file(source)
+            actual = sha256_file(destination)
+            if actual != expected:
+                raise StagingError("destino promovido diverge da origem; recusando sobrescrever")
+            checksum = actual
+        elif checksum is not None or verify_checksum:
+            expected = checksum or sha256_file(source)
+            actual = sha256_file(destination)
+            if actual != expected:
+                raise StagingError("checksum do destino concluído diverge do contrato")
+            checksum = actual
+
+        if validator is not None:
+            validator(destination)
+        return checksum
+
     def copy(
         self,
         source: Path,
@@ -95,6 +178,7 @@ class ResumableStager:
         validator: Callable[[Path], None] | None = None,
         progress: Callable[[int, int], None] | None = None,
         fault_after_bytes: int | None = None,
+        fault_after_promote: bool = False,
     ) -> Path:
         requested_destination = Path(destination)
         source = source.resolve()
@@ -107,16 +191,76 @@ class ResumableStager:
         partial, state_path = self._paths(destination)
         existing_state = self._load_state(state_path)
         resume_at = partial.stat().st_size if partial.is_file() else 0
+
         if existing_state is not None:
-            matches = (
-                existing_state.source == str(source)
-                and existing_state.source_size == source_size
-                and existing_state.source_mtime_ns == source_mtime
-                and existing_state.source_volume == source_volume
-                and existing_state.destination == str(destination)
-            )
-            if not matches:
+            if not self._state_matches_contract(
+                existing_state,
+                source=source,
+                source_size=source_size,
+                source_mtime_ns=source_mtime,
+                source_volume=source_volume,
+                destination=destination,
+                destination_volume=destination_volume,
+            ):
                 raise StagingError("staging existente pertence a outra origem/contrato")
+
+            if existing_state.completed:
+                if partial.exists():
+                    raise StagingError("checkpoint concluído ainda possui parcial; exige inspeção")
+                checksum = self._validate_promoted_destination(
+                    source,
+                    destination,
+                    existing_state,
+                    verify_checksum=verify_checksum,
+                    validator=validator,
+                    require_content_match=False,
+                )
+                if checksum != existing_state.checksum:
+                    _atomic_json(
+                        state_path,
+                        self._completed_state(
+                            source=source,
+                            source_size=source_size,
+                            source_mtime_ns=source_mtime,
+                            source_volume=source_volume,
+                            destination=destination,
+                            destination_volume=destination_volume,
+                            checksum=checksum,
+                        ).to_dict(),
+                    )
+                return requested_destination
+
+            # Crash-safe reconciliation for the exact window between os.replace
+            # and persisting completed=true. At that point the checkpoint records
+            # all bytes copied, the partial no longer exists and the destination
+            # already contains the promoted file.
+            if (
+                existing_state.copied_bytes == source_size
+                and not partial.exists()
+                and destination.is_file()
+            ):
+                checksum = self._validate_promoted_destination(
+                    source,
+                    destination,
+                    existing_state,
+                    verify_checksum=True,
+                    validator=validator,
+                    require_content_match=True,
+                )
+                _atomic_json(
+                    state_path,
+                    self._completed_state(
+                        source=source,
+                        source_size=source_size,
+                        source_mtime_ns=source_mtime,
+                        source_volume=source_volume,
+                        destination=destination,
+                        destination_volume=destination_volume,
+                        checksum=checksum,
+                    ).to_dict(),
+                )
+                return requested_destination
+
             if resume_at != existing_state.copied_bytes:
                 raise StagingError(
                     f"parcial diverge do checkpoint: file={resume_at} state={existing_state.copied_bytes}"
@@ -183,14 +327,32 @@ class ResumableStager:
             checksum = staged_hash
         if validator is not None:
             validator(partial)
-        os.replace(partial, destination)
+
+        # Persist any checksum discovered before promotion. If the process dies
+        # after os.replace, reconciliation can validate the already-promoted file
+        # against this value without trusting size alone.
         _atomic_json(
             state_path,
             CopyState(
                 source=str(source), source_size=source_size, source_mtime_ns=source_mtime,
                 source_volume=source_volume, destination=str(destination),
                 destination_volume=destination_volume, copied_bytes=source_size,
-                total_bytes=source_size, updated_at=time.time(), completed=True, checksum=checksum,
+                total_bytes=source_size, updated_at=time.time(), completed=False, checksum=checksum,
+            ).to_dict(),
+        )
+        os.replace(partial, destination)
+        if fault_after_promote:
+            raise StagingError("fault injection after staged promotion")
+        _atomic_json(
+            state_path,
+            self._completed_state(
+                source=source,
+                source_size=source_size,
+                source_mtime_ns=source_mtime,
+                source_volume=source_volume,
+                destination=destination,
+                destination_volume=destination_volume,
+                checksum=checksum,
             ).to_dict(),
         )
         # The state file keeps a canonical resolved path for restart matching,
