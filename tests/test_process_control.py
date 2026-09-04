@@ -17,8 +17,8 @@ class ProcessControlTests(unittest.TestCase):
         messages: list[str] = []
         with (
             patch.object(process_control.os, "name", "posix"),
-            patch("cinepulse.process_control.os.getpgid", return_value=4321),
-            patch("cinepulse.process_control.os.killpg") as killpg,
+            patch("cinepulse.process_control.os.getpgid", return_value=4321, create=True),
+            patch("cinepulse.process_control.os.killpg", create=True) as killpg,
             patch("cinepulse.process_control._wait_for_exit", return_value=False),
         ):
             process_control.terminate_process_tree(process, messages.append, grace_seconds=0.01)
@@ -34,8 +34,8 @@ class ProcessControlTests(unittest.TestCase):
         process.poll.return_value = None
         with (
             patch.object(process_control.os, "name", "posix"),
-            patch("cinepulse.process_control.os.getpgid", return_value=4321),
-            patch("cinepulse.process_control.os.killpg") as killpg,
+            patch("cinepulse.process_control.os.getpgid", return_value=4321, create=True),
+            patch("cinepulse.process_control.os.killpg", create=True) as killpg,
             patch("cinepulse.process_control._wait_for_exit", return_value=True),
         ):
             process_control.terminate_process_tree(process, grace_seconds=0.01)
@@ -47,7 +47,7 @@ class ProcessControlTests(unittest.TestCase):
         process.poll.return_value = None
         with (
             patch.object(process_control.os, "name", "posix"),
-            patch("cinepulse.process_control.os.getpgid", side_effect=OSError("no group")),
+            patch("cinepulse.process_control.os.getpgid", side_effect=OSError("no group"), create=True),
             patch("cinepulse.process_control._wait_for_exit", return_value=False),
         ):
             process_control.terminate_process_tree(process, grace_seconds=0.01)
