@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STUDIO = ROOT / "src" / "cinepulse" / "studio.py"
+INTEGRATION_REVISION = 2
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -189,7 +190,7 @@ def main() -> None:
         print("CINEPULSE_OVERLAY_STUDIO_ALREADY_INTEGRATED")
         return
     STUDIO.write_text(integrated, encoding="utf-8")
-    print("CINEPULSE_OVERLAY_STUDIO_PATCH_OK")
+    print(f"CINEPULSE_OVERLAY_STUDIO_PATCH_OK revision={INTEGRATION_REVISION}")
 
 
 if __name__ == "__main__":
