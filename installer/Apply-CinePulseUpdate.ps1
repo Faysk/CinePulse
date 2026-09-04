@@ -67,6 +67,8 @@ function Test-PackageManifest {
     }
     foreach ($File in Get-ChildItem -LiteralPath $PackageRoot -File -Recurse) {
         $Relative = [IO.Path]::GetRelativePath($PackageRoot, $File.FullName).Replace('\', '/')
+        $First = $Relative.Split('/', 2)[0]
+        if ($First -in $ProtectedTopLevel) { continue }
         if ($Relative -eq 'cinepulse-files.json') { continue }
         if (-not $ManifestPaths.Contains($Relative)) {
             throw "Pacote contém arquivo gerenciado não listado no manifesto: $Relative"
@@ -120,7 +122,8 @@ try {
         throw 'Falha injetada após cópia do payload recebido.'
     }
 
-    # Verify the tree after copying as a second integrity boundary.
+    # Verify the managed tree after copying as a second integrity boundary.
+    # Mutable roots are intentionally preserved and excluded from manifest exactness.
     $null = Test-PackageManifest -PackageRoot $ProjectRoot -ExpectedVersion ([string]$Pending.version)
 
     Remove-Item -LiteralPath $PendingFile -Force
