@@ -1,8 +1,8 @@
 @echo off
 setlocal EnableExtensions
-set "CUDA_DEVICE_ORDER=PCI_BUS_ID"
-set "CUDA_VISIBLE_DEVICES=0"
-set "CINEPULSE_PREFER_DEDICATED_GPU=1"
+call "%~dp0installer\CinePulse-Environment.cmd"
+set "CINEPULSE_PORTABLE=1"
+set "CINEPULSE_INSTALL_MODE=portable-self-contained"
 title CinePulse - Instalacao completa
 color 0B
 
@@ -11,8 +11,14 @@ echo ================================================================
 echo   CinePulse - instalacao dos componentes locais
 echo ================================================================
 echo.
-echo Esta janela mostra tudo o que esta sendo instalado.
-echo Ela permanecera aberta para informar o resultado final.
+echo Tudo sera instalado dentro de:
+echo   %CINEPULSE_ROOT%
+echo.
+echo Runtime:     %CINEPULSE_ROOT%\.runtime
+echo Componentes:%CINEPULSE_COMPONENTS_DIR%
+echo Dados:       %CINEPULSE_DATA_DIR%
+echo Cache:       %CINEPULSE_CACHE_DIR%
+echo Temporarios: %CINEPULSE_TEMP_DIR%
 echo.
 
 set "CINEPULSE_POWERSHELL="
@@ -21,7 +27,7 @@ if not defined CINEPULSE_POWERSHELL for /f "delims=" %%P in ('where pwsh.exe 2^>
 if not defined CINEPULSE_POWERSHELL set "CINEPULSE_POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 echo PowerShell selecionado: %CINEPULSE_POWERSHELL%
-echo Log permanente: %~dp0data\logs\installer.log
+echo Log permanente: %CINEPULSE_DATA_DIR%\logs\installer.log
 echo.
 
 "%CINEPULSE_POWERSHELL%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\Start-CinePulse.ps1" -InstallOnly
@@ -33,14 +39,15 @@ if "%CINEPULSE_EXIT%"=="0" (
     echo ================================================================
     echo   INSTALACAO CONCLUIDA COM SUCESSO
     echo ================================================================
-    echo O atalho do CinePulse esta disponivel na Area de Trabalho.
+    echo O CinePulse e seus runtimes estao isolados em:
+    echo   %CINEPULSE_ROOT%
 ) else (
     color 0C
     echo ================================================================
     echo   A INSTALACAO NAO FOI CONCLUIDA
     echo ================================================================
     echo Codigo do erro: %CINEPULSE_EXIT%
-    echo Consulte: %~dp0data\logs\installer.log
+    echo Consulte: %CINEPULSE_DATA_DIR%\logs\installer.log
 )
 echo.
 pause
