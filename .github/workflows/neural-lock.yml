@@ -6,6 +6,7 @@ on:
     branches: [recovery-reliability-megapack]
     paths:
       - 'requirements-neural.in'
+      - 'scripts/finalize_neural_lock.py'
       - '.github/workflows/neural-lock.yml'
 
 permissions:
@@ -36,15 +37,17 @@ jobs:
           if (-not (Select-String -LiteralPath requirements-neural.lock -Pattern '--hash=sha256:' -Quiet)) {
             throw 'Neural lock was generated without hashes.'
           }
-      - name: Commit generated lock
+      - name: Wire lock into component installer
+        run: python scripts/finalize_neural_lock.py
+      - name: Commit generated lock and installer contract
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add requirements-neural.lock
+          git add requirements-neural.lock installer/Start-CinePulse.ps1
           if (git diff --cached --quiet) {
-            Write-Host 'Neural lock already up to date.'
+            Write-Host 'Neural lock and installer already up to date.'
             exit 0
           }
-          git commit -m 'build: refresh neural dependency lock [skip neural-lock]'
+          git commit -m 'build: lock neural runtime transitively [skip neural-lock]'
           git push origin HEAD:recovery-reliability-megapack
