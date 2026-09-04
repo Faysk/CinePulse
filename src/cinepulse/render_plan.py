@@ -669,10 +669,10 @@ def build_render_plan(data: PlanInput) -> RenderPlan:
         "delivery_video_codec": delivery.video_codec,
         "delivery_audio_codec": delivery.audio_codec,
         "delivery_blocking": delivery.blocking,
-        "resolved_audit_codes": ["CP-001", "CP-002", "CP-003", "CP-004", "CP-005", "CP-006", "CP-007", "CP-008", "CP-009", "CP-010", "CP-012", "CP-013", "CP-014", "CP-015", "CP-016", "CP-017", "CP-018", "CP-021", "CP-022", "CP-023", "CP-029", "CP-030", "CP-031"],
-        "pending_audit_codes": ["CP-011", "CP-019", "CP-020", "CP-027", "CP-032", "CP-033"],
+        "resolved_audit_codes": ["CP-001", "CP-002", "CP-003", "CP-004", "CP-005", "CP-006", "CP-007", "CP-008", "CP-009", "CP-010", "CP-011", "CP-012", "CP-013", "CP-014", "CP-015", "CP-016", "CP-017", "CP-018", "CP-019", "CP-020", "CP-021", "CP-022", "CP-023", "CP-029", "CP-030", "CP-031"],
+        "pending_audit_codes": ["CP-027", "CP-032", "CP-033"],
         "storage_policy": "bounded-neural-chunks + configurable-scratch + cache-lru",
-        "policy_note": "Phase 8 separates installed/portable runtime behavior, centralizes PowerShell discovery, requires a managed Python runtime, adds single-instance protection and Windows branding. Signature and full transitive dependency locking remain release-gate work.",
+        "policy_note": "Stable 1.0 uses lossless visual intermediates, signed-or-disabled update trust, hash-locked neural dependencies, managed Python, single-instance protection and Windows distribution gates. Generic recovery remains shadow/Preview by default until physical acceptance.",
     }
 
     return RenderPlan(
