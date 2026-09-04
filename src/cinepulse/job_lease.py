@@ -13,6 +13,7 @@ from typing import Callable, Iterator
 
 
 LEASE_SCHEMA = 1
+_GUARD_STALE_SECONDS = 30.0
 
 
 class LeaseError(RuntimeError):
@@ -30,9 +31,8 @@ class LeaseOwnershipLost(LeaseError):
 def _windows_process_api():
     """Return typed Win32 process functions.
 
-    OpenProcess returns a pointer-sized HANDLE.  Leaving ctypes signatures
-    implicit truncates handles on 64-bit Python, the same class of bug that the
-    application instance mutex previously had.
+    OpenProcess returns a pointer-sized HANDLE. Leaving ctypes signatures
+    implicit truncates handles on 64-bit Python.
     """
     from ctypes import wintypes
 
@@ -88,8 +88,6 @@ def _process_start_token_proc(pid: int) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    # /proc/<pid>/stat field 22 is process starttime in clock ticks. The comm
-    # field can contain spaces, so split only after the final ')'.
     try:
         tail = text[text.rindex(")") + 2 :].split()
         starttime = tail[19]
@@ -197,15 +195,23 @@ class JobLease:
         return self.path.with_name(self.path.name + ".guard")
 
     def _guard_is_stale(self) -> bool:
+        guard = self._guard_path
         try:
-            payload = json.loads(self._guard_path.read_text(encoding="utf-8"))
+            payload = json.loads(guard.read_text(encoding="utf-8"))
             pid = int(payload.get("pid") or 0)
             token = payload.get("process_start")
+            host_id = str(payload.get("host_id") or "")
+            created_at = float(payload.get("created_at") or 0.0)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             try:
-                return time.time() - self._guard_path.stat().st_mtime > 30.0
+                return time.time() - guard.stat().st_mtime > _GUARD_STALE_SECONDS
             except OSError:
                 return True
+        age = max(0.0, time.time() - created_at)
+        if host_id and host_id != socket.gethostname():
+            # A PID on another host is not meaningful locally. Give any remote
+            # in-flight mutation a bounded window before crash recovery.
+            return age > _GUARD_STALE_SECONDS
         if not self._alive(pid):
             return True
         current = self._process_token(pid)
@@ -215,12 +221,7 @@ class JobLease:
 
     @contextmanager
     def _mutation_guard(self) -> Iterator[None]:
-        """Serialize lease compare-and-swap operations across processes.
-
-        Without this fence, an old owner could read its nonce, a challenger
-        could take over a stale lease, and the old owner could then os.replace
-        the challenger's lease during heartbeat/release.
-        """
+        """Serialize lease compare-and-swap operations across processes/hosts."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         guard = self._guard_path
         guard_nonce = uuid.uuid4().hex
@@ -231,6 +232,7 @@ class JobLease:
                 "pid": self.pid,
                 "process_start": self._process_token(self.pid),
                 "nonce": guard_nonce,
+                "host_id": socket.gethostname(),
                 "created_at": time.time(),
             }
             try:
