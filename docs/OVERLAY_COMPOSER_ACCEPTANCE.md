@@ -1,26 +1,45 @@
 # Overlay Composer Preview — Acceptance Status
 
-> Branch: `preview-overlay-composer`
+> Branch: `preview-overlay-composer-clean`
 >
 > Escopo: Overlay Composer Preview. Este documento **não promove** a feature para Stable e não autoriza merge automático em `main`.
 
 ## Estado atual
 
-**Automated Preview gates: GREEN** para o estado funcional validado pelo workflow `Overlay Composer Preview` run **33890384066** (commit `e895b43e7d722798cd45881b62a9c7b46d290f0c`).
+**Automated Preview gates: GREEN** na branch isolada baseada diretamente em `main`.
 
-O commit de documentação posterior não altera o código funcional validado.
+Evidência autoritativa atual:
+
+- workflow: `Overlay Composer Preview`;
+- run: **33894800962**;
+- commit funcional/gates: `26a1896952dca8755ff5cc3fdcf58cfacaf39f44`;
+- base: `main` em `04a3ae829412177e78249523b0f57ed4f300fbcd`.
+
+A branch limpa foi criada para eliminar histórico e arquivos não relacionados que existiam na branch experimental anterior. O gate de isolamento compara `origin/main...HEAD` e rejeita qualquer arquivo fora do allowlist do Overlay Composer.
 
 ## Evidência automatizada
 
-Run `33890384066` concluiu com sucesso em todos os jobs:
+Run `33894800962` concluiu com sucesso em **todos os 6 jobs**:
 
+- `Overlay branch isolation` — PASS;
 - `Overlay unit · ubuntu-latest` — PASS;
 - `Overlay unit · windows-latest` — PASS;
 - `Overlay media integration · Linux` — PASS;
 - `Overlay media integration · Windows` — PASS;
 - `Overlay streaming soak · Linux` — PASS.
 
+No job unit Ubuntu, **52 testes** passaram no snapshot isolado da `main`; o mesmo conjunto passou no job Windows.
+
 ### O que esses gates provam
+
+#### Isolamento da feature
+
+- a branch Preview é baseada diretamente em `main`;
+- o diff contém somente arquivos explicitamente permitidos do Overlay Composer;
+- Recovery Mega Pack, release tooling e outros subsistemas não fazem parte deste PR;
+- scaffolding temporário de integração foi removido;
+- o CI falha se esse scaffolding reaparecer;
+- o CI falha se arquivos não relacionados forem introduzidos na branch Preview.
 
 #### Modelo e persistência
 
@@ -47,6 +66,7 @@ Run `33890384066` concluiu com sucesso em todos os jobs:
 - waveform reage a estado de áudio;
 - barras preservam transparência;
 - spectrum usa representação em linha no preview;
+- spectrum espelhado ocupa os dois lados esperados;
 - ordem de composição asset/visualizer é respeitada.
 
 #### FFmpeg real
@@ -93,12 +113,11 @@ A arquitetura evita crescimento de scratch proporcional ao número de frames do 
 
 ## Rollout
 
-1. Manter a feature em `preview-overlay-composer`.
-2. Remover scaffolding temporário usado apenas para integração da branch.
-3. Rodar CI limpo após a remoção do scaffolding.
-4. Abrir PR **draft** Preview → `main` para revisão, sem merge automático.
-5. Executar gates manuais.
-6. Somente depois decidir se a feature entra em Stable, permanece Preview ou recebe nova rodada de polimento.
+1. Manter a feature em `preview-overlay-composer-clean` durante revisão.
+2. Abrir PR **draft** Preview → `main`, sem merge automático.
+3. Exigir o workflow `Overlay Composer Preview` também no contexto do PR.
+4. Executar gates manuais/perceptuais.
+5. Somente depois decidir se a feature entra em Stable, permanece Preview ou recebe nova rodada de polimento.
 
 ## Regra de promoção
 
