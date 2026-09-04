@@ -101,7 +101,35 @@ $ManifestPath = Join-Path $PackageRoot 'cinepulse-files.json'
 $Manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
 
 if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
-Compress-Archive -LiteralPath (Join-Path $PackageRoot '*') -DestinationPath $Archive -CompressionLevel Optimal
+# Archive the directory itself, not a wildcard passed to -LiteralPath. The
+# portable/update/MSI contracts require a single top-level CinePulse/ folder.
+Compress-Archive -LiteralPath $PackageRoot -DestinationPath $Archive -CompressionLevel Optimal
+
+# Validate the actual archive layout before signing or publishing it. This
+# catches PowerShell/archive regressions before downstream updater/MSI steps.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$Zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+try {
+    $Entries = @($Zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+    foreach ($RequiredEntry in @(
+        'CinePulse/CinePulse.cmd',
+        'CinePulse/Install-CinePulse.cmd',
+        'CinePulse/.cinepulse-portable',
+        'CinePulse/cinepulse-files.json',
+        'CinePulse/requirements.lock',
+        'CinePulse/requirements-neural.lock',
+        'CinePulse/installer/Start-CinePulse.ps1'
+    )) {
+        if ($RequiredEntry -notin $Entries) {
+            throw "O pacote portátil não contém a entrada obrigatória: $RequiredEntry"
+        }
+    }
+    if ($Entries | Where-Object { $_ -and -not $_.StartsWith('CinePulse/', [StringComparison]::OrdinalIgnoreCase) }) {
+        throw 'O pacote portátil contém entradas fora da raiz CinePulse/.'
+    }
+} finally {
+    $Zip.Dispose()
+}
 
 if ($MinisignSecretKey) {
     if (-not $MinisignExe -or -not (Test-Path -LiteralPath $MinisignExe)) { throw 'Assinatura exige -MinisignExe válido.' }
