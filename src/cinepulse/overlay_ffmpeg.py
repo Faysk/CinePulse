@@ -44,6 +44,8 @@ def _ff(value: float, digits: int = 6) -> str:
 
 def _color_coefficients(color: str) -> tuple[str, str, str]:
     value = color.strip().lstrip("#")
+    if len(value) != 6:
+        raise OverlayFfmpegError("Cor inválida para visualizador.")
     try:
         red, green, blue = (int(value[index : index + 2], 16) / 255.0 for index in (0, 2, 4))
     except (ValueError, TypeError) as exc:
@@ -124,7 +126,7 @@ def _visualizer_filter(
         (
             "format=rgba",
             "colorkey=0x000000:0.05:0.0",
-            f"colorchannelmixer=rr={red}:gg={green}:bb={blue}",
+            f"colorchannelmixer=rr={red}:gg={green}:bb={blue}:aa={_ff(layer.transform.opacity)}",
         )
     )
     return f"{_label(audio_source)}{','.join(filters)}[{label}]"
