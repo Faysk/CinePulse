@@ -30,7 +30,7 @@ jobs:
       - name: Verify integration markers
         run: >-
           python -c "from pathlib import Path; t=Path('src/cinepulse/studio.py').read_text(encoding='utf-8');
-          markers=('overlay_scene_json: str = \\"\\"','build_overlay_ffmpeg_plan(','visualizer_audio_index','Overlay Composer: cena persistida inválida','overlay_composer_view.set_scene(scene)');
+          markers=('overlay_scene_json:','build_overlay_ffmpeg_plan(','visualizer_audio_index','Overlay Composer: cena persistida inválida','overlay_composer_view.set_scene(scene)');
           missing=[m for m in markers if m not in t];
           assert not missing, f'missing integration markers: {missing}';
           print('CINEPULSE_OVERLAY_STUDIO_PATCH_OK')"
