@@ -57,7 +57,7 @@ def _protected_update_roots(applier_text: str) -> set[str]:
     match = re.search(r"\$ProtectedTopLevel\s*=\s*@\(([^)]*)\)", applier_text, re.DOTALL)
     if not match:
         return set()
-    return set(re.findall(r"'([^']+)'|\"([^\"]+)\"", match.group(1)))
+    return set(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
 
 
 def main() -> int:
