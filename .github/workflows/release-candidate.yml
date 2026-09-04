@@ -4,9 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: SemVer da release (ex. 1.0.0-rc.6)
+        description: SemVer da release (ex. 1.0.0)
         required: true
-        default: 1.0.0-rc.6
+        default: 1.0.0
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pyproject.toml'
+      - 'src/**'
+      - 'installer/**'
+      - 'scripts/**'
+      - 'requirements*.lock'
+      - 'requirements-neural.in'
+      - '.github/workflows/release-candidate.yml'
   push:
     tags: ['v*']
 
@@ -14,26 +24,41 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-candidate-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-release-gate:
     name: Windows release gate
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'Faysk')
     runs-on: windows-latest
-    env:
-      CINEPULSE_VERSION: ${{ inputs.version || github.ref_name }}
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
           cache: pip
-      - name: Normalize version from tag
+      - name: Resolve release version
         shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          if ($env:CINEPULSE_VERSION.StartsWith('v')) { $env:CINEPULSE_VERSION = $env:CINEPULSE_VERSION.Substring(1) }
-          "CINEPULSE_VERSION=$env:CINEPULSE_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $Text = Get-Content -LiteralPath 'src/cinepulse/__init__.py' -Raw
+            $Match = [regex]::Match($Text, '__version__\s*=\s*"([^"]+)"')
+            if (-not $Match.Success) { throw 'Unable to resolve CinePulse version.' }
+            $Version = $Match.Groups[1].Value
+          } elseif ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $Version = $env:GITHUB_REF_NAME.TrimStart('v')
+          } else {
+            $Version = $env:REQUESTED_VERSION
+          }
+          if (-not $Version) { throw 'Release version is empty.' }
+          "CINEPULSE_VERSION=$Version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "CINEPULSE_RELEASE_VERSION=$Version"
       - name: Install FFmpeg
         shell: pwsh
         run: choco install ffmpeg -y --no-progress

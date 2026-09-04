@@ -37,7 +37,14 @@ def main() -> int:
     channel = json.loads((ROOT / "installer" / "update-channel.json").read_text(encoding="utf-8-sig"))
     bootstrap = json.loads((ROOT / "installer" / "bootstrap-manifest.json").read_text(encoding="utf-8-sig"))
     build_tools = json.loads((ROOT / "installer" / "build-tools.json").read_text(encoding="utf-8-sig"))
-    require(channel.get("schema") == 1, "Canal de atualização incompatível", failures)
+    require(channel.get("schema") in {1, 2}, "Canal de atualização incompatível", failures)
+    manifest_url = str(channel.get("manifest_url") or "").strip()
+    if manifest_url:
+        require(manifest_url.startswith("https://"), "Manifesto de atualização precisa usar HTTPS", failures)
+        require(bool(channel.get("require_signature")), "Canal remoto de produção precisa exigir assinatura", failures)
+        require(bool(str(channel.get("public_key") or "").strip()), "Canal remoto assinado sem chave pública", failures)
+        signature_url = str(channel.get("manifest_signature_url") or "").strip()
+        require(signature_url.startswith("https://"), "Canal remoto assinado sem URL HTTPS da assinatura", failures)
     for name in ("uv", "ffmpeg", "real_esrgan", "rife"):
         item = bootstrap.get(name, {})
         require(str(item.get("url", "")).startswith("https://"), f"URL insegura para {name}", failures)
@@ -56,6 +63,7 @@ def main() -> int:
     required = (
         "CinePulse.cmd", "Install-CinePulse.cmd", "CinePulse-Installed.cmd", "Install-CinePulse-Installed.cmd",
         "LICENSE", "README.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md", "requirements.lock",
+        "requirements-neural.in", "requirements-neural.lock",
         "assets/cinepulse.ico", "installer/Start-CinePulse.ps1", "installer/wix/Product.wxs",
         "scripts/Build-Msi.ps1", "scripts/Test-MsiLifecycle.ps1", "scripts/generate_sbom.py", "scripts/ci_gate.py", "docs/VALIDATION.md",
         ".github/workflows/quality.yml", ".github/workflows/release-candidate.yml", ".github/workflows/gpu-acceptance.yml",
@@ -67,9 +75,18 @@ def main() -> int:
 
     requirements = (ROOT / "requirements.lock").read_text(encoding="utf-8")
     require("--hash=sha256:" in requirements, "Lock do runtime sem hash", failures)
+    neural_lock_path = ROOT / "requirements-neural.lock"
+    if neural_lock_path.is_file():
+        neural_lock = neural_lock_path.read_text(encoding="utf-8")
+        for package in (str(demucs.get("version") or ""), str(demucs.get("torch_version") or ""), str(demucs.get("torchaudio_version") or "")):
+            if package:
+                require(package in neural_lock, f"Lock neural não contém versão esperada: {package}", failures)
+        require("--hash=sha256:" in neural_lock, "Lock neural sem hashes transitivos", failures)
     start_script = (ROOT / "installer" / "Start-CinePulse.ps1").read_text(encoding="utf-8-sig")
     require("--python-preference only-managed" in start_script, "Runtime gerenciado não é obrigatório", failures)
     require("Find-SystemPython" not in start_script, "Bootstrap ainda depende do Python do sistema", failures)
+    require("requirements-neural.lock" in start_script, "Instalador neural ainda não consome o lock transitivo", failures)
+    require("--require-hashes" in start_script, "Instalador neural não exige hashes", failures)
     wix = (ROOT / "installer" / "wix" / "Product.wxs").read_text(encoding="utf-8-sig")
     require("$(var.ProductVersion)" in wix, "Versão MSI continua fixa", failures)
     require("CinePulse-Installed.cmd" in wix, "MSI ainda usa launcher portátil", failures)
@@ -80,7 +97,8 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
-    print(f"CINEPULSE_RELEASE_GATE_OK version={package_version}")
+    update_policy = "disabled" if not manifest_url else "signed"
+    print(f"CINEPULSE_RELEASE_GATE_OK version={package_version} update_channel={update_policy}")
     return 0
 
 

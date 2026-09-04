@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$Repair,
     [switch]$Diagnostics,
@@ -67,7 +67,7 @@ function Apply-PendingUpdate {
     $RootFiles = @(
         '.env.example', '.gitattributes', '.gitignore', 'CHANGELOG.md', 'CONTRIBUTING.md',
         'CinePulse.cmd', 'Install-CinePulse.cmd', 'cinepulse-files.json', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
-        'pyproject.toml', 'requirements.lock'
+        'pyproject.toml', 'requirements.lock', 'requirements-neural.in', 'requirements-neural.lock'
     )
     $Directories = @('assets', 'docs', 'installer', 'src')
     try {
@@ -366,13 +366,12 @@ function Install-Demucs {
         & $PythonExe -m venv $AiVenv
         if ($LASTEXITCODE -ne 0) { throw 'Não foi possível criar o ambiente privado do Demucs.' }
         if (-not $UvExe) { $script:UvExe = Get-PortableUv }
-        & $UvExe pip install --python $AiPython --index-url $BootstrapManifest.demucs.torch_index `
-            "torch==$($BootstrapManifest.demucs.torch_version)" `
-            "torchaudio==$($BootstrapManifest.demucs.torchaudio_version)"
-        if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar a aceleração PyTorch do Demucs.' }
-        & $UvExe pip install --python $AiPython --index-url 'https://pypi.org/simple' `
-            "demucs==$($BootstrapManifest.demucs.version)" soundfile
-        if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar o Demucs.' }
+        $NeuralLock = Join-Path $ProjectRoot 'requirements-neural.lock'
+        if (-not (Test-Path -LiteralPath $NeuralLock)) {
+            throw 'Lock neural ausente; recusando instalar dependências não reproduzíveis.'
+        }
+        & $UvExe pip install --python $AiPython --require-hashes -r $NeuralLock
+        if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar o runtime neural hash-locked do Demucs.' }
     }
     New-Item -ItemType Directory -Path $ModelRepo -Force | Out-Null
     foreach ($Weight in $BootstrapManifest.demucs.weights) {

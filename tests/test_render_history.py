@@ -23,28 +23,50 @@ class Settings:
 
 
 class RenderHistoryTests(TestCase):
-    def test_start_creates_job_and_log(self):
+    def test_start_creates_job_log_and_shadow_manifest(self):
         with TemporaryDirectory() as temp:
             history = RenderHistory.start(Path(temp), Settings(), preview=False, app_version="1.0.0rc5")
             self.assertTrue((history.job_dir / "job.json").is_file())
             self.assertTrue((history.job_dir / "render.log").is_file())
+            self.assertTrue((history.job_dir / "manifest.json").is_file())
             payload = json.loads((history.job_dir / "job.json").read_text(encoding="utf-8"))
+            manifest = json.loads((history.job_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "running")
             self.assertEqual(payload["settings"]["effects"], ["Aurora"])
+            self.assertEqual("preflight", manifest["state"])
+            self.assertEqual(history.job_id, manifest["job_id"])
 
-    def test_contract_artifacts_and_finish_are_persisted(self):
+    def test_contract_artifacts_finish_and_manifest_are_persisted(self):
         with TemporaryDirectory() as temp:
             history = RenderHistory.start(Path(temp), Settings(), preview=False, app_version="x")
             history.write_plan({"fingerprint": "abc"})
-            history.write_contracts(delivery={"container": "MP4"}, storage={"peak": 2.5})
+            history.write_contracts(
+                delivery={"container": "MP4"},
+                storage={"peak": 2.5},
+                verification_expected={"width": 3840, "height": 2160, "fps": 60},
+            )
             history.write_verification({"passed": True})
             history.finish("success", output="final.mp4", report="report.txt")
             for name in ("plan.json", "contracts.json", "verification.json"):
                 self.assertTrue((history.job_dir / name).is_file())
             job = json.loads((history.job_dir / "job.json").read_text(encoding="utf-8"))
+            manifest = json.loads((history.job_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(job["status"], "success")
             self.assertTrue(job["finished_at"])
             self.assertEqual(job["report"], "report.txt")
+            self.assertEqual("complete", manifest["state"])
+            self.assertEqual("abc", manifest["render_plan"]["fingerprint"])
+            self.assertEqual(3840, manifest["expectation"]["width"])
+
+    def test_error_marks_manifest_blocked_and_preserves_error(self):
+        with TemporaryDirectory() as temp:
+            history = RenderHistory.start(Path(temp), Settings(), preview=False, app_version="x")
+            history.write_plan({"fingerprint": "abc"})
+            history.finish("error", error="GPU vanished")
+            manifest = history.job_store.load()
+            self.assertEqual("blocked", manifest.state)
+            self.assertEqual("RENDER-ERROR", manifest.last_error["code"])
+            self.assertIn("GPU vanished", manifest.last_error["message"])
 
     def test_job_ids_are_unique(self):
         with TemporaryDirectory() as temp:
@@ -59,7 +81,7 @@ class RenderHistoryTests(TestCase):
             text = history.log_path.read_text(encoding="utf-8")
             self.assertIn("Comando FFmpeg", text)
 
-    def test_support_export_redacts_absolute_paths(self):
+    def test_support_export_redacts_absolute_paths_in_manifest_too(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             history = RenderHistory.start(root / "history", Settings(), preview=False, app_version="x")
@@ -69,8 +91,10 @@ class RenderHistoryTests(TestCase):
             with zipfile.ZipFile(destination) as archive:
                 log = archive.read("render.log").decode("utf-8")
                 job = archive.read("job.json").decode("utf-8")
+                manifest = archive.read("manifest.json").decode("utf-8")
             self.assertNotIn(r"C:\Users\Faysk\Videos", log)
             self.assertNotIn(r"C:\Users\Faysk\Videos", job)
+            self.assertNotIn(r"C:\Users\Faysk\Videos", manifest)
             self.assertIn("<PATH>", log)
 
 

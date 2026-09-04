@@ -259,8 +259,8 @@ class RenderPlanTests(unittest.TestCase):
         payload = first.to_dict()
         self.assertEqual(payload["fingerprint"], first.fingerprint)
         self.assertEqual(payload["architecture_version"], "core-integrity-phase8-runtime-distribution")
-        self.assertEqual(payload["metadata"]["resolved_audit_codes"], ["CP-001", "CP-002", "CP-003", "CP-004", "CP-005", "CP-006", "CP-007", "CP-008", "CP-009", "CP-010", "CP-012", "CP-013", "CP-014", "CP-015", "CP-016", "CP-017", "CP-018", "CP-021", "CP-022", "CP-023", "CP-029", "CP-030", "CP-031"])
-        self.assertEqual(payload["metadata"]["pending_audit_codes"], ["CP-011", "CP-019", "CP-020", "CP-027", "CP-032", "CP-033"])
+        self.assertEqual(payload["metadata"]["resolved_audit_codes"], ["CP-001", "CP-002", "CP-003", "CP-004", "CP-005", "CP-006", "CP-007", "CP-008", "CP-009", "CP-010", "CP-011", "CP-012", "CP-013", "CP-014", "CP-015", "CP-016", "CP-017", "CP-018", "CP-019", "CP-020", "CP-021", "CP-022", "CP-023", "CP-029", "CP-030", "CP-031"])
+        self.assertEqual(payload["metadata"]["pending_audit_codes"], ["CP-027", "CP-032", "CP-033"])
 
     def test_user_lines_disclose_device_per_running_step(self):
         plan = self._plan(effects_active=True)
