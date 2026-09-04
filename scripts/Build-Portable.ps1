@@ -43,7 +43,7 @@ New-Item -ItemType Directory -Path $Dist -Force | Out-Null
 $Files = @(
     '.env.example', '.gitattributes', '.gitignore', 'CHANGELOG.md', 'CONTRIBUTING.md',
     'CinePulse.cmd', 'Install-CinePulse.cmd', 'LICENSE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md',
-    'pyproject.toml', 'requirements.lock'
+    'pyproject.toml', 'requirements.lock', 'requirements-neural.in', 'requirements-neural.lock'
 )
 $Directories = @('assets', 'docs', 'installer', 'src')
 foreach ($File in $Files) {
