@@ -1,0 +1,179 @@
+name: Publish Release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-release.yml'
+      - 'tests/test_publish_release_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-release.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact CinePulse version to publish; empty uses repository version'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verified-release:
+    name: Verified Windows release
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+
+      - name: Resolve and verify release version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          $ProjectVersion = (python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])").Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $ProjectVersion) { throw 'Unable to read pyproject version.' }
+          $PackageText = Get-Content -LiteralPath 'src/cinepulse/__init__.py' -Raw
+          $PackageMatch = [regex]::Match($PackageText, '__version__\s*=\s*"([^"]+)"')
+          if (-not $PackageMatch.Success) { throw 'Unable to read package version.' }
+          $PackageVersion = $PackageMatch.Groups[1].Value
+          if ($ProjectVersion -ne $PackageVersion) { throw "Version mismatch: pyproject=$ProjectVersion package=$PackageVersion" }
+          if ($env:REQUESTED_VERSION -and $env:REQUESTED_VERSION -ne $ProjectVersion) {
+            throw "Requested version $env:REQUESTED_VERSION does not match repository version $ProjectVersion"
+          }
+          if ($ProjectVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Stable publisher requires x.y.z SemVer, got $ProjectVersion" }
+          "RELEASE_VERSION=$ProjectVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "CINEPULSE_RELEASE_VERSION_OK $ProjectVersion"
+
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg install failed.' }
+
+      - name: Install hash-locked project runtime
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          if ($LASTEXITCODE -ne 0) { throw 'pytest install failed.' }
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'Hash-locked core runtime install failed.' }
+          python -m pip install --disable-pip-version-check --no-deps --editable .
+          if ($LASTEXITCODE -ne 0) { throw 'CinePulse editable install failed.' }
+          python -c "import cinepulse, numpy, sys; print('CINEPULSE_PUBLISH_RUNTIME', cinepulse.__version__, sys.version.split()[0], numpy.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime import proof failed.' }
+
+      - name: Publisher and Installer v2 contracts
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/test_publish_release_contract.py tests/test_installer_v2_contract.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release contract tests failed.' }
+
+      - name: Prove isolated temp and caches
+        shell: pwsh
+        run: ./scripts/Test-IsolatedEnvironment.ps1 -Python (Get-Command python).Source
+
+      - name: Prove neural hash lock
+        shell: pwsh
+        run: ./scripts/Test-NeuralInstaller.ps1 -Python (Get-Command python).Source
+
+      - name: Full Windows release acceptance
+        shell: pwsh
+        run: ./scripts/Invoke-RcAcceptance.ps1 -Version $env:RELEASE_VERSION -RunMsiLifecycle
+
+      - name: Generate SBOM and checksums
+        shell: pwsh
+        run: |
+          $Sbom = "dist/CinePulse-$env:RELEASE_VERSION-SBOM.cdx.json"
+          python scripts/generate_sbom.py --output $Sbom
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed.' }
+          $Files = @(
+            "dist/CinePulse-$env:RELEASE_VERSION-windows-portable.zip",
+            "dist/CinePulse-$env:RELEASE_VERSION-Setup.msi",
+            "dist/CinePulse-$env:RELEASE_VERSION-Setup-manifest.json",
+            $Sbom
+          )
+          foreach ($File in $Files) {
+            if (-not (Test-Path -LiteralPath $File)) { throw "Release artifact missing: $File" }
+          }
+          $Lines = foreach ($File in $Files) {
+            $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant()
+            "$Hash  $(Split-Path -Leaf $File)"
+          }
+          $Lines | Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding ascii
+          Get-Content -LiteralPath 'dist/SHA256SUMS.txt'
+
+      - name: Upload verified release evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: cinepulse-${{ env.RELEASE_VERSION }}-verified-release
+          path: |
+            artifacts/ci/**
+            artifacts/rc-acceptance/**
+            dist/CinePulse-${{ env.RELEASE_VERSION }}-windows-portable.zip
+            dist/CinePulse-${{ env.RELEASE_VERSION }}-Setup.msi
+            dist/CinePulse-${{ env.RELEASE_VERSION }}-Setup-manifest.json
+            dist/CinePulse-${{ env.RELEASE_VERSION }}-SBOM.cdx.json
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish tag and GitHub Release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh --version
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub CLI is unavailable on the release runner.' }
+          $Tag = "v$env:RELEASE_VERSION"
+          & gh release view $Tag --repo $env:GITHUB_REPOSITORY --json tagName,url *> $null
+          if ($LASTEXITCODE -eq 0) {
+            git fetch origin "refs/tags/$Tag:refs/tags/$Tag" 2>$null
+            $Resolved = (git rev-list -n 1 $Tag).Trim()
+            if ($LASTEXITCODE -ne 0 -or $Resolved -ne $env:GITHUB_SHA) {
+              throw "Release $Tag already exists but does not resolve to this main commit."
+            }
+            Write-Host "CINEPULSE_RELEASE_ALREADY_PUBLISHED $Tag commit=$Resolved"
+            exit 0
+          }
+          $RemoteTag = git ls-remote --tags origin "refs/tags/$Tag"
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect remote release tag.' }
+          $Assets = @(
+            "dist/CinePulse-$env:RELEASE_VERSION-windows-portable.zip",
+            "dist/CinePulse-$env:RELEASE_VERSION-Setup.msi",
+            "dist/CinePulse-$env:RELEASE_VERSION-Setup-manifest.json",
+            "dist/CinePulse-$env:RELEASE_VERSION-SBOM.cdx.json",
+            'dist/SHA256SUMS.txt'
+          )
+          $Args = @('release', 'create', $Tag) + $Assets + @(
+            '--repo', $env:GITHUB_REPOSITORY,
+            '--title', "CinePulse $env:RELEASE_VERSION — Installer v2",
+            '--notes-file', 'docs/INSTALLER_V2_RELEASE.md'
+          )
+          if ($RemoteTag) {
+            git fetch origin "refs/tags/$Tag:refs/tags/$Tag"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to fetch existing tag $Tag." }
+            $Resolved = (git rev-list -n 1 $Tag).Trim()
+            if ($Resolved -ne $env:GITHUB_SHA) { throw "Existing tag $Tag points to $Resolved instead of $env:GITHUB_SHA." }
+            $Args += '--verify-tag'
+          } else {
+            $Args += @('--target', $env:GITHUB_SHA)
+          }
+          & gh @Args
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed.' }
+          $Url = (& gh release view $Tag --repo $env:GITHUB_REPOSITORY --json url --jq '.url').Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $Url) { throw 'Published release could not be verified.' }
+          Write-Host "CINEPULSE_RELEASE_PUBLISHED tag=$Tag commit=$env:GITHUB_SHA url=$Url"
