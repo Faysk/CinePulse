@@ -75,12 +75,12 @@ jobs:
           $lock = Get-Content requirements-neural.lock -Raw
           foreach ($pin in @(
             "torch==$($manifest.demucs.torch_version)",
-            "torchaudio==$($manifest.demucs.torchaudio_version)",
             "demucs==$($manifest.demucs.version)",
             "soundfile==$($manifest.demucs.soundfile_version)"
           )) {
             if ($lock -notmatch [regex]::Escape($pin)) { throw "missing neural pin $pin" }
           }
+          if ($lock -match '(?m)^torchaudio==') { throw 'runtime lock unexpectedly contains training-only torchaudio' }
           if ((Get-Content requirements.lock -Raw) -notmatch '--hash=sha256:') { throw 'core lock is not hashed' }
           if ($lock -notmatch '--hash=sha256:') { throw 'neural lock is not hashed' }
           Write-Host "CINEPULSE_RUNTIME_LOCKS_OK python=$($manifest.python.version) cuda=$($manifest.demucs.cuda_runtime)"
