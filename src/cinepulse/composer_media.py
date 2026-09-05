@@ -275,12 +275,25 @@ def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaI
     )
 
 
-def probe_composer_media(ffprobe: str, source: str | Path, *, timeout: float = 60.0) -> ComposerMediaInfo:
+def probe_composer_media(
+    ffprobe: str,
+    source: str | Path,
+    *,
+    timeout: float = 60.0,
+    exact_timing: bool = True,
+) -> ComposerMediaInfo:
+    """Probe one Composer asset.
+
+    ``exact_timing=False`` is the lightweight UI-validation path: it returns the
+    same structural/alpha metadata without enumerating every decoded frame.
+    Export keeps the default exact path so GIF/APNG/WebP delays and VFR alpha
+    video are resolved from decoded timestamps before any output is prepared.
+    """
     path = Path(source)
-    # show_frames is intentionally part of the CPU-reference probe. It lets the
-    # compositor honor real per-frame delays for animated images and VFR alpha
-    # video. The compact show_entries set keeps the JSON bounded to fields used
-    # by the timing/media contract instead of returning full frame diagnostics.
+    entries = (
+        "stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,r_frame_rate,duration,nb_frames:"
+        "format=duration"
+    )
     command = [
         str(ffprobe),
         "-v",
@@ -289,16 +302,11 @@ def probe_composer_media(ffprobe: str, source: str | Path, *, timeout: float = 6
         "v:0",
         "-show_streams",
         "-show_format",
-        "-show_frames",
-        "-show_entries",
-        (
-            "stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,r_frame_rate,duration,nb_frames:"
-            "format=duration:frame=best_effort_timestamp_time,pts_time,pkt_duration_time"
-        ),
-        "-of",
-        "json",
-        str(path),
     ]
+    if exact_timing:
+        command += ["-show_frames"]
+        entries += ":frame=best_effort_timestamp_time,pts_time,pkt_duration_time"
+    command += ["-show_entries", entries, "-of", "json", str(path)]
     try:
         result = subprocess.run(
             command,
