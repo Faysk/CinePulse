@@ -144,7 +144,6 @@ def downshift_policy(
     ]
     if not options:
         return fallback
-    # Smaller tile first, then lower total pipeline concurrency.
     return min(options, key=lambda item: (item.tile, item.load_jobs + item.process_jobs + item.save_jobs))
 
 
@@ -227,6 +226,31 @@ class RealEsrganTuningStore:
         payload["version"] = self.VERSION
         self._atomic_write(payload)
         return winner
+
+    def invalidate(self, key: RealEsrganTuningKey, *, reason: str = "runtime failure") -> bool:
+        """Remove one exact proven record after it fails during a real render.
+
+        Failure is scoped to the exact hardware/driver/source key. The store keeps
+        unrelated evidence and writes a small tombstone so diagnostics can explain
+        why the policy stopped being used.
+        """
+        payload = self._load()
+        records = payload.get("records")
+        if not isinstance(records, dict) or key.token() not in records:
+            return False
+        records.pop(key.token(), None)
+        invalidated = payload.setdefault("invalidated", {})
+        if not isinstance(invalidated, dict):
+            invalidated = {}
+            payload["invalidated"] = invalidated
+        invalidated[key.token()] = {
+            "key": asdict(key),
+            "reason": str(reason or "runtime failure")[-1000:],
+            "updated_unix": time.time(),
+        }
+        payload["version"] = self.VERSION
+        self._atomic_write(payload)
+        return True
 
     def _atomic_write(self, payload: dict[str, object]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
