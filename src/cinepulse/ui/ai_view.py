@@ -5,6 +5,7 @@ from __future__ import annotations
 from tkinter import ttk
 
 from .polish_view import register_responsive_split
+from .restoration_view import build_restoration_panel
 
 
 FILTERS = ("Todos", "No render", "Experimentais", "Faltando")
@@ -198,4 +199,5 @@ def build_ai_tab(studio, parent) -> None:
     studio.ai_detail_toggle_button.pack(side="left")
     ttk.Button(detail_actions, text="Abrir documentação", command=studio._open_ai_docs).pack(side="right")
 
+    build_restoration_panel(studio, parent)
     studio._refresh_ai_tree()
