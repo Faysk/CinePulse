@@ -21,6 +21,7 @@ from uuid import uuid4
 from .restoration_execute import build_preview_ffmpeg_command
 from .restoration_preview import PreviewRestorationPlan
 from .restoration_temporal_export import TemporalPreviewCancelled, stream_temporal_preview
+from .process_control import popen_group_kwargs, terminate_process_tree
 
 
 class PreviewExportCancelled(RuntimeError):
@@ -79,6 +80,11 @@ def ensure_preview_scratch_capacity(
 
 
 def _terminate_process(process: subprocess.Popen) -> None:
+    # Production Popen objects expose pid and use the shared tree-safe path.
+    # Lightweight test/fake process objects keep the historical direct fallback.
+    if getattr(process, "pid", None) is not None:
+        terminate_process_tree(process, grace_seconds=1.0)
+        return
     if process.poll() is not None:
         return
     process.terminate()
@@ -167,7 +173,6 @@ def export_preview_restoration(
         preset=preset,
     )
     process: subprocess.Popen | None = None
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
     try:
         # FFmpeg can write enough diagnostics to fill an OS pipe during a long
@@ -181,7 +186,7 @@ def export_preview_restoration(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creationflags,
+                **popen_group_kwargs(),
             )
             while process.poll() is None:
                 if cancel.is_set():

@@ -41,7 +41,7 @@ class TemporalPreviewExportTests(unittest.TestCase):
     def test_temporal_working_set_is_bounded_by_window_plus_target_copy(self):
         geometry = PreviewVideoGeometry(width=7680, height=4320, fps=60.0)
         policy = TemporalReconstructionPolicy(radius=4)
-        expected_frames = (2 * policy.radius + 1) + 1
+        expected_frames = (2 * policy.radius + 1) + 3
         self.assertEqual(
             geometry.estimated_temporal_working_set(policy),
             geometry.frame_bytes * expected_frames,

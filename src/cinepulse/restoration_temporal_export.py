@@ -29,6 +29,7 @@ import numpy as np
 
 from .restoration_inpaint import TemporalReconstructionPolicy, reconstruct_region_temporally
 from .restoration_preview import PreviewRestorationPlan
+from .process_control import popen_group_kwargs, terminate_process_tree
 
 
 class TemporalPreviewCancelled(RuntimeError):
@@ -78,7 +79,7 @@ class PreviewVideoGeometry:
         full frames and remain bounded by the selected overlay sizes.
         """
 
-        resident_frames = (2 * int(policy.radius) + 1) + 1
+        resident_frames = (2 * int(policy.radius) + 1) + 3
         return self.frame_bytes * resident_frames
 
 
@@ -133,6 +134,7 @@ def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
         encoding="utf-8",
         errors="replace",
         creationflags=creationflags,
+        timeout=15,
         check=False,
     )
     if result.returncode != 0:
@@ -249,9 +251,10 @@ def stream_temporal_preview(
         )
 
     cancel = cancel_event or threading.Event()
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     decoder: subprocess.Popen | None = None
     encoder: subprocess.Popen | None = None
+    cancel_watcher_stop = threading.Event()
+    cancel_watcher: threading.Thread | None = None
     frames_written = 0
     applied_regions = 0
     fallback_regions = 0
@@ -315,21 +318,43 @@ def stream_temporal_preview(
         mode="w+", encoding="utf-8", errors="replace"
     ) as encoder_log:
         try:
+            if cancel.is_set():
+                raise TemporalPreviewCancelled("Exportação temporal Preview cancelada.")
             decoder = subprocess.Popen(
                 decoder_command,
                 stdout=subprocess.PIPE,
                 stderr=decoder_log,
-                creationflags=creationflags,
+                **popen_group_kwargs(),
             )
             encoder = subprocess.Popen(
                 encoder_command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=encoder_log,
-                creationflags=creationflags,
+                **popen_group_kwargs(),
             )
             if decoder.stdout is None or encoder.stdin is None:
                 raise RuntimeError("Não foi possível abrir os pipes do Preview temporal.")
+
+            def watch_cancellation() -> None:
+                # Rawvideo read/write calls are intentionally blocking to keep
+                # memory bounded. This watcher is the escape hatch: cancelling
+                # the Preview tears down both process groups, which closes the
+                # pipes and unblocks the streaming worker immediately.
+                while not cancel_watcher_stop.wait(0.05):
+                    if not cancel.is_set():
+                        continue
+                    for process in (decoder, encoder):
+                        if process is not None:
+                            terminate_process_tree(process, grace_seconds=1.0)
+                    return
+
+            cancel_watcher = threading.Thread(
+                target=watch_cancellation,
+                name="cinepulse-preview-temporal-cancel",
+                daemon=True,
+            )
+            cancel_watcher.start()
 
             window: deque[tuple[int, np.ndarray]] = deque()
             next_target = 0
@@ -393,12 +418,14 @@ def stream_temporal_preview(
                 applied_regions=applied_regions,
                 fallback_regions=fallback_regions,
             )
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            if cancel.is_set():
+                raise TemporalPreviewCancelled("Exportação temporal Preview cancelada.") from exc
+            raise
         finally:
+            cancel_watcher_stop.set()
             for process in (decoder, encoder):
                 if process is not None and process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=3)
+                    terminate_process_tree(process, grace_seconds=1.0)
+            if cancel_watcher is not None and cancel_watcher is not threading.current_thread():
+                cancel_watcher.join(timeout=2.0)
