@@ -4509,6 +4509,7 @@ class VideoOptimizerStudio:
                         settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, base_rife_weight,
                         color_plan=color_plan,
                                             chunk_budget_gb=rife_budget.chunk_budget_gb,
+                        overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
 )
                     self._release_temp_path(previous_working, temp_paths)
                     working_start = 0.0
@@ -4685,6 +4686,7 @@ class VideoOptimizerStudio:
                         settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, rife_weight,
                         color_plan=color_plan,
                                             chunk_budget_gb=rife_budget.chunk_budget_gb,
+                        overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
 )
                     self._release_temp_path(previous_visual, temp_paths)
                     visual_fps = float(target_fps)
@@ -5531,6 +5533,7 @@ class VideoOptimizerStudio:
         *,
         color_plan: ColorPipeline,
         chunk_budget_gb: float = 4.0,
+        overlap_extract: bool = False,
     ) -> str:
         """Interpolate with RIFE using bounded frame chunks (CP-012).
 
@@ -5562,25 +5565,44 @@ class VideoOptimizerStudio:
         processed_source = 0
         produced_target = 0
         chunk_index = 0
+        prefetch: tuple[int, int, Path, BackgroundCommand] | None = None
         self._log(
             f"STORAGE RIFE: {source_count}→{total_target_count} frames em lotes de até {chunk_frames} frames fonte; "
             "PNGs são liberados após cada lote."
         )
+
+        def source_chunk_count(offset: int) -> int:
+            remaining = source_count - offset
+            count = min(chunk_frames, remaining)
+            if remaining - count == 1:
+                count += 1
+            count = min(count, remaining)
+            return count if count >= 2 else 0
+
+        def extraction_command(frame_offset: int, frame_count: int, destination: Path, *, progress: bool) -> list[str]:
+            extraction_start = start_time + frame_offset / max(1.0, source_fps)
+            command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
+            if extraction_start > 0:
+                command += ["-ss", f"{extraction_start:.6f}"]
+            command += [
+                "-i", video, "-map", "0:v:0", "-an", "-vf", f"fps={source_fps:.8f}",
+                "-frames:v", str(frame_count), "-start_number", "0",
+            ]
+            if progress:
+                command += ["-progress", "pipe:1", "-nostats"]
+            command += [str(destination / "%08d.png")]
+            return command
+
         try:
             while processed_source < source_count:
                 if self._cancelled:
                     raise InterruptedError
-                remaining = source_count - processed_source
-                count = min(chunk_frames, remaining)
-                if remaining - count == 1:
-                    count += 1
-                count = min(count, remaining)
+                count = source_chunk_count(processed_source)
                 if count < 2:
                     # A one-frame tail cannot be interpolated independently;
                     # it is intentionally represented by the preceding chunk.
                     break
                 chunk_index += 1
-                chunk_start = start_time + processed_source / max(1.0, source_fps)
                 chunk_duration = count / max(1.0, source_fps)
                 desired = min(
                     total_target_count - produced_target,
@@ -5588,28 +5610,57 @@ class VideoOptimizerStudio:
                 )
                 incoming = chunk_root / f"chunk_{chunk_index:05d}_in"
                 outgoing = chunk_root / f"chunk_{chunk_index:05d}_out"
-                incoming.mkdir(parents=True)
-                outgoing.mkdir(parents=True)
                 fraction_before = processed_source / source_count
                 fraction_chunk = count / source_count
                 stage_base = base + weight * fraction_before * 0.90
 
-                self._set_stage(
-                    "RIFE 1/3",
-                    f"Lote {chunk_index}: extraindo {count} quadro(s) fonte ({processed_source + 1}–{processed_source + count}/{source_count}).",
-                )
-                extract = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
-                if chunk_start > 0:
-                    extract += ["-ss", f"{chunk_start:.6f}"]
-                extract += [
-                    "-i", video, "-map", "0:v:0", "-an", "-vf", f"fps={source_fps:.8f}",
-                    "-frames:v", str(count), "-start_number", "0",
-                    "-progress", "pipe:1", "-nostats", str(incoming / "%08d.png"),
-                ]
-                self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
+                prefetched = prefetch is not None and prefetch[0] == processed_source and prefetch[1] == count
+                if prefetched:
+                    _offset, _count, prefetched_incoming, task = prefetch
+                    if prefetched_incoming != incoming:
+                        task.cancel()
+                        raise RuntimeError("H4 prefetch RIFE perdeu sincronismo com o lote atual.")
+                    self._set_stage(
+                        "RIFE 1/3",
+                        f"Lote {chunk_index}: consumindo prefetch de {count} quadro(s) fonte já extraído em paralelo.",
+                    )
+                    result = task.wait()
+                    prefetch = None
+                    if result.cancelled or self._cancelled:
+                        raise InterruptedError
+                    self._log(f"H4 PREFETCH RIFE: lote {chunk_index} pronto sem ocupar o processo foreground.")
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                else:
+                    incoming.mkdir(parents=True, exist_ok=True)
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                    self._set_stage(
+                        "RIFE 1/3",
+                        f"Lote {chunk_index}: extraindo {count} quadro(s) fonte ({processed_source + 1}–{processed_source + count}/{source_count}).",
+                    )
+                    extract = extraction_command(processed_source, count, incoming, progress=True)
+                    self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
+
                 extracted = len(list(incoming.glob("*.png")))
                 if extracted < 2:
                     raise RuntimeError("RIFE recebeu menos de dois quadros no lote.")
+
+                next_processed = processed_source + count
+                next_count = source_chunk_count(next_processed) if next_processed < source_count else 0
+                if overlap_extract and next_count >= 2 and prefetch is None:
+                    next_index = chunk_index + 1
+                    next_incoming = chunk_root / f"chunk_{next_index:05d}_in"
+                    next_incoming.mkdir(parents=True, exist_ok=True)
+                    next_command = extraction_command(next_processed, next_count, next_incoming, progress=False)
+                    task = BackgroundCommand(
+                        next_command,
+                        cancel_requested=lambda: self._cancelled,
+                        log=self._log,
+                    ).start()
+                    prefetch = (next_processed, next_count, next_incoming, task)
+                    self._log(
+                        f"H4 PREFETCH RIFE: extração do lote {next_index} iniciada em paralelo; "
+                        "fila rígida=1 lote futuro / máximo 2 worksets ativos nesta etapa."
+                    )
 
                 self._set_stage("RIFE 2/3", f"Lote {chunk_index}: gerando {desired} quadros com rife-v4.6.")
                 command = build_rife_command(paths, incoming, outgoing, desired, use_cpu)
@@ -5701,6 +5752,13 @@ class VideoOptimizerStudio:
             self._run_ffmpeg(concat, duration, base + weight * 0.90, weight * 0.10)
             return str(interpolated)
         finally:
+            if prefetch is not None:
+                task = prefetch[3]
+                task.cancel()
+                try:
+                    task.wait(timeout=5.0)
+                except Exception:
+                    pass
             safe_rmtree(chunk_root)
 
     @staticmethod
