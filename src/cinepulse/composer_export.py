@@ -249,4 +249,16 @@ def export_composer_reference(
                             process.kill()
                         except OSError:
                             pass
+            # Popen does not close user-visible pipe objects just because the
+            # child exited. Close every stream explicitly so repeated Preview
+            # exports/cancellations cannot accumulate Windows handles or leak
+            # ResourceWarning noise into the release gate.
+            for stream in (base.stdout, base.stderr, encoder.stdin, encoder.stderr):
+                if stream is None:
+                    continue
+                try:
+                    if not stream.closed:
+                        stream.close()
+                except OSError:
+                    pass
     return ComposerExportResult(output, frames)
