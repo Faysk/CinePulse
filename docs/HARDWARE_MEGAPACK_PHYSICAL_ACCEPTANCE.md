@@ -47,25 +47,35 @@ HDR, unknown color metadata, crop/pad/aspect changes or any unproven conversion 
 
 ## H6 — GPU compositor
 
-Run `scripts/gpu_compositor_benchmark.py` for every compositor contract intended to use GPU acceleration. The CPU/NumPy compositor is the correctness reference.
+The CPU/NumPy Composer renderer (`composer-numpy-rgba-v1`) is the correctness reference. H6 schema 3 authorizes **one exact ordered stack**, never individual layers transitively.
 
-PASS requires exact output dimensions/frame count/alpha contract, audio sync where present, PSNR/SSIM parity and a real speedup. Test PNG plus at least one animated/alpha source relevant to the approved envelope. Unsupported dynamic transforms, visualizers or blend modes must remain on the CPU reference path until independently proven.
+Use `scripts/gpu_compositor_benchmark.py` for every stack intended to use GPU acceleration. A legacy one-layer command remains valid, or pass `--stack-manifest` for the current bounded 1–4 layer envelope. The manifest is documented in `docs/HARDWARE_H6_ACCEPTANCE.md`.
 
-The Overlay Composer / Music Visualizer Preview feature itself must still work through the CPU reference route when no GPU evidence exists. For audio-reactive acceptance, exercise the default master source plus at least one explicitly configured stem binding (for example vocals or drums), save/reload the Preview project, and verify that the same source mapping survives the round trip. Master/stem source mappings are analysis inputs for visual reactivity; they must not silently replace the final soundtrack. Verify that normal export preserves the source audio and duration, while any explicit future output-audio override remains opt-in and independently sync-checked. Missing optional stems must fall back to master exactly as the analysis contract states.
+The current CUDA acceptance envelope is intentionally narrow: static normal-blend media layers, scale 1.0, no rotation/spin/pulse/beat transform, known SDR BT.709 base. The benchmark key binds GPU, driver, FFmpeg build, geometry, FPS, color profile and the hash of the complete canonical z-order stack. Output metadata parity includes `avg_frame_rate` and `r_frame_rate`; equal frame count with different cadence is a FAIL.
+
+PASS requires exact output dimensions/frame count/timing/alpha contract, PSNR >= 80 dB, SSIM >= 0.999999, speedup >= 1.03x, metadata parity and duration parity. Test PNG plus any animated/alpha source actually intended for an approved stack. If chroma/alpha conversion cannot meet the threshold, keep CPU — do not lower the threshold.
+
+After recording evidence, exercise normal desktop Composer export. It must route through `export_composer_auto`, consume only the exact approved stack record, verify the real GPU-produced FFV1 output before atomic promotion, and preserve audio/duration. Force one GPU-process/verification failure: the exact record must be invalidated and the same job must complete once through the CPU reference. Cancellation must preserve evidence, preserve any previous destination and must **not** silently restart through CPU.
+
+Dynamic transforms, advanced blends and waveform/spectrum/circular visualizers remain on the deterministic CPU renderer until an independently benchmarked shader path proves project-level parity. The Preview feature must remain fully usable without GPU evidence.
+
+For audio-reactive acceptance, exercise the default master source plus at least one explicitly configured stem binding (for example vocals or drums), save/reload the Preview project, and verify that the same source mapping survives the round trip. Master/stem source mappings are analysis inputs for visual reactivity; they must not silently replace the final soundtrack. Missing optional stems must fall back to master exactly as the analysis contract states.
 
 ## H7 — optional Preview TensorRT
 
 TensorRT is **optional and Preview-only**. CinePulse does not install or bundle TensorRT through the Stable MIT distribution. The external runner must implement `cinepulse-tensorrt-preview-v1` and report its real runner version, TensorRT version and license metadata.
 
-Before running `scripts/tensorrt_preview_benchmark.py`, create an accepted H2/H3 NCNN record on the same GPU/driver/model/source geometry. Pass that cache with `--ncnn-cache` and the exact model ID with `--ncnn-model-id`. H7 refuses arbitrary PNG folders as an “approved baseline”; the TensorRT evidence is bound to the fingerprint of the exact proven NCNN policy.
+Before running `scripts/tensorrt_preview_benchmark.py`, create an accepted H2/H3 NCNN record on the same GPU/driver/model/source geometry. Pass that cache with `--ncnn-cache` and the exact model ID with `--ncnn-model-id`. H7 refuses arbitrary PNG folders as an “approved baseline”; TensorRT evidence is bound to the exact proven NCNN policy fingerprint plus external model/engine fingerprint.
 
-PASS requires at least the script's quality/integrity/temporal thresholds and speedup floor. An NCNN tuning invalidation, driver change, TensorRT runtime change, runner change or baseline-policy change invalidates TensorRT permission. Stable fallback remains NCNN Vulkan.
+PASS requires at least the script's quality/integrity/temporal thresholds and 1.15x speedup floor. An NCNN tuning invalidation, driver change, TensorRT runtime change, runner change, external model/engine change or baseline-policy change invalidates TensorRT permission.
+
+After evidence exists, exercise `run_tensorrt_preview_or_fallback` from the Preview orchestration on the same input contract. Force one external-runner failure: H7 must invalidate only that exact evidence key and delegate once to the established NCNN path. Cancellation must neither invalidate evidence nor start NCNN unexpectedly. Stable fallback remains NCNN Vulkan and no TensorRT package/engine/runner may appear in `pyproject.toml`, runtime/neural locks or Stable installer payload.
 
 ## H8 — sustained Overnight mode
 
 The runtime measures **completed neural work per second** for successful Real-ESRGAN and RIFE chunks. The first sustained window becomes a fixed warm-up reference for that render. Temperature, power-limit proximity or a GPU clock drop may reduce CPU budget/chunk size/overlap only when the later completed-work window also regresses against that reference. A hot GPU that remains faster is left alone. RAM/VRAM exhaustion, scratch saturation and real instability remain direct safety/capacity signals. The controller is downshift-only inside one render and never changes model, resolution, FPS, color/HDR or codec quality.
 
-Physical H8 acceptance now requires a same-scenario conservative baseline. Run, for example:
+Physical H8 acceptance requires a same-scenario conservative baseline. Run, for example:
 
 ```powershell
 python scripts/overnight_acceptance.py .\candidate\hardware-telemetry.json `
@@ -95,6 +105,10 @@ For each of the two representative scenarios, compare the final Hardware MegaPac
 - cancellation and forced-fast-path-failure recovery evidence.
 
 Only after both representative scenarios pass may hardware-specific performance be described as physically accepted. 8K/120, TensorRT, CUDA compositor and RTX utilization remain **PENDING** until their corresponding real-hardware evidence exists.
+
+## Software-complete / physical-pending rule
+
+Hosted CI may mark the software contracts green, but it must never synthesize or infer physical acceptance. When software gates are green and the remaining checklist items require the target RTX/NVMe/laptop environment, leave the Preview PR Draft and execute this document on the target hardware. No cache record should be hand-authored to bypass a benchmark.
 
 ## Merge policy
 
