@@ -23,8 +23,6 @@ import time
 from typing import Literal
 
 
-# Schema 3 binds every TensorRT permission to a proven NCNN baseline policy.
-# Older records cannot be replayed after NCNN tuning changes or invalidation.
 TENSORRT_PREVIEW_SCHEMA = 3
 BackendModel = Literal["realesrgan", "rife"]
 Precision = Literal["fp32", "fp16"]
@@ -49,18 +47,35 @@ class TensorRtExternalBackend:
 
     @property
     def stable_distribution_allowed(self) -> bool:
-        # H7 is Preview-only by design. Even an Apache/MIT runner does not make
-        # the proprietary/externally-installed runtime a Stable dependency.
         return False
 
 
-def probe_external_backend(runner: str) -> TensorRtExternalBackend | None:
-    """Probe a separately installed runner using a side-effect-free JSON call.
+def fingerprint_model_path(path: Path) -> str:
+    """Fingerprint an externally supplied model/engine without copying it.
 
-    The runner, not a CLI flag or cached user setting, is authoritative for the
-    TensorRT runtime version. This prevents evidence generated against one
-    runtime from being replayed after an upgrade/downgrade.
+    File content is hashed. Directory fingerprints bind relative path, byte size
+    and mtime so a replaced/rebuilt TensorRT engine cannot silently reuse stale
+    H7 evidence. The fingerprint is an evidence identity, not a security claim.
     """
+    candidate = Path(path)
+    if candidate.is_file():
+        digest = hashlib.sha256()
+        with candidate.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()[:24]
+    if candidate.is_dir():
+        rows: list[str] = []
+        for item in sorted(candidate.rglob("*")):
+            if item.is_file():
+                stat = item.stat()
+                rows.append(f"{item.relative_to(candidate)}:{stat.st_size}:{stat.st_mtime_ns}")
+        return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()[:24]
+    raise FileNotFoundError(candidate)
+
+
+def probe_external_backend(runner: str) -> TensorRtExternalBackend | None:
+    """Probe a separately installed runner using a side-effect-free JSON call."""
     candidate = Path(runner)
     executable = str(candidate) if candidate.is_file() else runner
     try:
