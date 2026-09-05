@@ -9,7 +9,9 @@ from encoder-quality changes.
 
 No policy in this module is permission by itself. Runtime use requires an exact
 accepted record for hardware, driver, FFmpeg, source/color geometry and the
-complete encoder contract.
+*complete* encoder contract. Every quality-relevant NVENC switch used by the
+CinePulse HEVC delivery path is represented in ``NvencContract`` so an evidence
+record can never authorize a subtly different encoder invocation.
 """
 
 from dataclasses import asdict, dataclass
@@ -22,7 +24,9 @@ import time
 from typing import Literal
 
 
-GPU_ENCODE_SCHEMA = 1
+# Schema 2 invalidates H5 records created before the complete encoder-quality
+# contract included tune/AQ/multipass/B-ref/GOP identity.
+GPU_ENCODE_SCHEMA = 2
 Codec = Literal["h264_nvenc", "hevc_nvenc", "av1_nvenc"]
 RateControl = Literal["constqp", "vbr", "cbr"]
 
@@ -41,6 +45,13 @@ class NvencContract:
     bufsize_kbps: int | None = None
     lookahead: int = 0
     bframes: int = 0
+    tune: str = ""
+    spatial_aq: bool = False
+    temporal_aq: bool = False
+    aq_strength: int | None = None
+    multipass: str = ""
+    b_ref_mode: str = ""
+    gop: int | None = None
 
     def __post_init__(self) -> None:
         if not self.preset.strip():
@@ -57,13 +68,22 @@ class NvencContract:
             raise ValueError("constqp requires qp")
         if self.rate_control in {"vbr", "cbr"} and not self.bitrate_kbps:
             raise ValueError(f"{self.rate_control} requires bitrate_kbps")
+        if self.aq_strength is not None and not 1 <= int(self.aq_strength) <= 15:
+            raise ValueError("NVENC aq_strength must be 1..15")
+        if self.aq_strength is not None and not (self.spatial_aq or self.temporal_aq):
+            raise ValueError("NVENC aq_strength requires AQ to be enabled")
+        if self.gop is not None and int(self.gop) < 1:
+            raise ValueError("NVENC GOP must be positive")
 
     def token(self) -> str:
         raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
     def ffmpeg_args(self) -> list[str]:
-        args = ["-c:v", self.encoder, "-preset", self.preset, "-rc", self.rate_control, "-pix_fmt", self.pixel_format]
+        args = ["-c:v", self.encoder, "-preset", self.preset]
+        if self.tune:
+            args += ["-tune", self.tune]
+        args += ["-rc", self.rate_control, "-pix_fmt", self.pixel_format]
         if self.profile:
             args += ["-profile:v", self.profile]
         if self.qp is not None:
@@ -78,6 +98,18 @@ class NvencContract:
             args += ["-bufsize", f"{self.bufsize_kbps}k"]
         if self.lookahead:
             args += ["-rc-lookahead", str(self.lookahead)]
+        if self.spatial_aq:
+            args += ["-spatial-aq", "1"]
+        if self.temporal_aq:
+            args += ["-temporal-aq", "1"]
+        if self.aq_strength is not None:
+            args += ["-aq-strength", str(self.aq_strength)]
+        if self.multipass:
+            args += ["-multipass", self.multipass]
+        if self.b_ref_mode:
+            args += ["-b_ref_mode", self.b_ref_mode]
+        if self.gop is not None:
+            args += ["-g", str(self.gop)]
         args += ["-bf", str(self.bframes)]
         return args
 
@@ -135,9 +167,6 @@ class ResidentEncodeEvidence:
 
     @property
     def accepted(self) -> bool:
-        # Both outputs use the exact same lossy encoder contract, so a very high
-        # pairwise threshold is appropriate. CUDA residency must not make the
-        # encoder see materially different frames.
         return bool(
             self.baseline_seconds > 0 and self.candidate_seconds > 0
             and self.speedup >= 1.03
