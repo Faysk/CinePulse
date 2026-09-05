@@ -1,0 +1,88 @@
+name: Temporary Composer Audio Hardening
+
+on:
+  push:
+    branches:
+      - preview-restoration-lab
+    paths:
+      - .github/workflows/_tmp-composer-audio-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+          fetch-depth: 0
+      - name: Harden composer audio contracts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          replace_once(
+              'src/cinepulse/overlay_composer.py',
+              '''    def set_audio_source(self, binding: object, source: str | Path) -> None:\n        key = self._audio_binding(binding)\n        value = str(Path(source).expanduser()).strip()\n        if not value:\n            raise ValueError(f"composer audio source for {key} cannot be empty")\n        self.audio_sources[key] = value\n''',
+              '''    def set_audio_source(self, binding: object, source: str | Path) -> None:\n        key = self._audio_binding(binding)\n        raw = str(source or "").strip()\n        if not raw:\n            raise ValueError(f"composer audio source for {key} cannot be empty")\n        self.audio_sources[key] = str(Path(raw).expanduser())\n''',
+          )
+
+          replace_once(
+              'src/cinepulse/overlay_composer.py',
+              '''        raw_audio = payload.get("audio_sources", {})\n        if not isinstance(raw_audio, dict):\n            raise ValueError("overlay composer audio_sources must be an object")\n        state = cls(audio_sources={str(key): str(value) for key, value in raw_audio.items()})\n''',
+              '''        raw_audio = payload.get("audio_sources", {})\n        if not isinstance(raw_audio, dict):\n            raise ValueError("overlay composer audio_sources must be an object")\n        normalized_audio: dict[str, str] = {}\n        for key, value in raw_audio.items():\n            if not isinstance(value, str) or not value.strip():\n                raise ValueError(f"composer audio source for {key!s} must be a non-empty path string")\n            normalized_audio[str(key)] = value\n        state = cls(audio_sources=normalized_audio)\n''',
+          )
+
+          replace_once(
+              'src/cinepulse/composer_export.py',
+              '''class ComposerExportRequest:\n    source: Path\n    output: Path\n    profile: ComposerBaseProfile\n    state: OverlayComposerState\n    ffmpeg: str\n    ffprobe: str\n    audio_sources: Mapping[str, str | Path]\n''',
+              '''class ComposerExportRequest:\n    source: Path\n    output: Path\n    profile: ComposerBaseProfile\n    state: OverlayComposerState\n    ffmpeg: str\n    ffprobe: str\n    audio_sources: Mapping[str, str | Path]\n    output_audio: str | Path | None = None\n''',
+          )
+
+          replace_once(
+              'src/cinepulse/composer_export.py',
+              '''def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:\n    master = request.audio_sources.get("master")\n    command = [str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(visual)]\n    if master:\n        command += ["-i", str(master), "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "copy", "-shortest"]\n    else:\n        command += ["-map", "0:v:0", "-c:v", "copy"]\n    command.append(str(target))\n    return command\n''',
+              '''def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:\n    # Analysis bindings (master/vocals/drums/bass/other) control reactivity only.\n    # They must never replace or shorten the user's soundtrack implicitly. The\n    # original source audio is preserved unless a future caller explicitly sets\n    # output_audio. Project duration bounds a longer replacement without cutting\n    # video early when the audio stream happens to be shorter.\n    audio = request.output_audio or request.source\n    command = [\n        str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",\n        "-i", str(visual), "-i", str(audio),\n        "-map", "0:v:0", "-map", "1:a:0?",\n        "-c:v", "copy", "-c:a", "copy",\n        "-t", f"{request.profile.duration:.6f}",\n        str(target),\n    ]\n    return command\n''',
+          )
+
+          replace_once(
+              'src/cinepulse/ui/composer_view.py',
+              '''            "Prévia fiel limitada a 960×540; export CPU: FFV1 RGB lossless + master/stems configurados. "\n            "Bindings sem stem usam master; Stable intacto."\n''',
+              '''            "Prévia fiel limitada a 960×540; master/stems configurados dirigem a reação visual. "\n            "O áudio final preserva a fonte; Stable intacto."\n''',
+          )
+
+          replace_once(
+              'tests/test_composer_export.py',
+              '''    def test_mux_copies_reference_video_and_optional_master_audio(self) -> None:\n        with tempfile.TemporaryDirectory() as temporary:\n            root = Path(temporary)\n            command = _mux_command(self.request(root), root / "visual.mkv", root / "final.mkv")\n        joined = " ".join(command)\n        self.assertIn("-c:v copy", joined)\n        self.assertIn("-c:a copy", joined)\n        self.assertIn("1:a:0?", joined)\n''',
+              '''    def test_mux_preserves_source_audio_independent_from_analysis_master(self) -> None:\n        with tempfile.TemporaryDirectory() as temporary:\n            root = Path(temporary)\n            request = ComposerExportRequest(\n                root / "source.mkv", root / "output.mkv", self.profile(),\n                OverlayComposerState([ComposerItem("logo", media=OverlayLayer(str(root / "logo.png"), "png"))]),\n                "ffmpeg", "ffprobe", {"master": root / "analysis-only.flac"},\n            )\n            command = _mux_command(request, root / "visual.mkv", root / "final.mkv")\n        joined = " ".join(command)\n        self.assertIn(str(root / "source.mkv"), joined)\n        self.assertNotIn(str(root / "analysis-only.flac"), joined)\n        self.assertIn("-c:v copy", joined)\n        self.assertIn("-c:a copy", joined)\n        self.assertIn("1:a:0?", joined)\n        self.assertIn("-t 1.000000", joined)\n        self.assertNotIn("-shortest", joined)\n\n    def test_mux_allows_explicit_output_audio_override(self) -> None:\n        with tempfile.TemporaryDirectory() as temporary:\n            root = Path(temporary)\n            base = self.request(root)\n            request = ComposerExportRequest(\n                base.source, base.output, base.profile, base.state, base.ffmpeg, base.ffprobe,\n                base.audio_sources, output_audio=root / "replacement.flac",\n            )\n            joined = " ".join(_mux_command(request, root / "visual.mkv", root / "final.mkv"))\n        self.assertIn(str(root / "replacement.flac"), joined)\n        self.assertNotIn(str(root / "source.mkv"), joined)\n''',
+          )
+
+          replace_once(
+              'tests/test_composer_audio_sources.py',
+              '''        with self.assertRaises(ValueError):\n            state.set_audio_source("guitar", "guitar.wav")\n        with self.assertRaises(ValueError):\n            OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"vocals": ""}})\n        with self.assertRaises(ValueError):\n            OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"guitar": "x.wav"}})\n''',
+              '''        with self.assertRaises(ValueError):\n            state.set_audio_source("guitar", "guitar.wav")\n        with self.assertRaises(ValueError):\n            state.set_audio_source("vocals", "")\n        with self.assertRaises(ValueError):\n            OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"vocals": ""}})\n        with self.assertRaises(ValueError):\n            OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"vocals": None}})\n        with self.assertRaises(ValueError):\n            OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"guitar": "x.wav"}})\n''',
+          )
+          PY
+      - name: Syntax check
+        shell: bash
+        run: python -m compileall -q src/cinepulse tests
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/_tmp-composer-audio-hardening.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cinepulse/overlay_composer.py src/cinepulse/composer_export.py src/cinepulse/ui/composer_view.py tests/test_composer_export.py tests/test_composer_audio_sources.py .github/workflows/_tmp-composer-audio-hardening.yml
+          git commit -m "Preview composer: harden audio binding and mux contracts"
+          git push origin HEAD:preview-restoration-lab
