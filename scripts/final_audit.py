@@ -217,7 +217,7 @@ def main() -> int:
     )
     h8_no_global_or_realtime_mutations = not any(token in h8_text for token in h8_forbidden_mutations)
     h8_sustained_guard_present = all(token in h8_text for token in (
-        "gpu_temp_c", "gpu_power_w", "gpu_clock_mhz", "ram_percent", "disk_write_mbps",
+        "temperature_c", "power_w", "graphics_clock_mhz", "ram_percent", "disk_write_mbps",
         "cooldown_hint_seconds", "pressure_level",
     ))
     preview_composer_isolated_from_stable_plan = all(
