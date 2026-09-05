@@ -57,7 +57,6 @@ class RifeBenchmarkTests(unittest.TestCase):
                     incoming=incoming,
                     outgoing=outgoing,
                     policy=RifePolicy("1:1:1"),
-                    requested_frames=4,
                     uhd=True,
                     ffmpeg="ffmpeg",
                 )
@@ -88,7 +87,6 @@ class RifeBenchmarkTests(unittest.TestCase):
                     incoming=incoming,
                     outgoing=outgoing,
                     policy=RifePolicy("1:1:1"),
-                    requested_frames=4,
                     uhd=True,
                     ffmpeg="ffmpeg",
                 )
