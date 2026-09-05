@@ -32,6 +32,7 @@ from .hardware import HardwareProfile, detect_hardware
 from .paths import PATHS
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
+from .verification import VerifyExpectation, quick_verify
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,48 @@ def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> 
         "-t", f"{request.profile.duration:.6f}",
         str(target),
     ]
+
+
+def _has_audio_stream(ffprobe: str, path: str | Path) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                str(ffprobe), "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=index", "-of", "csv=p=0", str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool((result.stdout or "").strip())
+
+
+def _verify_gpu_product(request: ComposerExportRequest, path: Path, *, expect_audio: bool) -> None:
+    p = request.profile
+    verification = quick_verify(
+        str(request.ffprobe),
+        path,
+        VerifyExpectation(
+            width=p.width,
+            height=p.height,
+            fps=p.fps,
+            duration=p.duration,
+            expect_audio=expect_audio,
+            video_codec="ffv1",
+            frame_tolerance=1,
+            duration_tolerance=0.12,
+            sync_tolerance=0.12,
+        ),
+    )
+    if not verification.passed:
+        detail = "; ".join(issue.message for issue in verification.errors)
+        raise RuntimeError("composer GPU verification failed: " + (detail or "unknown integrity error"))
 
 
 def _run_cancellable(
@@ -144,6 +187,9 @@ def _export_gpu(
             raise InterruptedError("composer GPU export cancelled")
         if not visual.is_file() or visual.stat().st_size <= 0:
             raise RuntimeError("composer GPU visual master was not produced")
+        _verify_gpu_product(request, visual, expect_audio=False)
+        audio_source = request.output_audio or request.source
+        expected_audio = _has_audio_stream(str(request.ffprobe), audio_source)
         with AtomicOutput(output) as atomic:
             _run_cancellable(
                 _mux_command(request, visual, atomic.partial),
@@ -153,6 +199,7 @@ def _export_gpu(
             )
             if cancelled():
                 raise InterruptedError("composer GPU export cancelled")
+            _verify_gpu_product(request, atomic.partial, expect_audio=expected_audio)
             atomic.commit()
     return ComposerExportResult(output, frames)
 
