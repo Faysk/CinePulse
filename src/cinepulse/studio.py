@@ -4463,6 +4463,9 @@ class VideoOptimizerStudio:
 
             needs_master = render_plan.needs_master
             visual_source = working_video
+            # This flag must exist for every project shape, including the
+            # original-video fast path where no master/VFX stage runs.
+            finalized_in_vfx = False
             # Hotfix 1.1.3 keeps RIFE one-shot: music loops process the reusable
             # clip before master/VFX; original-video projects may still use the
             # final RIFE stage after visual composition.
@@ -4509,7 +4512,6 @@ class VideoOptimizerStudio:
                     if visual_source != previous_visual:
                         self._release_temp_path(previous_visual, temp_paths)
                     progress_base += 7
-                finalized_in_vfx = False
                 if effects_active:
                     # Music VFX is the only project-long visual stage after the
                     # loop-aware RIFE hotfix. Fuse it with delivery so 8K/120
@@ -4559,7 +4561,7 @@ class VideoOptimizerStudio:
                         final_video_args = delivery_plan.video_args(
                             use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                             bitrate_mbps=estimated_bitrate, fps=target_fps,
-                        ) + color_plan.metadata_args(output=True)
+                        )
                         final_audio_source = settings.audio
                         final_audio_args = delivery_plan.audio_args()
                         final_muxer_args = delivery_plan.muxer_args()
