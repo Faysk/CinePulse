@@ -31,6 +31,18 @@ Codec = Literal["h264_nvenc", "hevc_nvenc", "av1_nvenc"]
 RateControl = Literal["constqp", "vbr", "cbr"]
 
 
+def _ffmpeg_rate(kbps: int) -> str:
+    """Serialize bitrate exactly like Stable delivery when possible.
+
+    FFmpeg accepts both ``80000k`` and ``80M``. H5 intentionally emits the same
+    spelling as Stable for whole-megabit values so physical evidence cannot
+    accidentally authorize a command whose quality contract merely happens to
+    be numerically equivalent today.
+    """
+    value = max(0, int(kbps))
+    return f"{value // 1000}M" if value and value % 1000 == 0 else f"{value}k"
+
+
 @dataclass(frozen=True)
 class NvencContract:
     encoder: Codec
@@ -91,11 +103,11 @@ class NvencContract:
         if self.cq is not None:
             args += ["-cq", str(self.cq)]
         if self.bitrate_kbps is not None:
-            args += ["-b:v", f"{self.bitrate_kbps}k"]
+            args += ["-b:v", _ffmpeg_rate(self.bitrate_kbps)]
         if self.maxrate_kbps is not None:
-            args += ["-maxrate", f"{self.maxrate_kbps}k"]
+            args += ["-maxrate", _ffmpeg_rate(self.maxrate_kbps)]
         if self.bufsize_kbps is not None:
-            args += ["-bufsize", f"{self.bufsize_kbps}k"]
+            args += ["-bufsize", _ffmpeg_rate(self.bufsize_kbps)]
         if self.lookahead:
             args += ["-rc-lookahead", str(self.lookahead)]
         if self.spatial_aq:
