@@ -181,6 +181,16 @@ class RealEsrganTuningStore:
             return None
         return value
 
+    def invalidate(self, key: RealEsrganTuningKey) -> bool:
+        payload = self._load()
+        records = payload.get("records", {})
+        if not isinstance(records, dict) or key.token() not in records:
+            return False
+        del records[key.token()]
+        payload["version"] = self.VERSION
+        self._atomic_write(payload)
+        return True
+
     def record_samples(
         self,
         key: RealEsrganTuningKey,

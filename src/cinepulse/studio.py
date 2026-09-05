@@ -58,6 +58,7 @@ from .hardware import detect_hardware
 from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 from .cpu_tuning import CpuTuningKey, CpuTuningStore
+from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore, downshift_policy, safe_candidates
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -5118,6 +5119,51 @@ class VideoOptimizerStudio:
             FrameSpec(source_w, source_h, source_fps, "RGBA/PNG"),
             FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG"),
         )
+        pipeline_parts = realesrgan_pipeline_threads(
+            cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb
+        ).split(":")
+        try:
+            fallback_load, fallback_proc, fallback_save = (max(1, int(value)) for value in pipeline_parts)
+        except (TypeError, ValueError):
+            fallback_load, fallback_proc, fallback_save = 2, 2, 2
+        fallback_policy = RealEsrganPolicy(
+            tile=256,
+            load_jobs=fallback_load,
+            process_jobs=fallback_proc,
+            save_jobs=fallback_save,
+            gpu_index=0,
+        )
+        tuning_key = RealEsrganTuningKey(
+            self._hardware.gpu or "unknown-gpu",
+            int(self._hardware.vram_mb or 0),
+            self._hardware.driver or "unknown-driver",
+            "realesr-animevideov3",
+            source_w,
+            source_h,
+            2,
+        )
+        tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
+        tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
+        candidate_policies = safe_candidates(
+            vram_mb=self._hardware.vram_mb,
+            cpu_threads=cpu_threads,
+            gpu_index=fallback_policy.gpu_index,
+            width=source_w,
+            height=source_h,
+        )
+        if fallback_policy not in candidate_policies:
+            candidate_policies = (fallback_policy,) + candidate_policies
+        active_policy = tuned_policy or fallback_policy
+        if tuned_policy is not None:
+            self._log(
+                f"H2 Real-ESRGAN: política medida carregada tile={active_policy.tile} "
+                f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."
+            )
+        else:
+            self._log(
+                f"H2 Real-ESRGAN: sem evidência medida aplicável; preservando fallback atual "
+                f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index}."
+            )
         chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))
         temp_dirs.append(chunk_root)
         chunks: list[Path] = []
@@ -5162,15 +5208,58 @@ class VideoOptimizerStudio:
                 raise RuntimeError("A IA não recebeu nenhum quadro do vídeo.")
 
             self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")
-            command = [
-                str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
-                "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", realesrgan_pipeline_threads(cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb),
-            ]
-            self._run_ai(
-                command, outgoing, frames,
-                stage_base + weight * fraction_chunk * 0.18,
-                weight * fraction_chunk * 0.58,
-            )
+            attempted: set[RealEsrganPolicy] = set()
+            policy = active_policy
+            while True:
+                attempted.add(policy)
+                safe_rmtree(outgoing)
+                outgoing.mkdir(parents=True, exist_ok=True)
+                command = [
+                    str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
+                    "-n", "realesr-animevideov3", "-s", "2", "-f", "png",
+                ] + policy.command_args()
+                try:
+                    self._log(
+                        f"H2 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "
+                        f"pipeline={policy.pipeline} gpu={policy.gpu_index}."
+                    )
+                    self._run_ai(
+                        command, outgoing, frames,
+                        stage_base + weight * fraction_chunk * 0.18,
+                        weight * fraction_chunk * 0.58,
+                    )
+                    produced = len(list(outgoing.glob("frame*.png")))
+                    if produced != frames:
+                        raise RuntimeError(
+                            f"Real-ESRGAN produziu {produced} de {frames} quadros esperados no lote."
+                        )
+                    active_policy = policy
+                    break
+                except InterruptedError:
+                    raise
+                except RuntimeError as exc:
+                    failure_text = str(exc).lower()
+                    oom_like = any(
+                        token in failure_text
+                        for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
+                    )
+                    was_tuned = tuned_policy is not None and policy == tuned_policy
+                    if was_tuned:
+                        if tuning_store.invalidate(tuning_key):
+                            self._log("H2 Real-ESRGAN: política medida inválida removida do cache após falha em runtime.")
+                        tuned_policy = None
+                    lower = downshift_policy(policy, candidate_policies, fallback=fallback_policy)
+                    if lower in attempted or lower == policy:
+                        if policy != fallback_policy and fallback_policy not in attempted:
+                            lower = fallback_policy
+                        else:
+                            raise
+                    self._log(
+                        f"H2 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'instabilidade/integridade'} "
+                        f"com tile={policy.tile} pipeline={policy.pipeline}; rollback para "
+                        f"tile={lower.tile} pipeline={lower.pipeline}."
+                    )
+                    policy = lower
 
             self._set_stage("IA 3/3", f"Lote {chunk_index}: compactando o resultado lossless e liberando PNGs.")
             chunk_video = chunk_root / f"segment_{chunk_index:05d}.mkv"

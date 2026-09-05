@@ -45,3 +45,9 @@ The render worker now derives a bounded CPU budget per stage from detected topol
 H1 can now consume a local `cpu-tuning.json` evidence cache keyed by exact stage, logical/physical topology, machine mode and whether the stage is feeding an active GPU path. The benchmark CLI records a winner only when at least one candidate has an explicit integrity PASS; a faster failed candidate can never win. Corrupt, missing, mismatched or over-cap evidence is ignored and the conservative topology scheduler remains the fallback.
 
 CI proves the policy contracts only. The repository still claims no physical throughput or thermal PASS until the representative workloads are run on real hardware and their telemetry is recorded.
+
+## H2 Real-ESRGAN runtime policy
+
+The Real-ESRGAN render path now consumes only hardware/driver/resolution-specific policies that were previously recorded from integrity-approved physical benchmark evidence. Without matching evidence, runtime preserves the existing Phase 2 behavior: tile 256 plus the current hardware-aware load/process/save pipeline. A measured policy is never discovered by trial during a normal user render.
+
+If a cached measured policy fails, produces the wrong frame count, or reports an OOM-like error, it is invalidated immediately and the same chunk is retried with a lower-pressure candidate, ultimately returning to the known runtime fallback. Failed policies are not persisted as winners. Model, scale, source frame count and lossless intermediate contracts remain unchanged.

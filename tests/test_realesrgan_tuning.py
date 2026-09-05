@@ -78,6 +78,17 @@ class RealEsrganTuningTests(unittest.TestCase):
         changed = RealEsrganTuningKey("RTX Test", 8192, "1000.0", "realesr-animevideov3", 1920, 1080, 2)
         self.assertIsNone(self.store.lookup(changed))
 
+    def test_invalidate_removes_failed_cached_policy(self) -> None:
+        policy = RealEsrganPolicy(320, 3, 2, 3)
+        self.store.record_samples(
+            self.key,
+            (RealEsrganSample(policy, 7.0, True, output_frames=10, expected_frames=10),),
+        )
+        self.assertEqual(self.store.lookup(self.key), policy)
+        self.assertTrue(self.store.invalidate(self.key))
+        self.assertIsNone(self.store.lookup(self.key))
+        self.assertFalse(self.store.invalidate(self.key))
+
     def test_corrupt_store_fails_closed(self) -> None:
         self.store.path.write_text("not-json", encoding="utf-8")
         self.assertIsNone(self.store.lookup(self.key))
