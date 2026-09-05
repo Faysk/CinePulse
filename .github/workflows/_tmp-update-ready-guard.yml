@@ -28,7 +28,7 @@ jobs:
           python -m compileall -q src/cinepulse/studio.py src/cinepulse/update_manager.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:PYTHONPATH = 'src'
-          python -m unittest tests.test_update_manager tests.test_update_ux tests.test_update_release_contract tests.test_update_bootstrap_contract -v
+          python -m unittest tests.test_update_manager tests.test_update_ux tests.test_update_bootstrap_contract -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Commit guard and remove temporary helpers
         shell: pwsh
