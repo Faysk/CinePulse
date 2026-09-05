@@ -17,6 +17,18 @@ class PipelineBudgetTests(unittest.TestCase):
         self.assertLessEqual(budget.chunk_budget_gb, 4.0)
         self.assertEqual(budget.max_inflight_chunks, 1)
 
+    def test_missing_vram_never_expands_past_legacy_budget(self) -> None:
+        budget = derive_pipeline_budget(
+            "realesrgan",
+            ram_available_gb=64.0,
+            vram_free_mb=None,
+            scratch_free_gb=1000.0,
+            scratch_write_mbps=1800.0,
+            dedicated=True,
+        )
+        self.assertLessEqual(budget.chunk_budget_gb, 4.0)
+        self.assertFalse(budget.overlap_pack)
+
     def test_fast_dedicated_machine_allows_bounded_overlap(self) -> None:
         budget = derive_pipeline_budget(
             "realesrgan",
