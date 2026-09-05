@@ -50,6 +50,12 @@ class UpdateUxContractTests(unittest.TestCase):
         block = studio[launch:launch_end]
         self.assertLess(block.index("self._busy or self._queue_running or self._ai_installing"), block.index("update_manager.launch_staged"))
 
+    def test_updater_refactor_preserves_ai_install_progress_events(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn('elif kind == "ai_install_status":', studio)
+        self.assertIn("progress_from_log(line)", studio)
+        self.assertIn('self.ai_install_progress_text.set(f"Atividade atual: {percent}%")', studio)
+
     def test_installed_mode_uses_msi_major_upgrade_without_bootstrap_race(self) -> None:
         manager = self.text("src/cinepulse/update_manager.py")
         wix = self.text("installer/wix/Product.wxs")

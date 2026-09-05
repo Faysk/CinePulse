@@ -6149,6 +6149,18 @@ class VideoOptimizerStudio:
                             "A versão atual foi preservada; nenhuma substituição incompleta foi promovida.",
                             category="Atualização", secondary=("Ver log", self._show_log), technical_detail=detail,
                         )
+                elif kind == "ai_install_status":
+                    line = str(event[1])
+                    self.ai_install_status_text.set(line[-180:])
+                    percent = progress_from_log(line)
+                    if percent is not None:
+                        if hasattr(self, "ai_install_progressbar"):
+                            self.ai_install_progressbar.stop()
+                            self.ai_install_progressbar.configure(mode="determinate")
+                        self.ai_install_progress.set(float(percent))
+                        self.ai_install_progress_text.set(f"Atividade atual: {percent}%")
+                    else:
+                        self.ai_install_progress_text.set("Atividade em andamento")
                 elif kind == "ai_install_done":
                     self._finish_ai_component_install()
                     self.ai_install_progress.set(100.0)

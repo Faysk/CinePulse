@@ -144,6 +144,17 @@ def _download_limited(request: urllib.request.Request, destination: Path, max_by
     return digest.hexdigest().lower()
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        while True:
+            block = stream.read(_DOWNLOAD_BLOCK_BYTES)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest().lower()
+
+
 def _validated_update_info(info: UpdateInfo) -> tuple[str, str]:
     """Validate the staging trust boundary even for internally constructed UpdateInfo."""
     version = info.version.strip()
@@ -158,6 +169,15 @@ def _validated_update_info(info: UpdateInfo) -> tuple[str, str]:
         raise ValueError("A atualização não contém um SHA-256 válido.")
     if info.package_kind not in {"portable", "msi"}:
         raise ValueError(f"Tipo de pacote de atualização inválido: {info.package_kind}")
+    if info.source == "github-release":
+        expected_asset = (
+            f"CinePulse-{version}-Setup.msi"
+            if info.package_kind == "msi"
+            else f"CinePulse-{version}-windows-portable.zip"
+        )
+        if info.asset_name != expected_asset:
+            raise ValueError("O asset da atualização GitHub não corresponde à versão e ao modo de instalação.")
+        _validate_release_asset_url(info.download_url, version, expected_asset)
     return version, digest
 
 
@@ -218,6 +238,7 @@ def _checksum_from_release_asset(
     assets: list[dict],
     asset_name: str,
     *,
+    version: str,
     current_version: str,
     timeout: int,
 ) -> str:
@@ -225,6 +246,7 @@ def _checksum_from_release_asset(
     if not checksum_asset:
         raise ValueError("Release não contém SHA256SUMS.txt nem digest SHA-256 do pacote.")
     url = str(checksum_asset.get("browser_download_url") or "")
+    _validate_release_asset_url(url, version, "SHA256SUMS.txt")
     request = _github_request(url, current_version)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = _read_limited(response, MAX_CHECKSUM_BYTES, "SHA256SUMS.txt")
@@ -258,6 +280,8 @@ def check_github_release(
     discovery finish without downloading a second metadata file. Older release
     metadata can still fall back to the published SHA256SUMS.txt asset.
     """
+    if installation not in {"portable", "installed"}:
+        raise ValueError(f"Modo de instalação inválido para atualização: {installation}")
     api_url = _release_api_url()
     request = _github_request(api_url, current_version)
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -269,6 +293,8 @@ def check_github_release(
     if not tag.startswith("v"):
         raise ValueError("A release Stable não possui tag vX.Y.Z válida.")
     version = tag[1:]
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("A release Stable precisa usar versão final x.y.z; prerelease não é aceita.")
     _version_key(version)
     if not is_newer(version, current_version):
         return None
@@ -300,6 +326,7 @@ def check_github_release(
         digest = _checksum_from_release_asset(
             [item for item in assets if isinstance(item, dict)],
             asset_name,
+            version=version,
             current_version=current_version,
             timeout=timeout,
         )
@@ -516,10 +543,22 @@ def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: i
     staged = Path(staged).expanduser().resolve()
     if not staged.exists():
         raise FileNotFoundError(f"Pacote de atualização preparado não encontrado: {staged}")
-    if info.package_kind == "msi" and staged.suffix.lower() != ".msi":
-        raise ValueError("A atualização instalada exige um pacote .msi preparado.")
-    if info.package_kind == "portable" and staged.name != "pending-update.json":
-        raise ValueError("A atualização portátil exige o descritor pending-update.json.")
+    app_root = Path(app_root).expanduser().resolve()
+    if info.package_kind == "msi":
+        expected_name = info.asset_name or f"CinePulse-{info.version.strip()}-Setup.msi"
+        if staged.suffix.lower() != ".msi" or staged.name != expected_name:
+            raise ValueError("A atualização instalada exige o pacote MSI exato preparado para esta versão.")
+        update_root = _installed_update_root().expanduser().resolve()
+        if update_root != staged and update_root not in staged.parents:
+            raise ValueError("O pacote MSI preparado está fora da área privada do updater.")
+        if _sha256_file(staged) != info.sha256.strip().lower():
+            raise RuntimeError("O pacote MSI preparado mudou após a verificação; a instalação foi bloqueada.")
+    else:
+        if staged.name != "pending-update.json":
+            raise ValueError("A atualização portátil exige o descritor pending-update.json.")
+        runtime_root = (app_root / ".runtime").resolve()
+        if runtime_root != staged and runtime_root not in staged.parents:
+            raise ValueError("O descritor da atualização portátil está fora do runtime do CinePulse.")
 
     helper_root = Path(tempfile.gettempdir()) / "CinePulseUpdater" / "handoff"
     helper_root.mkdir(parents=True, exist_ok=True)
@@ -528,7 +567,7 @@ def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: i
     shell = _powershell_executable()
     subprocess.Popen(
         [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
-        cwd=str(Path(app_root).resolve()),
+        cwd=str(app_root),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

@@ -35,6 +35,8 @@ def main() -> int:
         require(canonical(build_match.group(1)) == canonical(package_version), "Versão do pacote e do empacotador divergem", failures)
 
     channel = json.loads((ROOT / "installer" / "update-channel.json").read_text(encoding="utf-8-sig"))
+    update_manager_text = (ROOT / "src" / "cinepulse" / "update_manager.py").read_text(encoding="utf-8")
+    publisher_text = (ROOT / ".github" / "workflows" / "publish-release.yml").read_text(encoding="utf-8")
     bootstrap = json.loads((ROOT / "installer" / "bootstrap-manifest.json").read_text(encoding="utf-8-sig"))
     build_tools = json.loads((ROOT / "installer" / "build-tools.json").read_text(encoding="utf-8-sig"))
     require(channel.get("schema") in {1, 2}, "Canal de atualização incompatível", failures)
@@ -45,6 +47,27 @@ def main() -> int:
         require(bool(str(channel.get("public_key") or "").strip()), "Canal remoto assinado sem chave pública", failures)
         signature_url = str(channel.get("manifest_signature_url") or "").strip()
         require(signature_url.startswith("https://"), "Canal remoto assinado sem URL HTTPS da assinatura", failures)
+    github_release_contract = all(
+        token in update_manager_text
+        for token in (
+            'https://api.github.com/repos/Faysk/CinePulse/releases/latest',
+            '_validate_release_asset_url',
+            'SHA256SUMS.txt',
+            'A release Stable precisa usar versão final x.y.z',
+            '_sha256_file(staged)',
+        )
+    )
+    publisher_contract = all(
+        token in publisher_text
+        for token in (
+            'Stable publisher requires x.y.z SemVer',
+            'dist/SHA256SUMS.txt',
+            'gh release',
+        )
+    )
+    require(github_release_contract, "Updater GitHub Stable sem contrato de origem/hash completo", failures)
+    require(publisher_contract, "Publisher não garante assets/hash da release consumida pelo updater", failures)
+
     for name in ("uv", "ffmpeg", "real_esrgan", "rife"):
         item = bootstrap.get(name, {})
         require(str(item.get("url", "")).startswith("https://"), f"URL insegura para {name}", failures)
@@ -97,8 +120,8 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
-    update_policy = "disabled" if not manifest_url else "signed"
-    print(f"CINEPULSE_RELEASE_GATE_OK version={package_version} update_channel={update_policy}")
+    update_source = "signed-manifest+github-installed" if manifest_url else "github-release"
+    print(f"CINEPULSE_RELEASE_GATE_OK version={package_version} update_source={update_source}")
     return 0
 
 

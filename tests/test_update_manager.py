@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import stat
@@ -19,6 +20,7 @@ from cinepulse.update_manager import (
     _validated_update_info,
     check_github_release,
     is_newer,
+    launch_staged,
     stage,
 )
 
@@ -135,6 +137,55 @@ class UpdateManagerTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 check_github_release("1.1.3", installation="portable", timeout=3)
+
+    def test_release_discovery_rejects_misflagged_prerelease_tag(self) -> None:
+        response = _Response(_release_payload("1.2.0-rc1"))
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response):
+            with self.assertRaises(ValueError):
+                check_github_release("1.1.3", installation="portable", timeout=3)
+
+    def test_checksum_fallback_must_stay_on_same_release(self) -> None:
+        payload = json.loads(_release_payload(digest=False).decode("utf-8"))
+        checksum = next(item for item in payload["assets"] if item["name"] == "SHA256SUMS.txt")
+        checksum["browser_download_url"] = (
+            "https://github.com/Faysk/CinePulse/releases/download/v9.9.9/SHA256SUMS.txt"
+        )
+        response = _Response(json.dumps(payload).encode("utf-8"))
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response) as open_url:
+            with self.assertRaises(ValueError):
+                check_github_release("1.1.3", installation="portable", timeout=3)
+        self.assertEqual(1, open_url.call_count)
+
+    def test_github_update_info_is_bound_to_exact_asset_name(self) -> None:
+        with self.assertRaises(ValueError):
+            _validated_update_info(
+                UpdateInfo(
+                    "1.2.0",
+                    "https://github.com/Faysk/CinePulse/releases/download/v1.2.0/CinePulse-1.2.0-Setup.msi",
+                    "b" * 64,
+                    package_kind="msi",
+                    asset_name="different.msi",
+                    source="github-release",
+                )
+            )
+
+    def test_deferred_msi_handoff_rechecks_hash_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            updates = root / "updates"
+            staged = updates / "1.2.0" / "CinePulse-1.2.0-Setup.msi"
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(b"changed-after-staging")
+            info = UpdateInfo(
+                "1.2.0",
+                "https://github.com/Faysk/CinePulse/releases/download/v1.2.0/CinePulse-1.2.0-Setup.msi",
+                hashlib.sha256(b"original-package").hexdigest(),
+                package_kind="msi",
+                asset_name="CinePulse-1.2.0-Setup.msi",
+            )
+            with patch("cinepulse.update_manager._installed_update_root", return_value=updates):
+                with self.assertRaises(RuntimeError):
+                    launch_staged(info, staged, root / "app", 4321)
 
     def test_stage_rejects_invalid_version_before_filesystem_or_network(self) -> None:
         with self.assertRaises(ValueError):
