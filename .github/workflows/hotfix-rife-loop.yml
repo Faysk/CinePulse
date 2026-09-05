@@ -1,0 +1,131 @@
+name: Apply loop-aware RIFE hotfix
+
+on:
+  push:
+    branches:
+      - hotfix-1.1.3-storage-duration
+    paths:
+      - .github/workflows/hotfix-rife-loop.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Make RIFE loop-aware and align storage contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8-sig')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, got {count}: {old[:100]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          render_plan = Path('src/cinepulse/render_plan.py')
+          replace_once(
+              render_plan,
+              '''def _master_fps(data: PlanInput) -> float:\n    """Cadence used before optional one-shot RIFE interpolation.\n\n    RIFE keeps the original temporal information and is applied only once at\n    the end of the visual composition.  Non-RIFE modes intentionally reach the\n    requested cadence in the master using FFmpeg/repetition when needed.\n    """\n\n    if data.interpolation_mode == "rife" and data.target_fps > data.source_fps + 0.01:\n        return float(data.source_fps)\n    return float(data.target_fps)\n''',
+              '''def _master_fps(data: PlanInput) -> float:\n    """Cadence used by the target-aware master.\n\n    Music-loop projects interpolate the reusable clip once *before* the master\n    and VFX expansion, so the master can already run at target cadence.  This\n    avoids repeating the same neural interpolation for every loop iteration.\n    Original-video projects keep the previous one-shot final RIFE policy.\n    """\n\n    if data.interpolation_mode == "rife" and data.target_fps > data.source_fps + 0.01:\n        if data.project_mode == "music":\n            return float(data.target_fps)\n        return float(data.source_fps)\n    return float(data.target_fps)\n''',
+          )
+
+          rp_text = render_plan.read_text(encoding='utf-8')
+          old_rife_base = '''    # Phase 2 removes the old 24/30 -> 60 RIFE pass.  RIFE is now one-shot and\n    # can only run after the visual composition if target FPS truly requires it.\n    steps.append(\n        RenderStep(\n            key="rife_base",\n            title="RIFE base",\n            status="skip",\n            reason="eliminado na Phase 2; nunca interpolar para um master intermediário e interpolar novamente depois",\n            device="—",\n            input_spec=current,\n            output_spec=current,\n            notes=("CP-002: no máximo uma chamada RIFE por render.",),\n        )\n    )\n\n'''
+          new_rife_base = '''    # Hotfix 1.1.3: music loops interpolate the reusable clip once before the\n    # timeline is expanded. Synthetic VFX are then rendered directly at target\n    # cadence. Original-video projects retain the one-shot final RIFE policy.\n    music_rife_requested = (\n        data.project_mode == "music"\n        and data.interpolation_mode == "rife"\n        and target.fps > current.fps + 0.01\n    )\n    rife_base_runs = bool(music_rife_requested and data.rife_available)\n    if music_rife_requested:\n        if data.rife_available:\n            rife_base_out = FrameSpec(current.width, current.height, target.fps, current.pixel_format)\n            steps.append(\n                RenderStep(\n                    key="rife_base",\n                    title="RIFE do clipe reutilizável",\n                    status="run",\n                    reason=f"interpola o clipe uma única vez: {current.fps:g} → {target.fps:g} fps antes de expandir o loop",\n                    device="CPU" if data.use_cpu else "GPU",\n                    input_spec=current,\n                    output_spec=rife_base_out,\n                    materializes_frames=True,\n                    notes=(\n                        "Hotfix 1.1.3: a duração da música não multiplica o trabalho neural do clipe repetido.",\n                        "CP-002 continua one-shot: não existe segunda chamada RIFE depois dos VFX.",\n                    ),\n                )\n            )\n            current = rife_base_out\n        else:\n            steps.append(\n                RenderStep(\n                    key="rife_base",\n                    title="RIFE do clipe reutilizável",\n                    status="conditional",\n                    reason="RIFE está ausente; o master atingirá a cadência alvo com fallback FFmpeg explícito",\n                    device="—",\n                    input_spec=current,\n                    output_spec=current,\n                    notes=("Nenhum master neural é materializado sem o componente local.",),\n                )\n            )\n    else:\n        steps.append(\n            RenderStep(\n                key="rife_base",\n                title="RIFE do clipe reutilizável",\n                status="skip",\n                reason=(\n                    "reservado a loops musicais que realmente precisam elevar o FPS"\n                    if data.project_mode != "music"\n                    else f"ignorado: {current.fps:g} fps já atendem ao destino de {target.fps:g} fps"\n                ),\n                device="—",\n                input_spec=current,\n                output_spec=current,\n                notes=("CP-002: no máximo uma chamada RIFE por render.",),\n            )\n        )\n\n'''
+          if rp_text.count(old_rife_base) != 1:
+              raise SystemExit('render_plan: rife_base block mismatch')
+          rp_text = rp_text.replace(old_rife_base, new_rife_base, 1)
+          rp_text = rp_text.replace(
+              '''        "rife_calls_planned": 1 if final_rife_runs and data.rife_available else 0,\n''',
+              '''        "rife_calls_planned": int(rife_base_runs) + (1 if final_rife_runs and data.rife_available else 0),\n        "rife_loop_optimized": bool(rife_base_runs),\n''',
+              1,
+          )
+          render_plan.write_text(rp_text, encoding='utf-8')
+
+          storage = Path('src/cinepulse/storage_engine.py')
+          st = storage.read_text(encoding='utf-8-sig')
+          st = st.replace(
+              '''        if plan.project_mode == "music" and key in {"color", "enhancement", "master", "transition"}:\n''',
+              '''        if plan.project_mode == "music" and key in {"color", "enhancement", "rife_base", "master", "transition"}:\n''',
+              1,
+          )
+          st = st.replace(
+              '''    ai = plan.step("enhancement")\n    rife = plan.step("rife_final")\n    color = plan.step("color")\n    ai_will_attempt = ai.attempts and plan.enhancement_mode == "realesrgan"\n    rife_will_attempt = rife.attempts and plan.interpolation_mode == "rife"\n    color_prepass = color.runs and (ai_will_attempt or (rife_will_attempt and not plan.needs_master))\n''',
+              '''    ai = plan.step("enhancement")\n    rife_base = plan.step("rife_base")\n    rife = plan.step("rife_final")\n    color = plan.step("color")\n    ai_will_attempt = ai.attempts and plan.enhancement_mode == "realesrgan"\n    rife_final_will_attempt = rife.attempts and plan.interpolation_mode == "rife"\n    color_prepass = color.runs and (\n        ai_will_attempt\n        or rife_base.runs\n        or (rife_final_will_attempt and not plan.needs_master)\n    )\n''',
+              1,
+          )
+          marker = '''    for key in ("master", "transition", "vfx"):\n'''
+          if st.count(marker) != 1:
+              raise SystemExit('storage: master loop marker mismatch')
+          rife_base_estimate = '''    rife_chunk = MAX_CHUNK_FRAMES\n    if rife_base.runs and rife_base.input_spec and rife_base.output_spec and rife_base.materializes_frames:\n        seconds = stage_duration("rife_base")\n        ratio = rife_base.output_spec.fps / max(1.0, rife_base.input_spec.fps)\n        rife_chunk = choose_chunk_frames(\n            rife_base.input_spec, rife_base.output_spec, budget_gb=chunk_budget_gb,\n            output_frames_per_input=ratio,\n        )\n        working = _neural_chunk_gb(\n            rife_base.input_spec, rife_base.output_spec, rife_chunk,\n            output_frames_per_input=ratio,\n        )\n        interpolated = _compressed_gb(rife_base.output_spec, seconds, lossless=True)\n        stage_peak = max(current_persistent + working, current_persistent + interpolated * 2.05)\n        stages.append(StorageStageEstimate(\n            "rife_base", "RIFE do clipe reutilizável", interpolated, working, stage_peak, seconds,\n            f"{rife_chunk} quadro(s) fonte/lote; o master neural cobre apenas o clipe reutilizável.",\n        ))\n        current_persistent = interpolated\n        peak = max(peak, stage_peak)\n\n'''
+          st = st.replace(marker, rife_base_estimate + marker, 1)
+          st = st.replace(
+              '''    rife_chunk = MAX_CHUNK_FRAMES\n    if rife.attempts and rife.input_spec and rife.output_spec and rife.materializes_frames:\n''',
+              '''    if rife.attempts and rife.input_spec and rife.output_spec and rife.materializes_frames:\n''',
+              1,
+          )
+          storage.write_text(st, encoding='utf-8')
+
+          studio = Path('src/cinepulse/studio.py')
+          studio_text = studio.read_text(encoding='utf-8-sig')
+          studio_text = studio_text.replace(
+              '''            rife_active=render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION,\n''',
+              '''            rife_active=(\n                render_plan.step("rife_base").attempts or render_plan.step("rife_final").attempts\n            ) and settings.interpolation == RIFE_OPTION,\n''',
+              1,
+          )
+          # Same color contract exists once in the worker.
+          studio_text = studio_text.replace(
+              '''                rife_active=render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION,\n''',
+              '''                rife_active=(\n                    render_plan.step("rife_base").attempts or render_plan.step("rife_final").attempts\n                ) and settings.interpolation == RIFE_OPTION,\n''',
+              1,
+          )
+          studio_text = studio_text.replace(
+              '''            color_prepass = color_step.runs and (ai_will_run or (render_plan.step("rife_final").attempts and not render_plan.needs_master))\n''',
+              '''            color_prepass = color_step.runs and (\n                ai_will_run\n                or render_plan.step("rife_base").runs\n                or (render_plan.step("rife_final").attempts and not render_plan.needs_master)\n            )\n''',
+              1,
+          )
+          old_worker = '''            needs_master = render_plan.needs_master\n            visual_source = working_video\n            working_fps = source_fps\n            # Core Integrity Phase 2 intentionally removed the old RIFE-base\n            # execution path.  The planner may only request one RIFE pass and\n            # that pass occurs after visual composition when target FPS exceeds\n            # the effective source cadence.\n'''
+          new_worker = '''            working_fps = source_fps\n            rife_base_step = render_plan.step("rife_base")\n            if rife_base_step.runs and settings.interpolation == RIFE_OPTION:\n                base_rife_weight = 18.0\n                try:\n                    self._set_stage(\n                        "RIFE do clipe",\n                        f"Interpolando o clipe reutilizável uma única vez para {target_fps} fps antes de expandir o loop.",\n                    )\n                    previous_working = working_video\n                    working_video = self._interpolate_rife(\n                        working_video, job_dir, working_start, video_duration, working_fps, target_fps,\n                        settings.use_cpu, settings.cpu_threads, temp_paths, progress_base, base_rife_weight,\n                        color_plan=color_plan,\n                    )\n                    self._release_temp_path(previous_working, temp_paths)\n                    working_start = 0.0\n                    working_fps = float(target_fps)\n                    progress_base += base_rife_weight\n                    color_already_converted = True\n                    self._log(\n                        f"RIFE loop-aware: clipe {video_duration:.3f}s interpolado uma vez; "\n                        f"timeline final {project_duration:.3f}s reutiliza esse master."\n                    )\n                except InterruptedError:\n                    raise\n                except Exception as exc:\n                    self._log(f"RIFE do clipe falhou; o master usará fallback FFmpeg: {exc}")\n\n            needs_master = render_plan.needs_master\n            visual_source = working_video\n            # Hotfix 1.1.3 keeps RIFE one-shot: music loops process the reusable\n            # clip before master/VFX; original-video projects may still use the\n            # final RIFE stage after visual composition.\n'''
+          if studio_text.count(old_worker) != 1:
+              raise SystemExit('studio: worker RIFE marker mismatch')
+          studio_text = studio_text.replace(old_worker, new_worker, 1)
+          studio.write_text(studio_text, encoding='utf-8')
+
+          tests = Path('tests/test_render_plan.py')
+          test_text = tests.read_text(encoding='utf-8-sig')
+          old_test = '''    def test_rife_is_one_shot_after_master(self):\n        plan = self._plan(\n            source_width=1280,\n            source_height=720,\n            source_fps=24.0,\n            target_width=3840,\n            target_height=2160,\n            target_fps=60.0,\n            enhancement_mode="lanczos",\n            interpolation_mode="rife",\n        )\n        self.assertFalse(plan.step("rife_base").attempts)\n        self.assertEqual(plan.step("master").output_spec.fps, 24.0)\n        self.assertTrue(plan.step("rife_final").runs)\n        self.assertEqual(plan.step("rife_final").output_spec.fps, 60.0)\n        self.assertEqual(plan.metadata["rife_calls_planned"], 1)\n\n'''
+          new_test = '''    def test_music_rife_is_one_shot_on_reusable_clip(self):\n        plan = self._plan(\n            source_width=1280,\n            source_height=720,\n            source_fps=24.0,\n            target_width=3840,\n            target_height=2160,\n            target_fps=60.0,\n            enhancement_mode="lanczos",\n            interpolation_mode="rife",\n        )\n        self.assertTrue(plan.step("rife_base").runs)\n        self.assertEqual(plan.step("rife_base").output_spec.fps, 60.0)\n        self.assertEqual(plan.step("master").output_spec.fps, 60.0)\n        self.assertFalse(plan.step("rife_final").attempts)\n        self.assertEqual(plan.metadata["rife_calls_planned"], 1)\n        self.assertTrue(plan.metadata["rife_loop_optimized"])\n\n    def test_original_project_keeps_one_shot_final_rife(self):\n        plan = self._plan(\n            project_mode="original", source_fps=24.0, target_fps=60.0,\n            effects_active=True, interpolation_mode="rife",\n        )\n        self.assertFalse(plan.step("rife_base").attempts)\n        self.assertEqual(plan.step("master").output_spec.fps, 24.0)\n        self.assertTrue(plan.step("rife_final").runs)\n        self.assertEqual(plan.metadata["rife_calls_planned"], 1)\n        self.assertFalse(plan.metadata["rife_loop_optimized"])\n\n'''
+          if test_text.count(old_test) != 1:
+              raise SystemExit('test_render_plan: old RIFE test mismatch')
+          test_text = test_text.replace(old_test, new_test, 1)
+          tests.write_text(test_text, encoding='utf-8')
+
+          storage_tests = Path('tests/test_storage_engine.py')
+          stest = storage_tests.read_text(encoding='utf-8-sig')
+          old_regression = '''        self.assertAlmostEqual(long_by_key["vfx"].duration_seconds, 264.0)\n        self.assertAlmostEqual(long_by_key["rife_final"].duration_seconds, 264.0)\n        self.assertGreater(long_by_key["vfx"].persistent_gb, short_by_key["vfx"].persistent_gb * 20)\n        self.assertEqual(long.clip_duration_seconds, 10.0)\n        self.assertEqual(long.project_duration_seconds, 264.0)\n'''
+          new_regression = '''        self.assertAlmostEqual(long_by_key["rife_base"].duration_seconds, 10.0)\n        self.assertNotIn("rife_final", long_by_key)\n        self.assertAlmostEqual(long_by_key["vfx"].duration_seconds, 264.0)\n        self.assertGreater(long_by_key["vfx"].persistent_gb, short_by_key["vfx"].persistent_gb * 20)\n        self.assertLess(long.peak_scratch_gb, 100.0)\n        self.assertEqual(long.clip_duration_seconds, 10.0)\n        self.assertEqual(long.project_duration_seconds, 264.0)\n'''
+          if stest.count(old_regression) != 1:
+              raise SystemExit('test_storage_engine: regression marker mismatch')
+          stest = stest.replace(old_regression, new_regression, 1)
+          storage_tests.write_text(stest, encoding='utf-8')
+          PY
+      - name: Remove temporary writer workflow and commit
+        shell: bash
+        run: |
+          git rm .github/workflows/hotfix-rife-loop.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cinepulse/render_plan.py src/cinepulse/storage_engine.py src/cinepulse/studio.py tests/test_render_plan.py tests/test_storage_engine.py
+          git commit -m "fix: process RIFE once per reusable music clip"
+          git push origin HEAD:hotfix-1.1.3-storage-duration
