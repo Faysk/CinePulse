@@ -23,7 +23,26 @@ class FakeTelemetry:
         self.stages.append((stage, detail))
 
     def stop(self, *, status: str = "finished"):
-        payload = {"schema": 1, "status": status, "summary": {"wall_seconds": 1.25}}
+        payload = {
+            "schema": 1,
+            "status": status,
+            "summary": {
+                "wall_seconds": 1.25,
+                "stages": {
+                    "IA 2/3": {
+                        "sample_count": 3,
+                        "cpu": {"average_percent": 48.0},
+                        "ram": {"peak_percent": 61.0},
+                        "disk": {"average_read_mbps": 20.0, "average_write_mbps": 25.0},
+                        "gpu": {
+                            "average_utilization_percent": 42.0,
+                            "minimum_vram_free_mb": 1800.0,
+                            "peak_temperature_c": 72.0,
+                        },
+                    }
+                },
+            },
+        }
         self.destination.write_text(json.dumps(payload), encoding="utf-8")
         return payload
 
@@ -44,7 +63,13 @@ def test_render_history_records_hardware_evidence(monkeypatch, tmp_path: Path) -
     assert telemetry.started is True
     assert telemetry.stages[-1] == ("IA 2/3", "Real-ESRGAN em lote")
     assert (history.job_dir / "hardware-telemetry.json").is_file()
+    assert (history.job_dir / "hardware-advice.json").is_file()
 
     job = json.loads(history.job_path.read_text(encoding="utf-8"))
     assert job["hardware_telemetry"] == "hardware-telemetry.json"
     assert job["hardware_summary"]["wall_seconds"] == 1.25
+    assert job["hardware_advice"] == "hardware-advice.json"
+
+    advice = json.loads((history.job_dir / "hardware-advice.json").read_text(encoding="utf-8"))
+    assert advice["advice"]["physical_acceptance"] == "pending"
+    assert advice["advice"]["gpu_starved_stages"] == ["IA 2/3"]
