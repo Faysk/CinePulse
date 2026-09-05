@@ -3,8 +3,8 @@ from __future__ import annotations
 """Evidence-gated NVIDIA media acceleration policy.
 
 Hardware Utilization MegaPack H5 deliberately separates *capability* from
-*permission*.  Seeing ``cuda``/NVDEC/NVENC in FFmpeg only means a candidate may
-be benchmarked.  Runtime acceleration is allowed only after an exact
+*permission*. Seeing ``cuda``/NVDEC/NVENC in FFmpeg only means a candidate may
+be benchmarked. Runtime acceleration is allowed only after an exact
 hardware/driver/FFmpeg/media key has an integrity-, metadata- and quality-
 approved record.
 
@@ -20,7 +20,6 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Iterable
 
 from .media_profile import ColorProfile
 
@@ -99,7 +98,6 @@ def _names_from_listing(text: str) -> frozenset[str]:
         parts = stripped.split()
         if not parts:
             continue
-        # FFmpeg codec/filter listings normally start with a flags column.
         if len(parts) >= 2 and re.fullmatch(r"[A-Z\.]{1,8}", parts[0]):
             names.add(parts[1].lower())
         elif len(parts) == 1 and re.fullmatch(r"[A-Za-z0-9_\-]+", parts[0]):
@@ -139,14 +137,19 @@ class GpuMediaKey:
     space: str
     color_range: str
     operation: str
+    target_width: int = 0
+    target_height: int = 0
 
     def token(self) -> str:
+        target_width = max(1, int(self.target_width or self.width))
+        target_height = max(1, int(self.target_height or self.height))
         values = (
             " ".join(str(self.gpu_name).split()).lower() or "unknown-gpu",
             str(self.driver).strip().lower() or "unknown-driver",
             str(self.ffmpeg_fingerprint).strip().lower() or "unknown-ffmpeg",
             str(self.codec).strip().lower() or "unknown-codec",
             f"{max(1, int(self.width))}x{max(1, int(self.height))}",
+            f"{target_width}x{target_height}",
             str(self.pixel_format).strip().lower() or "unknown-pixfmt",
             str(max(1, int(self.bit_depth))),
             str(self.primaries).strip().lower() or "unknown",
@@ -169,6 +172,8 @@ class GpuMediaKey:
         height: int,
         profile: ColorProfile,
         operation: str,
+        target_width: int | None = None,
+        target_height: int | None = None,
     ) -> "GpuMediaKey":
         return cls(
             gpu_name=gpu_name,
@@ -184,6 +189,8 @@ class GpuMediaKey:
             space=profile.space,
             color_range=profile.range,
             operation=operation,
+            target_width=target_width or width,
+            target_height=target_height or height,
         )
 
 
@@ -366,7 +373,7 @@ def safe_candidate_policies(
 
     H5 starts deliberately narrow. HDR/PQ/HLG and unknown color metadata remain
     on the authoritative CPU/zscale path until a dedicated GPU color pipeline
-    has its own equivalence proof.  SDR candidates must preserve the declared
+    has its own equivalence proof. SDR candidates must preserve the declared
     transfer/primaries/matrix/range; this function does not perform conversion.
     """
 
