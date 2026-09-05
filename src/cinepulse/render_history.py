@@ -183,6 +183,15 @@ class RenderHistory:
                 except Exception:
                     pass
 
+    def latest_hardware_sample(self):
+        telemetry = self._telemetry
+        if telemetry is None:
+            return None
+        try:
+            return telemetry.latest_sample()
+        except Exception:
+            return None
+
     def write_plan(self, plan: Any) -> Path:
         path = self.job_dir / "plan.json"
         _atomic_json(path, _jsonable(plan))

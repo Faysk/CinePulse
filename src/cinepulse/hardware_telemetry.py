@@ -659,6 +659,11 @@ class HardwareTelemetrySession:
                 pass
             self._stop.wait(self.sample_interval)
 
+    def latest_sample(self) -> HardwareSample | None:
+        """Return the newest observational sample without stopping telemetry."""
+        with self._lock:
+            return self._samples[-1] if self._samples else None
+
     def stop(self, *, status: str = "finished") -> dict[str, Any]:
         self._stop.set()
         thread = self._thread

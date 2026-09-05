@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from tkinter import (
@@ -69,6 +70,7 @@ from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
 from .rife_engine import RifePaths, build_command as build_rife_command, target_frame_count
 from .pipeline_budget import derive_pipeline_budget
+from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
 from .pipeline_runtime import BackgroundCommand, measure_resource_headroom
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
@@ -4424,6 +4426,35 @@ class VideoOptimizerStudio:
             self._log(f"H4 Real-ESRGAN budget: {realesrgan_budget.reason}")
             self._log(f"H4 RIFE budget: {rife_budget.reason}")
 
+            h5_ai_controller = AdaptiveRuntimeController(
+                gpu_index=0,
+                allow_extract_overlap=realesrgan_budget.overlap_extract,
+                allow_pack_overlap=realesrgan_budget.overlap_pack,
+            )
+            h5_rife_controller = AdaptiveRuntimeController(
+                gpu_index=0,
+                allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
+                allow_pack_overlap=False,
+            )
+
+            def h5_guard(controller: AdaptiveRuntimeController) -> Callable[[], RuntimePressureDecision]:
+                def observe() -> RuntimePressureDecision:
+                    previous = controller.level
+                    sample = history.latest_hardware_sample() if history is not None else None
+                    decision = controller.observe(sample)
+                    if decision.level > previous:
+                        reason = ", ".join(decision.reasons) or "pressão observada"
+                        self._log(
+                            f"H5 DOWNSHIFT level={decision.level}: {reason}; "
+                            f"chunk={decision.chunk_scale:.2f}x, extract_overlap={decision.allow_extract_overlap}, "
+                            f"pack_overlap={decision.allow_pack_overlap}. Qualidade/modelo/FPS permanecem inalterados."
+                        )
+                    return decision
+                return observe
+
+            h5_ai_guard = h5_guard(h5_ai_controller)
+            h5_rife_guard = h5_guard(h5_rife_controller)
+
             def stage_threads(stage: str, *, gpu_active: bool = False) -> int:
                 plan = schedule_cpu_threads(
                     stage, topology=cpu_topology, mode=machine_mode, gpu_active=gpu_active,
@@ -4489,6 +4520,7 @@ class VideoOptimizerStudio:
                                     chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                     overlap_extract=realesrgan_budget.overlap_extract,
                     overlap_pack=realesrgan_budget.overlap_pack,
+                    runtime_guard=h5_ai_guard,
 )
                 self._release_temp_path(consumed_before_ai, temp_paths)
                 progress_base += 20.0
@@ -4511,6 +4543,7 @@ class VideoOptimizerStudio:
                         color_plan=color_plan,
                                             chunk_budget_gb=rife_budget.chunk_budget_gb,
                         overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
+                        runtime_guard=h5_rife_guard,
 )
                     self._release_temp_path(previous_working, temp_paths)
                     working_start = 0.0
@@ -4688,6 +4721,7 @@ class VideoOptimizerStudio:
                         color_plan=color_plan,
                                             chunk_budget_gb=rife_budget.chunk_budget_gb,
                         overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
+                        runtime_guard=h5_rife_guard,
 )
                     self._release_temp_path(previous_visual, temp_paths)
                     visual_fps = float(target_fps)
@@ -5119,6 +5153,7 @@ class VideoOptimizerStudio:
         cpu_threads: int, base: float, weight: float, *, cache_source_video: str | None = None,
         cache_quota_gb: float = 50.0, chunk_budget_gb: float = 4.0, overlap_extract: bool = False,
         overlap_pack: bool = False,
+        runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
     ) -> tuple[str, int, int]:
         """Run Real-ESRGAN with a bounded PNG working set (CP-012/CP-021).
 
@@ -5229,7 +5264,24 @@ class VideoOptimizerStudio:
             while processed < total_frames:
                 if self._cancelled:
                     raise InterruptedError
-                count = min(chunk_frames, total_frames - processed)
+                decision = runtime_guard() if runtime_guard is not None else None
+                if decision is not None:
+                    if decision.level > 0 and prefetch is not None:
+                        prefetched_dir = prefetch[2]
+                        task = prefetch[4]
+                        task.cancel()
+                        try:
+                            task.wait(timeout=5.0)
+                        except Exception:
+                            pass
+                        safe_rmtree(prefetched_dir)
+                        prefetch = None
+                    overlap_extract = overlap_extract and decision.allow_extract_overlap
+                    overlap_pack = overlap_pack and decision.allow_pack_overlap
+                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
+                else:
+                    active_chunk_frames = chunk_frames
+                count = min(active_chunk_frames, total_frames - processed)
                 chunk_index += 1
                 chunk_start = start_time + processed / max(1.0, source_fps)
                 chunk_duration = count / max(1.0, source_fps)
@@ -5579,6 +5631,7 @@ class VideoOptimizerStudio:
         color_plan: ColorPipeline,
         chunk_budget_gb: float = 4.0,
         overlap_extract: bool = False,
+        runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
     ) -> str:
         """Interpolate with RIFE using bounded frame chunks (CP-012).
 
@@ -5616,9 +5669,9 @@ class VideoOptimizerStudio:
             "PNGs são liberados após cada lote."
         )
 
-        def source_chunk_count(offset: int) -> int:
+        def source_chunk_count(offset: int, limit: int | None = None) -> int:
             remaining = source_count - offset
-            count = min(chunk_frames, remaining)
+            count = min(max(2, int(limit or chunk_frames)), remaining)
             if remaining - count == 1:
                 count += 1
             count = min(count, remaining)
@@ -5642,7 +5695,23 @@ class VideoOptimizerStudio:
             while processed_source < source_count:
                 if self._cancelled:
                     raise InterruptedError
-                count = source_chunk_count(processed_source)
+                decision = runtime_guard() if runtime_guard is not None else None
+                if decision is not None:
+                    if decision.level > 0 and prefetch is not None:
+                        prefetched_incoming = prefetch[2]
+                        task = prefetch[3]
+                        task.cancel()
+                        try:
+                            task.wait(timeout=5.0)
+                        except Exception:
+                            pass
+                        safe_rmtree(prefetched_incoming)
+                        prefetch = None
+                    overlap_extract = overlap_extract and decision.allow_extract_overlap
+                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames, minimum=2)
+                else:
+                    active_chunk_frames = chunk_frames
+                count = source_chunk_count(processed_source, active_chunk_frames)
                 if count < 2:
                     # A one-frame tail cannot be interpolated independently;
                     # it is intentionally represented by the preceding chunk.
@@ -5690,7 +5759,7 @@ class VideoOptimizerStudio:
                     raise RuntimeError("RIFE recebeu menos de dois quadros no lote.")
 
                 next_processed = processed_source + count
-                next_count = source_chunk_count(next_processed) if next_processed < source_count else 0
+                next_count = source_chunk_count(next_processed, active_chunk_frames) if next_processed < source_count else 0
                 if overlap_extract and next_count >= 2 and prefetch is None:
                     next_index = chunk_index + 1
                     next_incoming = chunk_root / f"chunk_{next_index:05d}_in"
