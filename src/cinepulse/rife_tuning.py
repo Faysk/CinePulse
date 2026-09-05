@@ -60,10 +60,18 @@ class RifeSample:
     output_frames: int | None = None
     expected_frames: int | None = None
     black_frame_ok: bool = True
+    quality_ok: bool = True
+    quality_psnr_db: float | None = None
 
     @property
     def accepted(self) -> bool:
-        if self.oom or not self.integrity_ok or not self.black_frame_ok or self.wall_seconds <= 0:
+        if (
+            self.oom
+            or not self.integrity_ok
+            or not self.black_frame_ok
+            or not self.quality_ok
+            or self.wall_seconds <= 0
+        ):
             return False
         if self.expected_frames is not None and self.output_frames != self.expected_frames:
             return False
@@ -119,7 +127,7 @@ def downshift_policy(failed: RifePolicy, candidates: Iterable[RifePolicy], *, fa
 
 
 class RifeTuningStore:
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -137,7 +145,11 @@ class RifeTuningStore:
 
     def lookup(self, key: RifeTuningKey, *, gpu_index: int = 0) -> RifePolicy | None:
         record = self._load().get("records", {}).get(key.token())
-        if not isinstance(record, dict) or not record.get("integrity_ok"):
+        if (
+            not isinstance(record, dict)
+            or not record.get("integrity_ok")
+            or not record.get("quality_ok")
+        ):
             return None
         raw = record.get("policy")
         if not isinstance(raw, dict):
@@ -179,9 +191,26 @@ class RifeTuningStore:
             "policy": asdict(winner),
             "wall_seconds": float(winner_sample.wall_seconds),
             "integrity_ok": True,
+            "quality_ok": bool(winner_sample.quality_ok),
+            "quality_psnr_db": winner_sample.quality_psnr_db,
             "sample_count": len(values),
             "accepted_sample_count": len(accepted),
             "oom_sample_count": sum(1 for sample in values if sample.oom),
+            "samples": [
+                {
+                    "policy": asdict(sample.policy),
+                    "wall_seconds": float(sample.wall_seconds),
+                    "integrity_ok": bool(sample.integrity_ok),
+                    "black_frame_ok": bool(sample.black_frame_ok),
+                    "quality_ok": bool(sample.quality_ok),
+                    "quality_psnr_db": sample.quality_psnr_db,
+                    "oom": bool(sample.oom),
+                    "output_frames": sample.output_frames,
+                    "expected_frames": sample.expected_frames,
+                    "accepted": sample.accepted,
+                }
+                for sample in values
+            ],
             "updated_unix": time.time(),
         }
         payload["version"] = self.VERSION
