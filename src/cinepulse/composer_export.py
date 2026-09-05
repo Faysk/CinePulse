@@ -75,6 +75,7 @@ class ComposerExportRequest:
     ffmpeg: str
     ffprobe: str
     audio_sources: Mapping[str, str | Path]
+    output_audio: str | Path | None = None
 
 
 @dataclass(frozen=True)
@@ -124,13 +125,20 @@ def _video_encode_command(request: ComposerExportRequest, target: Path) -> list[
 
 
 def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:
-    master = request.audio_sources.get("master")
-    command = [str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(visual)]
-    if master:
-        command += ["-i", str(master), "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "copy", "-shortest"]
-    else:
-        command += ["-map", "0:v:0", "-c:v", "copy"]
-    command.append(str(target))
+    # Analysis bindings (master/vocals/drums/bass/other) control reactivity only.
+    # They must never replace or shorten the user's soundtrack implicitly. The
+    # original source audio is preserved unless a future caller explicitly sets
+    # output_audio. Project duration bounds a longer replacement without cutting
+    # video early when the audio stream happens to be shorter.
+    audio = request.output_audio or request.source
+    command = [
+        str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-i", str(visual), "-i", str(audio),
+        "-map", "0:v:0", "-map", "1:a:0?",
+        "-c:v", "copy", "-c:a", "copy",
+        "-t", f"{request.profile.duration:.6f}",
+        str(target),
+    ]
     return command
 
 

@@ -75,14 +75,35 @@ class ComposerExportTests(unittest.TestCase):
         self.assertIn("-pix_fmt gbrap", joined)
         self.assertNotIn("nvenc", joined.lower())
 
-    def test_mux_copies_reference_video_and_optional_master_audio(self) -> None:
+    def test_mux_preserves_source_audio_independent_from_analysis_master(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            command = _mux_command(self.request(root), root / "visual.mkv", root / "final.mkv")
+            request = ComposerExportRequest(
+                root / "source.mkv", root / "output.mkv", self.profile(),
+                OverlayComposerState([ComposerItem("logo", media=OverlayLayer(str(root / "logo.png"), "png"))]),
+                "ffmpeg", "ffprobe", {"master": root / "analysis-only.flac"},
+            )
+            command = _mux_command(request, root / "visual.mkv", root / "final.mkv")
         joined = " ".join(command)
+        self.assertIn(str(root / "source.mkv"), joined)
+        self.assertNotIn(str(root / "analysis-only.flac"), joined)
         self.assertIn("-c:v copy", joined)
         self.assertIn("-c:a copy", joined)
         self.assertIn("1:a:0?", joined)
+        self.assertIn("-t 1.000000", joined)
+        self.assertNotIn("-shortest", joined)
+
+    def test_mux_allows_explicit_output_audio_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = self.request(root)
+            request = ComposerExportRequest(
+                base.source, base.output, base.profile, base.state, base.ffmpeg, base.ffprobe,
+                base.audio_sources, output_audio=root / "replacement.flac",
+            )
+            joined = " ".join(_mux_command(request, root / "visual.mkv", root / "final.mkv"))
+        self.assertIn(str(root / "replacement.flac"), joined)
+        self.assertNotIn(str(root / "source.mkv"), joined)
 
     def test_read_exact_handles_short_pipe_reads(self) -> None:
         self.assertEqual(b"abcdef", _read_exact(ShortReader([b"a", b"bc", b"def"]), 6))

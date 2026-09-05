@@ -148,10 +148,10 @@ class OverlayComposerState:
 
     def set_audio_source(self, binding: object, source: str | Path) -> None:
         key = self._audio_binding(binding)
-        value = str(Path(source).expanduser()).strip()
-        if not value:
+        raw = str(source or "").strip()
+        if not raw:
             raise ValueError(f"composer audio source for {key} cannot be empty")
-        self.audio_sources[key] = value
+        self.audio_sources[key] = str(Path(raw).expanduser())
 
     def clear_audio_source(self, binding: object) -> bool:
         key = self._audio_binding(binding)
@@ -193,7 +193,12 @@ class OverlayComposerState:
         raw_audio = payload.get("audio_sources", {})
         if not isinstance(raw_audio, dict):
             raise ValueError("overlay composer audio_sources must be an object")
-        state = cls(audio_sources={str(key): str(value) for key, value in raw_audio.items()})
+        normalized_audio: dict[str, str] = {}
+        for key, value in raw_audio.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"composer audio source for {key!s} must be a non-empty path string")
+            normalized_audio[str(key)] = value
+        state = cls(audio_sources=normalized_audio)
         for raw in raw_items:
             if not isinstance(raw, dict):
                 raise ValueError("overlay composer item must be an object")

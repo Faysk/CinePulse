@@ -855,8 +855,8 @@ def show_overlay_composer(studio) -> None:
     ttk.Label(
         shell,
         text=(
-            "Prévia fiel limitada a 960×540; export CPU: FFV1 RGB lossless + master/stems configurados. "
-            "Bindings sem stem usam master; Stable intacto."
+            "Prévia fiel limitada a 960×540; master/stems configurados dirigem a reação visual. "
+            "O áudio final preserva a fonte; Stable intacto."
         ),
     ).grid(row=3, column=0, columnspan=2, sticky="e", pady=(5, 0))
 

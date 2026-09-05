@@ -54,7 +54,11 @@ class ComposerAudioSourceStateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             state.set_audio_source("guitar", "guitar.wav")
         with self.assertRaises(ValueError):
+            state.set_audio_source("vocals", "")
+        with self.assertRaises(ValueError):
             OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"vocals": ""}})
+        with self.assertRaises(ValueError):
+            OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"vocals": None}})
         with self.assertRaises(ValueError):
             OverlayComposerState.from_dict({"schema": 2, "items": [], "audio_sources": {"guitar": "x.wav"}})
 
