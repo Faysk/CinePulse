@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Evidence-gated H6 route selection for Preview Composer exports.
 
-This module intentionally decides *permission* only.  Capability detection is
+This module intentionally decides *permission* only. Capability detection is
 not enough: the exact GPU/driver/FFmpeg/base-profile/layer contract must have a
-record produced by the physical H6 benchmark.  Projects outside the narrow
+record produced by the physical H6 benchmark. Projects outside the narrow
 single static-media envelope remain on the deterministic CPU reference.
 """
 
@@ -18,7 +18,7 @@ from .gpu_compositor import (
     OverlayLayer,
     cuda_layer_eligible,
 )
-from .hardware import HardwareInfo
+from .hardware import HardwareProfile
 from .overlay_composer import OverlayComposerState
 
 
@@ -32,7 +32,7 @@ class ComposerGpuRoute:
 
 def build_compositor_key(
     *,
-    hardware: HardwareInfo,
+    hardware: HardwareProfile,
     caps: GpuCompositorCapabilities,
     width: int,
     height: int,
@@ -63,7 +63,7 @@ def build_compositor_key(
 def select_gpu_export_route(
     state: OverlayComposerState,
     *,
-    hardware: HardwareInfo,
+    hardware: HardwareProfile,
     caps: GpuCompositorCapabilities,
     store: GpuCompositorStore,
     width: int,
@@ -78,7 +78,7 @@ def select_gpu_export_route(
     """Select the narrow H6 fast path or fail closed to CPU reference.
 
     The first runtime envelope is deliberately one enabled media layer and no
-    visualizer.  Multiple layers require a separately benchmarked graph because
+    visualizer. Multiple layers require a separately benchmarked graph because
     accumulated color/alpha rounding and ordering can differ even if each layer
     passed independently.
     """
