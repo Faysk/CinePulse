@@ -55,7 +55,7 @@ jobs:
         run: |
           git config user.name "CinePulse Automation"
           git config user.email "actions@users.noreply.github.com"
-          git rm .github/workflows/_tmp-h4-rife-prefetch.yml scripts/_tmp_h4_rife_prefetch.py
+          git rm -f .github/workflows/_tmp-h4-rife-prefetch.yml scripts/_tmp_h4_rife_prefetch.py
           git add src/cinepulse/studio.py
           git commit -m "Hardware H4: prefetch RIFE input with bounded backpressure"
           git push origin HEAD:preview-restoration-lab
