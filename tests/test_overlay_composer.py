@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,8 @@ from cinepulse.overlay_composer import (
     ComposerItem,
     OverlayComposerState,
     VisualizerLayer,
+    evaluate_media_frame,
+    evaluate_visualizer_frame,
     media_layer_from_path,
     route_item,
     route_project,
@@ -69,6 +72,8 @@ class OverlayComposerTests(unittest.TestCase):
             layer = VisualizerLayer(kind, binding="drums", reaction=1.25, bars=96)
             self.assertEqual("drums", layer.binding)
             self.assertEqual(kind, layer.kind)
+        with self.assertRaises(ValueError):
+            VisualizerLayer("waveform", binding="not-a-stem")  # type: ignore[arg-type]
 
     def test_visualizer_stays_cpu_until_shader_parity_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -117,6 +122,54 @@ class OverlayComposerTests(unittest.TestCase):
                 keys={},
             )
             self.assertEqual(("logo", "viz"), tuple(route.item_id for route in routes))
+
+    def test_preview_state_roundtrips_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "composer.json"
+            state = OverlayComposerState([
+                ComposerItem("logo", media=OverlayLayer("logo.png", "png", opacity=0.7, pulse=0.5)),
+                ComposerItem("viz", visualizer=VisualizerLayer("circular", binding="bass", spin_rpm=2.0)),
+                ComposerItem("hidden", media=OverlayLayer("hidden.webp", "webp"), enabled=False),
+            ])
+            state.save(path)
+            restored = OverlayComposerState.load(path)
+            self.assertEqual(state.as_dict(), restored.as_dict())
+            self.assertEqual(1, json.loads(path.read_text(encoding="utf-8"))["schema"])
+            self.assertFalse(any(child.suffix == ".tmp" for child in path.parent.iterdir()))
+
+    def test_invalid_or_duplicate_persisted_state_fails_closed(self) -> None:
+        with self.assertRaises(ValueError):
+            OverlayComposerState.from_dict({"schema": 999, "items": []})
+        duplicate = {
+            "schema": 1,
+            "items": [
+                {"id": "same", "enabled": True, "media": {"source": "a.png", "kind": "png"}, "visualizer": None},
+                {"id": "same", "enabled": True, "media": {"source": "b.png", "kind": "png"}, "visualizer": None},
+            ],
+        }
+        with self.assertRaises(ValueError):
+            OverlayComposerState.from_dict(duplicate)
+
+    def test_media_reactive_frame_uses_pulse_beat_and_spin_deterministically(self) -> None:
+        layer = OverlayLayer(
+            "logo.png", "png", scale=2.0, rotation_degrees=10.0,
+            spin_rpm=5.0, pulse=1.0, beat_reaction=1.0,
+        )
+        calm = evaluate_media_frame(layer, time_seconds=2.0, rms=0.0, onset=0.0)
+        active = evaluate_media_frame(layer, time_seconds=2.0, rms=1.0, onset=1.0)
+        self.assertEqual(70.0, calm.rotation_degrees)
+        self.assertEqual(calm.rotation_degrees, active.rotation_degrees)
+        self.assertGreater(active.scale, calm.scale)
+        self.assertGreater(active.reaction, calm.reaction)
+
+    def test_visualizer_frame_is_bounded_and_audio_reactive(self) -> None:
+        layer = VisualizerLayer("spectrum", scale=1.5, reaction=2.0, spin_rpm=10.0)
+        calm = evaluate_visualizer_frame(layer, time_seconds=1.0, rms=0.0, onset=0.0, band_energy=0.0)
+        hot = evaluate_visualizer_frame(layer, time_seconds=1.0, rms=10.0, onset=10.0, band_energy=10.0)
+        self.assertEqual(60.0, calm.rotation_degrees)
+        self.assertEqual(0.0, calm.reaction)
+        self.assertEqual(1.0, hot.reaction)
+        self.assertGreater(hot.scale, calm.scale)
 
 
 if __name__ == "__main__":
