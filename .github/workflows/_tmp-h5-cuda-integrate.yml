@@ -12,6 +12,8 @@ permissions:
 jobs:
   integrate:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
     steps:
       - uses: actions/checkout@v6
         with:
