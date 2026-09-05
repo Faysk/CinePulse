@@ -39,6 +39,9 @@ def build_exact_rgba_command(
 
     # select=n is slower than timestamp seeking but exact for the CPU reference.
     # Escaping the comma keeps the filter portable through FFmpeg's parser.
+    # `-vsync 0` was deprecated and is no longer accepted by FFmpeg 9 on the
+    # Windows release runner. `-fps_mode passthrough` is the modern per-stream
+    # equivalent and, critically, still prevents implicit duplication/drop.
     select = f"select=eq(n\\,{int(position.frame_index)}),format=rgba"
     return [
         str(ffmpeg),
@@ -50,8 +53,8 @@ def build_exact_rgba_command(
         str(layer.source),
         "-vf",
         select,
-        "-vsync",
-        "0",
+        "-fps_mode",
+        "passthrough",
         "-frames:v",
         "1",
         "-pix_fmt",
