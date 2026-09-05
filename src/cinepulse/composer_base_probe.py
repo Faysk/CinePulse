@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from .composer_export import ComposerBaseProfile
+from .composer_profile import ComposerBaseProfile
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
