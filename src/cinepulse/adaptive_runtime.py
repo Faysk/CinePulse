@@ -40,12 +40,13 @@ class AdaptiveRuntimeController:
 
     The controller never changes models, scale, target FPS, color/HDR,
     interpolation, codec quality or verification. It only reduces future
-    buffering/concurrency when machine evidence reaches conservative pressure
-    thresholds. Once reduced, a render never automatically ramps back up.
+    buffering/concurrency for capacity/stability pressure. Temperature alone is
+    observational: H8 thermal/power/clock downshift requires a sustained decline
+    in measured completed-work throughput.
 
-    ``overnight=True`` adds H8's sustained window (power, clock and scratch
-    saturation) on top of the original instantaneous RAM/VRAM/temperature gate.
-    Normal renders retain the previous behavior.
+    ``overnight=True`` adds H8's sustained window and learned neural-throughput
+    warm-up on top of the RAM/VRAM capacity guard. A render never auto-ramps back
+    above the policy it started with.
     """
 
     def __init__(
@@ -65,7 +66,9 @@ class AdaptiveRuntimeController:
         self._reasons: tuple[str, ...] = ()
         self._cpu_scale = 1.0
         self._cooldown_hint_seconds = 0.0
-        overlap_depth = 3 if self._baseline_extract and self._baseline_pack else (2 if self._baseline_extract or self._baseline_pack else 1)
+        overlap_depth = 3 if self._baseline_extract and self._baseline_pack else (
+            2 if self._baseline_extract or self._baseline_pack else 1
+        )
         self._overnight = OvernightRuntimeController(
             gpu_index=self.gpu_index,
             scratch_sustainable_mbps=scratch_sustainable_mbps,
@@ -76,6 +79,18 @@ class AdaptiveRuntimeController:
     @property
     def level(self) -> int:
         return self._level
+
+    @property
+    def throughput_ratio(self) -> float | None:
+        return self._overnight.throughput_ratio if self._overnight is not None else None
+
+    def record_throughput(self, units_per_second: float) -> None:
+        if self._overnight is not None:
+            self._overnight.record_throughput(units_per_second)
+
+    def record_instability(self) -> None:
+        if self._overnight is not None:
+            self._overnight.record_instability()
 
     def _decision(self) -> RuntimePressureDecision:
         if self._level >= 2:
@@ -105,18 +120,14 @@ class AdaptiveRuntimeController:
             return self._decision()
 
         selected_gpu = next((gpu for gpu in sample.gpus if int(gpu.index) == self.gpu_index), None)
-        temperature = selected_gpu.temperature_c if selected_gpu is not None else None
         vram_free = selected_gpu.vram_free_mb if selected_gpu is not None else None
         ram_percent = sample.ram_percent
 
         critical: list[str] = []
         caution: list[str] = []
 
-        if temperature is not None:
-            if temperature >= 88.0:
-                critical.append(f"GPU {temperature:.1f}°C")
-            elif temperature >= 84.0:
-                caution.append(f"GPU {temperature:.1f}°C")
+        # Capacity guards protect against paging/OOM and are allowed to act
+        # immediately. Temperature is intentionally absent here.
         if ram_percent is not None:
             if ram_percent >= 94.0:
                 critical.append(f"RAM {ram_percent:.1f}%")
@@ -138,9 +149,12 @@ class AdaptiveRuntimeController:
                 requested = mapped_level
                 evidence = list(sustained.reasons)
             # H8 limits remain monotonic in OvernightRuntimeController. Merge
-            # them conservatively with the legacy pressure envelope.
+            # them conservatively with the H4 pressure envelope.
             self._cpu_scale = min(self._cpu_scale, sustained.cpu_scale)
-            self._cooldown_hint_seconds = max(self._cooldown_hint_seconds, sustained.cooldown_hint_seconds)
+            self._cooldown_hint_seconds = max(
+                self._cooldown_hint_seconds,
+                sustained.cooldown_hint_seconds,
+            )
 
         if requested > self._level:
             self._level = requested
