@@ -9,8 +9,10 @@ from cinepulse.gpu_encode import NvencContract, ResidentEncodeEvidence, Resident
 
 def contract() -> NvencContract:
     return NvencContract(
-        encoder="h264_nvenc", preset="p7", rate_control="vbr", pixel_format="yuv420p",
-        cq=18, bitrate_kbps=30000, maxrate_kbps=45000, bufsize_kbps=90000, lookahead=16, bframes=3,
+        encoder="hevc_nvenc", preset="p7", rate_control="vbr", pixel_format="yuv420p", profile="main",
+        cq=14, bitrate_kbps=30000, maxrate_kbps=60000, bufsize_kbps=120000, bframes=2,
+        tune="hq", spatial_aq=True, temporal_aq=True, aq_strength=8,
+        multipass="fullres", b_ref_mode="middle", gop=30,
     )
 
 
@@ -29,21 +31,34 @@ def good() -> ResidentEncodeEvidence:
 
 
 class GpuEncodeTests(unittest.TestCase):
-    def test_contract_hash_changes_with_quality_options(self) -> None:
+    def test_contract_hash_changes_with_every_quality_relevant_option(self) -> None:
         original = contract()
-        changed = NvencContract(
-            encoder="h264_nvenc", preset="p7", rate_control="vbr", pixel_format="yuv420p",
-            cq=20, bitrate_kbps=30000, maxrate_kbps=45000, bufsize_kbps=90000, lookahead=16, bframes=3,
-        )
-        self.assertNotEqual(original.token(), changed.token())
+        variants = [
+            NvencContract(**{**original.__dict__, "cq": 15}),
+            NvencContract(**{**original.__dict__, "tune": "ll"}),
+            NvencContract(**{**original.__dict__, "spatial_aq": False}),
+            NvencContract(**{**original.__dict__, "temporal_aq": False}),
+            NvencContract(**{**original.__dict__, "aq_strength": 9}),
+            NvencContract(**{**original.__dict__, "multipass": "qres"}),
+            NvencContract(**{**original.__dict__, "b_ref_mode": "disabled"}),
+            NvencContract(**{**original.__dict__, "gop": 60}),
+            NvencContract(**{**original.__dict__, "bframes": 3}),
+        ]
+        self.assertTrue(all(original.token() != item.token() for item in variants))
 
-    def test_ffmpeg_args_keep_explicit_rate_control(self) -> None:
+    def test_ffmpeg_args_keep_complete_cinepulse_quality_contract(self) -> None:
         args = contract().ffmpeg_args()
-        self.assertIn("h264_nvenc", args)
-        self.assertIn("p7", args)
-        self.assertIn("-cq", args)
-        self.assertIn("30000k", args)
-        self.assertIn("-rc-lookahead", args)
+        joined = " ".join(args)
+        for value in (
+            "hevc_nvenc", "p7", "-tune hq", "-rc vbr", "-cq 14", "30000k",
+            "-spatial-aq 1", "-temporal-aq 1", "-aq-strength 8",
+            "-multipass fullres", "-b_ref_mode middle", "-g 30", "-bf 2",
+        ):
+            self.assertIn(value, joined)
+
+    def test_invalid_aq_strength_without_aq_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            NvencContract("hevc_nvenc", "p7", "vbr", "yuv420p", bitrate_kbps=1000, aq_strength=8)
 
     def test_quality_or_seek_regression_is_rejected(self) -> None:
         quality_bad = ResidentEncodeEvidence(10, 5, 40, 0.99, True, True, True, True, True, 100, 100)
@@ -60,10 +75,7 @@ class GpuEncodeTests(unittest.TestCase):
             store = ResidentEncodeStore(Path(temporary) / "resident.json")
             self.assertTrue(store.record(key(), contract(), good()))
             self.assertTrue(store.approved(key()))
-            changed = NvencContract(
-                encoder="h264_nvenc", preset="p6", rate_control="vbr", pixel_format="yuv420p",
-                cq=18, bitrate_kbps=30000, maxrate_kbps=45000, bufsize_kbps=90000, lookahead=16, bframes=3,
-            )
+            changed = NvencContract(**{**contract().__dict__, "preset": "p6"})
             self.assertFalse(store.approved(key(changed)))
             self.assertFalse(store.record(key(), changed, good()))
 
