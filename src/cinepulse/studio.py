@@ -68,6 +68,8 @@ from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, ri
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
 from .rife_engine import RifePaths, build_command as build_rife_command, target_frame_count
+from .pipeline_budget import derive_pipeline_budget
+from .pipeline_runtime import measure_resource_headroom
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
@@ -4394,6 +4396,34 @@ class VideoOptimizerStudio:
             machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
             cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
 
+            neural_steps_active = bool(
+                render_plan.step("enhancement").attempts
+                or render_plan.step("rife_base").runs
+                or render_plan.step("rife_final").attempts
+            )
+            neural_headroom = measure_resource_headroom(
+                job_dir, gpu_index=0, probe_write=neural_steps_active, probe_size_mb=32
+            )
+            h4_common = dict(
+                ram_available_gb=neural_headroom.ram_available_gb,
+                vram_free_mb=neural_headroom.vram_free_mb,
+                scratch_free_gb=neural_headroom.scratch_free_gb,
+                scratch_write_mbps=neural_headroom.scratch_write_mbps,
+                dedicated=(machine_mode == "dedicated"),
+            )
+            realesrgan_budget = derive_pipeline_budget("realesrgan", **h4_common)
+            rife_budget = derive_pipeline_budget("rife", **h4_common)
+            self._log(
+                "H4 HEADROOM: "
+                f"RAM={neural_headroom.ram_available_gb if neural_headroom.ram_available_gb is not None else "n/a"} GiB • "
+                f"VRAM livre={neural_headroom.vram_free_mb if neural_headroom.vram_free_mb is not None else "n/a"} MiB • "
+                f"scratch livre={neural_headroom.scratch_free_gb:.2f} GiB • "
+                f"write={neural_headroom.scratch_write_mbps if neural_headroom.scratch_write_mbps is not None else "n/a"} MB/s • "
+                f"probe={neural_headroom.probe_bytes / (1024 ** 2):.0f} MiB"
+            )
+            self._log(f"H4 Real-ESRGAN budget: {realesrgan_budget.reason}")
+            self._log(f"H4 RIFE budget: {rife_budget.reason}")
+
             def stage_threads(stage: str, *, gpu_active: bool = False) -> int:
                 plan = schedule_cpu_threads(
                     stage, topology=cpu_topology, mode=machine_mode, gpu_active=gpu_active,
@@ -4456,7 +4486,8 @@ class VideoOptimizerStudio:
                     working_video, job_dir, working_start, video_duration, source_fps, source_w, source_h,
                     temp_paths, temp_dirs, stage_threads("neural_gpu", gpu_active=True), progress_base, 20,
                     cache_source_video=settings.video, cache_quota_gb=settings.cache_quota_gb,
-                )
+                                    chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
+)
                 self._release_temp_path(consumed_before_ai, temp_paths)
                 progress_base += 20.0
                 working_start = 0.0
@@ -4476,7 +4507,8 @@ class VideoOptimizerStudio:
                         working_video, job_dir, working_start, video_duration, working_fps, target_fps,
                         settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, base_rife_weight,
                         color_plan=color_plan,
-                    )
+                                            chunk_budget_gb=rife_budget.chunk_budget_gb,
+)
                     self._release_temp_path(previous_working, temp_paths)
                     working_start = 0.0
                     working_fps = float(target_fps)
@@ -4651,7 +4683,8 @@ class VideoOptimizerStudio:
                         visual_source, job_dir, 0.0, project_duration, visual_fps, target_fps,
                         settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, rife_weight,
                         color_plan=color_plan,
-                    )
+                                            chunk_budget_gb=rife_budget.chunk_budget_gb,
+)
                     self._release_temp_path(previous_visual, temp_paths)
                     visual_fps = float(target_fps)
                     progress_base += rife_weight
@@ -5080,7 +5113,7 @@ class VideoOptimizerStudio:
         self, video: str, output_dir: Path, start_time: float, duration: float, source_fps: float,
         source_w: int, source_h: int, temp_paths: list[Path], temp_dirs: list[Path],
         cpu_threads: int, base: float, weight: float, *, cache_source_video: str | None = None,
-        cache_quota_gb: float = 50.0,
+        cache_quota_gb: float = 50.0, chunk_budget_gb: float = 4.0,
     ) -> tuple[str, int, int]:
         """Run Real-ESRGAN with a bounded PNG working set (CP-012/CP-021).
 
@@ -5118,6 +5151,7 @@ class VideoOptimizerStudio:
         chunk_frames = choose_chunk_frames(
             FrameSpec(source_w, source_h, source_fps, "RGBA/PNG"),
             FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG"),
+            budget_gb=max(0.5, float(chunk_budget_gb)),
         )
         pipeline_parts = realesrgan_pipeline_threads(
             cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb
@@ -5440,6 +5474,7 @@ class VideoOptimizerStudio:
         weight: float,
         *,
         color_plan: ColorPipeline,
+        chunk_budget_gb: float = 4.0,
     ) -> str:
         """Interpolate with RIFE using bounded frame chunks (CP-012).
 
@@ -5463,6 +5498,7 @@ class VideoOptimizerStudio:
         chunk_frames = choose_chunk_frames(
             FrameSpec(frame_w, frame_h, source_fps, "RGBA/PNG"),
             FrameSpec(frame_w, frame_h, target_fps, "RGBA/PNG"),
+            budget_gb=max(0.5, float(chunk_budget_gb)),
             output_frames_per_input=ratio,
         )
         chunk_root = Path(tempfile.mkdtemp(prefix=f"rife_{time.time_ns()}_", dir=job_dir))
