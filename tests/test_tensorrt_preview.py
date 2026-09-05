@@ -17,7 +17,7 @@ def backend() -> TensorRtExternalBackend:
     return TensorRtExternalBackend("runner.exe", "1.4.0", "11.2", "Apache-2.0", True)
 
 
-def key(value: TensorRtExternalBackend | None = None) -> TensorRtKey:
+def key(value: TensorRtExternalBackend | None = None, *, baseline: str = "ncnn-proof-123") -> TensorRtKey:
     value = value or backend()
     return TensorRtKey(
         gpu_name="RTX Test",
@@ -26,6 +26,7 @@ def key(value: TensorRtExternalBackend | None = None) -> TensorRtKey:
         backend_fingerprint=value.fingerprint,
         model="rife",
         model_fingerprint="model123",
+        ncnn_baseline_fingerprint=baseline,
         width=3840,
         height=2160,
         precision="fp16",
@@ -56,6 +57,18 @@ class TensorRtPreviewTests(unittest.TestCase):
             self.assertTrue(store.approved(key(), backend()))
             other = TensorRtExternalBackend("other.exe", "1.4.0", "11.2", "Apache-2.0", True)
             self.assertFalse(store.approved(key(), other))
+
+    def test_ncnn_baseline_change_invalidates_tensor_rt_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = TensorRtPreviewStore(Path(temporary) / "trt.json")
+            good = TensorRtEvidence(10, 5, True, True, True, True, 80, 1.0)
+            self.assertTrue(store.record(key(baseline="policy-a"), backend(), good))
+            self.assertTrue(store.approved(key(baseline="policy-a"), backend()))
+            self.assertFalse(store.approved(key(baseline="policy-b"), backend()))
+
+    def test_empty_ncnn_baseline_fingerprint_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            key(baseline="")
 
     def test_runtime_version_mismatch_invalidates_permission(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
