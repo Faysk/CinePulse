@@ -56,6 +56,7 @@ from .paths import PATHS
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
 from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
+from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -4386,6 +4387,21 @@ class VideoOptimizerStudio:
                     },
                 )
 
+            cpu_topology = detect_cpu_topology()
+            dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
+            machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
+
+            def stage_threads(stage: str, *, gpu_active: bool = False) -> int:
+                plan = schedule_cpu_threads(
+                    stage, topology=cpu_topology, mode=machine_mode, gpu_active=gpu_active,
+                    max_threads=settings.cpu_threads,
+                )
+                self._log(
+                    f"H1 CPU {stage}: {plan.threads}/{plan.logical_cpus} threads "
+                    f"(cap {settings.cpu_threads}, {machine_mode}; {plan.reason})"
+                )
+                return plan.threads
+
             working_video = settings.video
             working_w, working_h = source_w, source_h
             working_start = loop_start
@@ -4413,7 +4429,7 @@ class VideoOptimizerStudio:
                     video_duration,
                     source_fps,
                     color_plan,
-                    settings.cpu_threads,
+                    stage_threads("color"),
                     progress_base,
                     5.0,
                 )
@@ -4425,7 +4441,7 @@ class VideoOptimizerStudio:
                 consumed_before_ai = working_video
                 working_video, working_w, working_h = self._enhance_clip_ai(
                     working_video, job_dir, working_start, video_duration, source_fps, source_w, source_h,
-                    temp_paths, temp_dirs, settings.cpu_threads, progress_base, 20,
+                    temp_paths, temp_dirs, stage_threads("neural_gpu", gpu_active=True), progress_base, 20,
                     cache_source_video=settings.video, cache_quota_gb=settings.cache_quota_gb,
                 )
                 self._release_temp_path(consumed_before_ai, temp_paths)
@@ -4445,7 +4461,7 @@ class VideoOptimizerStudio:
                     previous_working = working_video
                     working_video = self._interpolate_rife(
                         working_video, job_dir, working_start, video_duration, working_fps, target_fps,
-                        settings.use_cpu, settings.cpu_threads, temp_paths, progress_base, base_rife_weight,
+                        settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, base_rife_weight,
                         color_plan=color_plan,
                     )
                     self._release_temp_path(previous_working, temp_paths)
@@ -4495,7 +4511,7 @@ class VideoOptimizerStudio:
                     "-i", working_video,
                     "-map", "0:v:0", "-an", "-t", f"{video_duration:.6f}", "-vf", master_filter,
                 ] + self._intermediate_encoder(work_w, work_h, settings.use_cpu, color_plan) + [
-                    "-threads", str(settings.cpu_threads), "-progress", "pipe:1", "-nostats", str(master)
+                    "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)), "-progress", "pipe:1", "-nostats", str(master)
                 ]
                 self._run_ffmpeg(command, video_duration, progress_base, 10)
                 self._release_temp_path(working_video, temp_paths)
@@ -4508,7 +4524,7 @@ class VideoOptimizerStudio:
                     visual_source = self._create_transition(
                         str(master), transitioned, video_duration, transition_label,
                         transition_duration, work_w, work_h, settings.use_cpu, progress_base, 7,
-                        settings.cpu_threads, color_plan,
+                        stage_threads("vfx_cpu"), color_plan,
                     )
                     if visual_source != previous_visual:
                         self._release_temp_path(previous_visual, temp_paths)
@@ -4537,7 +4553,7 @@ class VideoOptimizerStudio:
                     if settings.use_stems:
                         try:
                             reactive_audio = self._prepare_reactive_audio(
-                                audio_source, settings.audio_focus, settings.use_cpu, settings.cpu_threads,
+                                audio_source, settings.audio_focus, settings.use_cpu, stage_threads("audio"),
                             )
                         except InterruptedError:
                             raise
@@ -4577,7 +4593,7 @@ class VideoOptimizerStudio:
                             FFMPEG, visual_source, reactive_audio, str(vfx_output), project_duration,
                             settings.effects, settings.color, settings.intensity, settings.occupancy,
                             work_w, work_h, work_fps, "100M" if max(work_w, work_h) > 1280 else "50M",
-                            "180M", "360M", settings.use_cpu, settings.cpu_threads,
+                            "180M", "360M", settings.use_cpu, stage_threads("vfx_cpu"),
                             settings.audio_focus, settings.reaction_smoothing, settings.reaction_expression,
                             settings.dynamic_sections, settings.section_dynamics,
                             lambda fraction: self._push_progress(progress_base + remaining_for_vfx * fraction),
@@ -4620,7 +4636,7 @@ class VideoOptimizerStudio:
                     previous_visual = visual_source
                     visual_source = self._interpolate_rife(
                         visual_source, job_dir, 0.0, project_duration, visual_fps, target_fps,
-                        settings.use_cpu, settings.cpu_threads, temp_paths, progress_base, rife_weight,
+                        settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, rife_weight,
                         color_plan=color_plan,
                     )
                     self._release_temp_path(previous_visual, temp_paths)
@@ -4677,7 +4693,7 @@ class VideoOptimizerStudio:
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
-                command += ["-threads", str(settings.cpu_threads), "-t", f"{project_duration:.6f}"]
+                command += ["-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t", f"{project_duration:.6f}"]
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
                 self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
@@ -4706,7 +4722,7 @@ class VideoOptimizerStudio:
             display_path = output_path
             if preview and settings.comparison_preview:
                 display_path = self._create_comparison_preview(
-                    output_path, settings, project_duration, loop_start, settings.cpu_threads,
+                    output_path, settings, project_duration, loop_start, stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
                 )
             self._events.put(("done", str(display_path), preview, display_path.stat().st_size, report_path, history.path if history else ""))
         except InterruptedError:

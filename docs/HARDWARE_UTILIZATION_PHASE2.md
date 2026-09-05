@@ -35,3 +35,7 @@ This is intentionally conservative until Phase 1 telemetry from physical hardwar
 Phase 2 may improve utilization but does not claim a performance win from CI alone. The code must pass Quality, Recovery Reliability and Windows Release Candidate gates, then physical before/after telemetry must be compared with the Phase 1 baseline using the same workload.
 
 A Phase 2 optimization is accepted only when throughput improves without changing output-quality contracts or weakening cancellation, atomic output, verification or recovery behavior.
+
+## Runtime stage-aware integration
+
+The render worker now derives a bounded CPU budget per stage from detected topology while treating the saved/user thread value as a hard ceiling. CPU-heavy stages can use the profile envelope; GPU neural stages deliberately keep host concurrency modest to protect laptop package power and driver feed. Concurrency changes only: image algorithms, model selection, color/HDR transforms, cadence, audio, verification and recovery contracts are unchanged. Physical throughput and thermal acceptance still require real hardware telemetry.

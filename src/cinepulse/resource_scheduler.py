@@ -135,6 +135,7 @@ def schedule_cpu_threads(
     mode: MachineMode = "balanced",
     gpu_active: bool = False,
     thermal_constrained: bool = False,
+    max_threads: int | None = None,
 ) -> CpuSchedule:
     if mode not in {"balanced", "dedicated"}:
         raise ValueError(f"Unsupported machine mode: {mode}")
@@ -143,6 +144,12 @@ def schedule_cpu_threads(
     physical = max(1, min(topology.physical_cores, logical))
     reserve = _reserve_threads(topology, mode)
     available = max(1, logical - reserve)
+    if max_threads is not None:
+        try:
+            requested_cap = max(1, min(logical, int(max_threads)))
+        except (TypeError, ValueError):
+            requested_cap = logical
+        available = min(available, requested_cap)
 
     if stage == "neural_gpu":
         # NCNN/Vulkan is GPU-bound. CPU mainly feeds image I/O; excessive host
@@ -187,20 +194,22 @@ def candidate_thread_counts(
     topology: CpuTopology | None = None,
     mode: MachineMode = "balanced",
     gpu_active: bool = False,
+    max_threads: int | None = None,
 ) -> tuple[int, ...]:
     """Return bounded benchmark candidates around the scheduler recommendation.
 
     H1 intentionally benchmarks a small monotonic set instead of blindly forcing
     every thread. Candidate selection is quality-neutral: only concurrency changes.
     """
-    schedule = schedule_cpu_threads(stage, topology=topology, mode=mode, gpu_active=gpu_active)
+    schedule = schedule_cpu_threads(stage, topology=topology, mode=mode, gpu_active=gpu_active, max_threads=max_threads)
     topology = topology or CpuTopology(schedule.logical_cpus, schedule.physical_cores)
     candidates = {
         max(1, topology.physical_cores),
         max(1, schedule.threads),
         max(1, int(round(schedule.threads * 0.75))),
     }
-    return tuple(sorted(value for value in candidates if value <= topology.logical_cpus))
+    ceiling = topology.logical_cpus if max_threads is None else max(1, min(topology.logical_cpus, int(max_threads)))
+    return tuple(sorted(value for value in candidates if value <= ceiling))
 
 
 def choose_proven_thread_count(

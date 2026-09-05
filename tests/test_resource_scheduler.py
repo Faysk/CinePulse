@@ -34,6 +34,19 @@ class ResourceSchedulerTests(unittest.TestCase):
         self.assertEqual(values, tuple(sorted(set(values))))
         self.assertTrue(all(1 <= value <= 20 for value in values))
 
+    def test_user_cap_is_never_exceeded(self) -> None:
+        plan = schedule_cpu_threads("encode", topology=self.topology, mode="dedicated", max_threads=7)
+        self.assertEqual(plan.threads, 7)
+
+    def test_gpu_stage_respects_smaller_manual_cap(self) -> None:
+        plan = schedule_cpu_threads("neural_gpu", topology=self.topology, mode="dedicated", gpu_active=True, max_threads=3)
+        self.assertEqual(plan.threads, 3)
+
+    def test_candidate_set_respects_user_cap(self) -> None:
+        values = candidate_thread_counts("encode", topology=self.topology, mode="dedicated", max_threads=9)
+        self.assertTrue(values)
+        self.assertTrue(all(value <= 9 for value in values))
+
     def test_benchmark_choice_requires_integrity(self) -> None:
         chosen = choose_proven_thread_count([(8, 20.0, True), (16, 10.0, False), (12, 15.0, True)], fallback_threads=8)
         self.assertEqual(chosen, 12)
