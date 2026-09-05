@@ -50,14 +50,17 @@ class ComposerExportTests(unittest.TestCase):
         self.assertFalse(self.profile(primaries="bt2020").reference_supported)
         self.assertFalse(self.profile(matrix="bt2020nc").reference_supported)
 
-    def test_decode_command_has_explicit_bt709_zscale_and_no_implicit_fps_conversion(self) -> None:
+    def test_decode_command_has_explicit_bt709_scale_range_and_no_implicit_fps_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             command = _base_decode_command(self.request(Path(temporary)), 4)
         joined = " ".join(command)
-        self.assertIn("zscale=matrixin=709", joined)
-        self.assertIn("primariesin=709", joined)
-        self.assertIn("transferin=709", joined)
-        self.assertIn("matrix=gbr", joined)
+        self.assertIn("scale=w=iw:h=ih", joined)
+        self.assertIn("in_color_matrix=bt709", joined)
+        self.assertIn("out_color_matrix=bt709", joined)
+        self.assertIn("in_range=tv", joined)
+        self.assertIn("out_range=pc", joined)
+        self.assertIn("format=rgba", joined)
+        self.assertNotIn("zscale", joined)
         self.assertIn("-fps_mode passthrough", joined)
         self.assertNotIn(" -r ", joined)
         self.assertIn("-pix_fmt rgba", joined)
