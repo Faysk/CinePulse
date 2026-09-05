@@ -1,0 +1,150 @@
+name: Temporary Prepare CinePulse 1.2.0
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - '.github/workflows/_tmp-release-1_2_0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Promote integrated software to 1.2.0 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'CinePulse Automation'
+          git config user.email 'actions@users.noreply.github.com'
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          replacements = {
+              'pyproject.toml': [('version = "1.1.3"', 'version = "1.2.0"')],
+              'src/cinepulse/__init__.py': [('__version__ = "1.1.3"', '__version__ = "1.2.0"')],
+              'scripts/Build-Portable.ps1': [("[string]$Version = '1.1.3'", "[string]$Version = '1.2.0'")],
+              'scripts/Build-Msi.ps1': [("[string]$Version = '1.1.3'", "[string]$Version = '1.2.0'")],
+              'scripts/Invoke-RcAcceptance.ps1': [("[string]$Version = '1.1.3'", "[string]$Version = '1.2.0'")],
+              '.github/workflows/release-candidate.yml': [('        default: 1.1.3', '        default: 1.2.0')],
+          }
+          for raw_path, pairs in replacements.items():
+              path = Path(raw_path)
+              text = path.read_text(encoding='utf-8-sig' if path.suffix == '.ps1' else 'utf-8')
+              for old, new in pairs:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'{raw_path}: expected one {old!r}, found {count}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8-sig' if path.suffix == '.ps1' else 'utf-8')
+
+          changelog = Path('CHANGELOG.md')
+          text = changelog.read_text(encoding='utf-8')
+          marker = '## Não lançado — Restauração Preview + Hardware H0–H8 + Overlay Composer'
+          if text.count(marker) != 1:
+              raise SystemExit('Expected one unreleased Preview changelog section')
+          text = text.replace(marker, '## 1.2.0 — 2026-09-06', 1)
+          anchor = '## 1.2.0 — 2026-09-06\n\n'
+          updater = (
+              '- adiciona verificação assíncrona da release Stable ao abrir e botão `Atualizar vX.Y.Z`; '
+              'o fluxo seleciona o pacote MSI/Portable exato, valida origem e SHA-256, espera trabalhos ativos e reinicia o CinePulse após a atualização;\n'
+          )
+          if updater not in text:
+              text = text.replace(anchor, anchor + updater, 1)
+          changelog.write_text(text, encoding='utf-8')
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          status_pattern = re.compile(r'> Estado Stable: `1\.1\.3`\..*?\n\n> O branch/PR de \*\*Restauração Preview\*\*.*?\n', re.S)
+          replacement = (
+              '> Estado Stable: `1.2.0`. Esta versão reúne o updater de um clique auditado com os laboratórios Preview de Restauração, Hardware H0–H8 e Overlay Composer/Music Visualizer. O fluxo Stable continua conservador: caminhos acelerados sem evidência física exata permanecem bloqueados ou caem para os fallbacks CPU/NCNN validados.\n\n'
+              '> Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.\n'
+          )
+          text, n = status_pattern.subn(replacement, text, count=1)
+          if n != 1:
+              raise SystemExit('README Stable/Preview status block not found exactly once')
+          old_update = 'O canal remoto de auto-update do portátil fica desativado por padrão no build estável. Quando ativado para distribuição, ele exige manifesto assinado e configuração explícita de confiança; instalações MSI continuam sendo atualizadas por um MSI mais novo.'
+          new_update = 'A partir do 1.2.0, o CinePulse consulta em background a release Stable mais recente no GitHub e mostra `Atualizar vX.Y.Z` quando houver uma versão final nova. Portable e MSI usam assets exatos da release e SHA-256; um canal de manifesto separado continua disponível apenas para implantações controladas e, quando configurado, exige assinatura.'
+          if text.count(old_update) != 1:
+              raise SystemExit('README legacy updater paragraph not found exactly once')
+          text = text.replace(old_update, new_update, 1)
+          privacy_old = 'O CinePulse é local-first. Vídeos, músicas e resultados não são enviados automaticamente para servidores. O histórico de render pode registrar **telemetria local de hardware** (CPU, RAM, disco e, quando disponível, métricas NVIDIA como utilização, VRAM, potência e temperatura) para diagnóstico e ajuste conservador do pipeline; esses dados ficam no computador e não são transmitidos automaticamente. Relatórios só são compartilhados quando o usuário decide fazê-lo. Veja [PRIVACY.md](docs/PRIVACY.md).'
+          privacy_new = 'O CinePulse é local-first. Vídeos, músicas, projetos e resultados não são enviados automaticamente para servidores. O histórico de render pode registrar **telemetria local de hardware** para diagnóstico; esses dados ficam no computador. O 1.2.0 faz apenas uma consulta HTTPS curta ao GitHub para descobrir uma Stable nova, sem anexar mídia, caminhos locais ou inventário do projeto. Relatórios só são compartilhados quando o usuário decide fazê-lo. Veja [PRIVACY.md](docs/PRIVACY.md).'
+          if text.count(privacy_old) != 1:
+              raise SystemExit('README privacy paragraph not found exactly once')
+          text = text.replace(privacy_old, privacy_new, 1)
+          readme.write_text(text, encoding='utf-8')
+
+          notes = Path('docs/RELEASE_1_2_0.md')
+          notes.write_text('''# CinePulse 1.2.0 — Preview Labs + One-click Update
+
+CinePulse 1.2.0 reúne o núcleo Stable já validado com três grandes áreas novas entregues de forma isolada e conservadora: **atualização pelo próprio aplicativo**, **Restauração Preview** e **Overlay Composer / Music Visualizer Preview**, além do Hardware Utilization MegaPack H0–H8.
+
+## Atualização dentro do CinePulse
+
+- Ao abrir, o CinePulse faz uma consulta curta e assíncrona à release Stable mais recente no GitHub.
+- Se houver uma versão final nova, aparece `Atualizar vX.Y.Z` sem bloquear a interface.
+- Um clique baixa o asset correto para MSI ou Portable, valida origem e SHA-256, aguarda render/fila/instalação de IA terminar e então aplica a atualização.
+- O MSI usa MajorUpgrade e reabre o launcher instalado; o Portable reutiliza a transação existente com manifesto, backup, verificação pós-cópia e rollback.
+- Falha de rede na checagem automática é silenciosa e não impede o uso local.
+- Usuários que ainda estão na 1.1.3 precisam instalar a 1.2.0 uma última vez pelo método atual; a 1.1.3 não possui o código do novo updater. Depois disso, versões Stable futuras podem ser descobertas pelo próprio CinePulse.
+
+## Restauração Preview
+
+- Detecta e permite revisar textos, QR codes e overlays persistentes antes da remoção.
+- Reconstrução temporal e restauração de cor usam guardas fail-closed para fonte alterada, VFR, memória e baixa confiança.
+- Export Preview é separado do Render Stable, cancelável e promovido atomicamente.
+- O envelope estrutural inclui planejamento experimental até 12K/120, sem transformar isso em promessa física de desempenho.
+
+## Hardware Utilization MegaPack H0–H8
+
+- Telemetria local por etapa para CPU, RAM, disco e métricas NVIDIA quando disponíveis.
+- Scheduler de CPU, tuning de Real-ESRGAN/RIFE, headroom RAM/VRAM/NVMe e overlap limitado por backpressure.
+- NVDEC/CUDA/NVENC e compositor GPU são **evidence-gated**: capacidade detectada não é permissão para substituir o caminho de referência.
+- TensorRT continua opcional e Preview-only, condicionado a uma baseline NCNN aprovada para a mesma máquina.
+- Overnight mede trabalho neural realmente concluído; temperatura alta isoladamente não reduz carga se o throughput continua melhor e estável.
+
+## Overlay Composer / Music Visualizer Preview
+
+- Layers PNG, GIF, APNG, WebP e vídeo com alpha.
+- X/Y, escala, opacidade, z-order, blends, rotação, loop, spin, pulse e reação a beat.
+- Waveform, spectrum e visualizador circular, com binding `master/vocals/drums/bass/other`.
+- Save/load, preview limitado para a interface e export CPU determinístico como referência de correção.
+- Stems dirigem a reatividade visual e não substituem silenciosamente a trilha final.
+
+## Segurança, recuperação e distribuição
+
+- Quality, Recovery Reliability, Installer v2 Acceptance e Release Candidate continuam sendo gates permanentes.
+- Cancelamento por árvore de processos, `AtomicOutput`, recuperação, locks hashados, build Portable, MSI e install/repair/uninstall permanecem parte da aceitação.
+- O updater aceita apenas release Stable final `x.y.z`, asset esperado da release oficial e SHA-256 válido; o fallback `SHA256SUMS.txt` precisa pertencer à mesma release.
+- A consulta automática de versão e seus metadados normais de rede estão documentados em `docs/PRIVACY.md`.
+
+## O que ainda não é uma promessa física
+
+Esta release **não** declara PASS físico para RTX 4070, utilização sustentada de GPU/VRAM/NVMe, CUDA/TensorRT, 8K/120 ou 12K/120 apenas porque o código e o CI hospedado passaram. Esses gates continuam separados e exigem execução real no hardware alvo. Até existir evidência exata, os caminhos experimentais permanecem bloqueados, Preview-only ou com fallback conservador.
+''', encoding='utf-8')
+          PY
+          rm -f .github/workflows/_tmp-release-1_2_0.yml
+          git add -A
+      - name: Verify release metadata and static audit
+        shell: bash
+        run: |
+          python -m compileall -q src scripts
+          python scripts/release_gate.py
+          python scripts/final_audit.py --output /tmp/final-audit-1.2.0.json
+      - name: Commit 1.2.0 preparation and remove temporary workflow
+        shell: bash
+        run: |
+          git status --short
+          git commit -m 'Prepare CinePulse 1.2.0 integrated latest release'
+          git push origin HEAD:preview-restoration-lab
