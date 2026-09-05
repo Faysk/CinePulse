@@ -39,6 +39,17 @@ class UpdateUxContractTests(unittest.TestCase):
         self.assertIn("DEFAULT_RELEASE_API", manager)
         self.assertIn("asset.get(\"digest\")", manager)
 
+    def test_ready_package_rechecks_busy_state_instead_of_closing_new_render(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn("self._prepared_update: tuple[update_manager.UpdateInfo, str] | None = None", studio)
+        self.assertIn("self._prepared_update = (info, staged)", studio)
+        self.assertIn("prepared = self._prepared_update", studio)
+        self.assertIn("O pacote já foi verificado", studio)
+        launch = studio.index("def _launch_prepared_update")
+        launch_end = studio.index("def _recover_interrupted_render", launch)
+        block = studio[launch:launch_end]
+        self.assertLess(block.index("self._busy or self._queue_running or self._ai_installing"), block.index("update_manager.launch_staged"))
+
     def test_installed_mode_uses_msi_major_upgrade_without_bootstrap_race(self) -> None:
         manager = self.text("src/cinepulse/update_manager.py")
         wix = self.text("installer/wix/Product.wxs")
