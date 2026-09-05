@@ -3,7 +3,7 @@ from __future__ import annotations
 """Physical H5 NVDEC/CUDA equivalence benchmark.
 
 This script never grants a generic GPU PASS. It records one exact media policy
-only when the candidate beats all structural, color-metadata, timing and
+only when the candidate beats all structural, color-metadata, timing, seek and
 quality gates against the authoritative CPU baseline.
 """
 
@@ -17,6 +17,10 @@ import time
 from pathlib import Path
 
 from cinepulse.gpu_media import (
+    DECODE_PSNR_FLOOR_DB,
+    DECODE_SSIM_FLOOR,
+    DEFAULT_PSNR_FLOOR_DB,
+    DEFAULT_SSIM_FLOOR,
     GpuMediaEvidence,
     GpuMediaKey,
     GpuMediaPolicy,
@@ -162,6 +166,14 @@ def _color_args(profile: ColorProfile) -> list[str]:
     ]
 
 
+def _seek_prefix(seconds: float) -> list[str]:
+    return ["-ss", f"{max(0.0, float(seconds)):.6f}"] if seconds > 0 else []
+
+
+def _clip_args(seconds: float) -> list[str]:
+    return ["-t", f"{max(0.05, float(seconds)):.6f}"] if seconds > 0 else []
+
+
 def _build_baseline(
     ffmpeg: str,
     source: Path,
@@ -171,8 +183,11 @@ def _build_baseline(
     width: int,
     height: int,
     scale: bool,
+    seek_seconds: float = 0.0,
+    clip_seconds: float = 0.0,
 ) -> list[str]:
-    command = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(source), "-map", "0:v:0", "-map", "0:a?"]
+    command = [ffmpeg, "-y", "-hide_banner", "-nostdin"] + _seek_prefix(seek_seconds) + ["-i", str(source)]
+    command += _clip_args(clip_seconds) + ["-map", "0:v:0", "-map", "0:a?"]
     if scale:
         command += ["-vf", f"zscale=w={width}:h={height}:dither=error_diffusion,format={profile.pixel_format}"]
     else:
@@ -190,8 +205,15 @@ def _build_candidate(
     profile: ColorProfile,
     width: int,
     height: int,
+    seek_seconds: float = 0.0,
+    clip_seconds: float = 0.0,
 ) -> list[str]:
-    command = [ffmpeg, "-y", "-hide_banner", "-nostdin"] + policy.input_args() + ["-i", str(source), "-map", "0:v:0", "-map", "0:a?"]
+    # CinePulse chunks seek before opening the input. Keep the physical proof in
+    # exactly that topology so CUVID keyframe behavior cannot hide behind a
+    # frame-zero-only benchmark.
+    command = [ffmpeg, "-y", "-hide_banner", "-nostdin"] + policy.input_args()
+    command += _seek_prefix(seek_seconds) + ["-i", str(source)] + _clip_args(clip_seconds)
+    command += ["-map", "0:v:0", "-map", "0:a?"]
     filters: list[str] = []
     if policy.scaler:
         filters.append(policy.scale_filter(width, height))
@@ -230,6 +252,12 @@ def _integrity(
     return integrity_ok, metadata_ok, frame_count_ok, audio_sync_ok
 
 
+def _quality_floor(policy: GpuMediaPolicy) -> tuple[float, float]:
+    if policy.operation == "decode":
+        return DECODE_PSNR_FLOOR_DB, DECODE_SSIM_FLOOR
+    return DEFAULT_PSNR_FLOOR_DB, DEFAULT_SSIM_FLOOR
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Physical NVDEC/CUDA equivalence benchmark for CinePulse H5")
     result.add_argument("--input", type=Path, required=True)
@@ -239,6 +267,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--gpu-index", type=int, default=0)
     result.add_argument("--scale-width", type=int, default=0)
     result.add_argument("--scale-height", type=int, default=0)
+    result.add_argument("--seek-seconds", type=float, default=1.0, help="Non-zero chunk seek used for alignment proof.")
+    result.add_argument("--seek-clip-seconds", type=float, default=1.0, help="Duration of the seek-alignment sample.")
     result.add_argument("--timeout", type=float, default=900.0)
     return result
 
@@ -306,6 +336,38 @@ def main() -> int:
         integrity_ok, metadata_ok, frame_count_ok, audio_sync_ok = _integrity(source_probe, baseline_probe, candidate_probe)
         psnr = _metric(ffmpeg, baseline, candidate, "psnr", args.timeout)
         ssim = _metric(ffmpeg, baseline, candidate, "ssim", args.timeout)
+
+        seek_baseline = root / "seek-baseline.mkv"
+        seek_candidate = root / "seek-candidate.mkv"
+        seek_seconds = max(0.001, float(args.seek_seconds))
+        seek_clip_seconds = max(0.05, float(args.seek_clip_seconds))
+        _run(
+            _build_baseline(
+                ffmpeg, args.input, seek_baseline, profile=profile, width=width, height=height, scale=do_scale,
+                seek_seconds=seek_seconds, clip_seconds=seek_clip_seconds,
+            ),
+            timeout=args.timeout,
+        )
+        _run(
+            _build_candidate(
+                ffmpeg, args.input, seek_candidate, policy=policy, profile=profile, width=width, height=height,
+                seek_seconds=seek_seconds, clip_seconds=seek_clip_seconds,
+            ),
+            timeout=args.timeout,
+        )
+        seek_baseline_probe = _probe(ffprobe, seek_baseline)
+        seek_candidate_probe = _probe(ffprobe, seek_candidate)
+        seek_integrity, seek_metadata, seek_frames, seek_audio = _integrity(
+            source_probe, seek_baseline_probe, seek_candidate_probe
+        )
+        seek_psnr = _metric(ffmpeg, seek_baseline, seek_candidate, "psnr", args.timeout)
+        seek_ssim = _metric(ffmpeg, seek_baseline, seek_candidate, "ssim", args.timeout)
+        seek_psnr_floor, seek_ssim_floor = _quality_floor(policy)
+        seek_alignment_ok = bool(
+            seek_integrity and seek_metadata and seek_frames and seek_audio
+            and seek_psnr >= seek_psnr_floor and seek_ssim >= seek_ssim_floor
+        )
+
         evidence = GpuMediaEvidence(
             policy=policy,
             baseline_seconds=baseline_seconds,
@@ -316,6 +378,9 @@ def main() -> int:
             metadata_ok=metadata_ok,
             frame_count_ok=frame_count_ok,
             audio_sync_ok=audio_sync_ok,
+            seek_alignment_ok=seek_alignment_ok,
+            seek_psnr_db=seek_psnr,
+            seek_ssim=seek_ssim,
         )
         recorded = GpuMediaTuningStore(args.cache).record(key, evidence)
 
@@ -336,6 +401,13 @@ def main() -> int:
         "metadata_ok": evidence.metadata_ok,
         "frame_count_ok": evidence.frame_count_ok,
         "audio_sync_ok": evidence.audio_sync_ok,
+        "seek": {
+            "seconds": seek_seconds,
+            "clip_seconds": seek_clip_seconds,
+            "alignment_ok": evidence.seek_alignment_ok,
+            "psnr_db": evidence.seek_psnr_db,
+            "ssim": evidence.seek_ssim,
+        },
         "accepted": evidence.accepted,
         "cache_key": key.token(),
     }
