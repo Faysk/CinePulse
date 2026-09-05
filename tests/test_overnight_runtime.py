@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from cinepulse.hardware_telemetry import GpuSample, HardwareSample
@@ -99,6 +100,29 @@ class OvernightRuntimeTests(unittest.TestCase):
         decision = controller.observe(sample(temp=90.0))
         self.assertLessEqual(decision.limit_threads(28), 28)
         self.assertLessEqual(decision.limit_chunk_frames(240), 240)
+
+    def test_h8_control_plane_cannot_mutate_global_machine_policy(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "src" / "cinepulse"
+        control_plane = "\n".join(
+            (root / name).read_text(encoding="utf-8").lower()
+            for name in ("overnight_runtime.py", "adaptive_runtime.py")
+        )
+        # H8 is an observational/downshift-only scheduler.  Keep process launch,
+        # OS power plans, Realtime priority and NVIDIA mutation commands out of
+        # the control plane so a future throughput tweak cannot silently turn
+        # into a machine-wide setting change.
+        forbidden = (
+            "import subprocess",
+            "from subprocess",
+            "powercfg",
+            "realtime_priority_class",
+            "priority_realtime",
+            "nvidia-settings",
+            "nvidia-smi -pl",
+            "nvidia-smi --power-limit",
+        )
+        for token in forbidden:
+            self.assertNotIn(token, control_plane, token)
 
 
 if __name__ == "__main__":
