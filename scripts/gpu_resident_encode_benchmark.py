@@ -2,10 +2,12 @@ from __future__ import annotations
 
 """Physical H5 resident decode/scale/NVENC equivalence benchmark.
 
-The CPU baseline and CUDA candidate use the same NvencContract. Therefore the
-only variable is how frames reach the encoder. The script records one exact
-hardware/driver/FFmpeg/source/geometry/color/encoder contract and never grants a
-generic NVENC PASS.
+The CPU baseline and CUDA candidate use the exact same complete NvencContract.
+Therefore the only variable is how frames reach the encoder. The defaults mirror
+CinePulse HEVC delivery (p7/hq, VBR CQ14, AQ, fullres multipass, middle B-ref,
+2 B-frames and the runtime GOP). The script records one exact hardware/driver/
+FFmpeg/source/geometry/color/encoder contract and never grants a generic NVENC
+PASS.
 """
 
 import argparse
@@ -41,8 +43,7 @@ def run(command: list[str], timeout: float, capture: bool = False) -> tuple[floa
 def probe(ffprobe: str, path: Path) -> dict:
     result = subprocess.run([ffprobe, "-v", "error", "-show_streams", "-show_format", "-count_frames", "-of", "json", str(path)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", check=False)
-    if result.returncode:
-        raise RuntimeError(result.stderr[-2000:])
+    if result.returncode: raise RuntimeError(result.stderr[-2000:])
     return json.loads(result.stdout)
 
 
@@ -69,9 +70,7 @@ def duration(payload: dict) -> float | None:
 
 
 def signature(stream: dict) -> tuple[object, ...]:
-    return tuple(stream.get(name) for name in (
-        "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries"
-    ))
+    return tuple(stream.get(name) for name in ("width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries"))
 
 
 def metric(ffmpeg: str, baseline: Path, candidate: Path, name: str, timeout: float) -> float:
@@ -79,8 +78,7 @@ def metric(ffmpeg: str, baseline: Path, candidate: Path, name: str, timeout: flo
                           "-lavfi", f"[0:v:0][1:v:0]{name}", "-an", "-f", "null", "-"], timeout, True)
     match = (PSNR_RE if name == "psnr" else SSIM_RE).search(text)
     if not match: raise RuntimeError(f"could not parse {name}")
-    raw = match.group(1).lower()
-    return 999.0 if raw == "inf" else float(raw)
+    raw = match.group(1).lower(); return 999.0 if raw == "inf" else float(raw)
 
 
 def color_args(profile: ColorProfile) -> list[str]:
@@ -95,8 +93,7 @@ def baseline_command(ffmpeg: str, source: Path, output: Path, *, contract: Nvenc
     command += ["-i", str(source)]
     if clip > 0: command += ["-t", f"{clip:.6f}"]
     filters = []
-    if width > 0 and height > 0:
-        filters.append(f"zscale=w={width}:h={height}:dither=error_diffusion")
+    if width > 0 and height > 0: filters.append(f"zscale=w={width}:h={height}:dither=error_diffusion")
     filters.append(f"format={contract.pixel_format}")
     command += ["-map", "0:v:0", "-map", "0:a?", "-vf", ",".join(filters)] + contract.ffmpeg_args()
     return command + color_args(profile) + ["-c:a", "copy", str(output)]
@@ -111,9 +108,7 @@ def candidate_command(ffmpeg: str, source: Path, output: Path, *, decoder: str, 
     command += ["-i", str(source)]
     if clip > 0: command += ["-t", f"{clip:.6f}"]
     command += ["-map", "0:v:0", "-map", "0:a?"]
-    if scaler:
-        command += ["-vf", f"{scaler}=w={width}:h={height}:format={contract.pixel_format}"]
-    # With no scaler frames stay CUDA-resident and NVENC consumes them directly.
+    if scaler: command += ["-vf", f"{scaler}=w={width}:h={height}:format={contract.pixel_format}"]
     command += contract.ffmpeg_args() + color_args(profile) + ["-c:a", "copy", str(output)]
     return command
 
@@ -122,12 +117,18 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="CinePulse H5 resident NVDEC/CUDA/NVENC benchmark")
     p.add_argument("--input", type=Path, required=True); p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--ffmpeg", default="ffmpeg"); p.add_argument("--ffprobe", default="ffprobe")
-    p.add_argument("--encoder", choices=("h264_nvenc", "hevc_nvenc", "av1_nvenc"), default="h264_nvenc")
-    p.add_argument("--preset", default="p7"); p.add_argument("--rc", choices=("constqp", "vbr", "cbr"), default="vbr")
-    p.add_argument("--pix-fmt", default="yuv420p"); p.add_argument("--profile", default="")
-    p.add_argument("--cq", type=int, default=18); p.add_argument("--qp", type=int)
-    p.add_argument("--bitrate-kbps", type=int, default=30000); p.add_argument("--maxrate-kbps", type=int, default=45000)
-    p.add_argument("--bufsize-kbps", type=int, default=90000); p.add_argument("--lookahead", type=int, default=16); p.add_argument("--bframes", type=int, default=3)
+    p.add_argument("--encoder", choices=("h264_nvenc", "hevc_nvenc", "av1_nvenc"), default="hevc_nvenc")
+    p.add_argument("--preset", default="p7"); p.add_argument("--tune", default="hq")
+    p.add_argument("--rc", choices=("constqp", "vbr", "cbr"), default="vbr")
+    p.add_argument("--pix-fmt", default="yuv420p"); p.add_argument("--profile", default="main")
+    p.add_argument("--cq", type=int, default=14); p.add_argument("--qp", type=int)
+    p.add_argument("--bitrate-kbps", type=int, default=30000); p.add_argument("--maxrate-kbps", type=int, default=60000)
+    p.add_argument("--bufsize-kbps", type=int, default=120000); p.add_argument("--lookahead", type=int, default=0); p.add_argument("--bframes", type=int, default=2)
+    p.add_argument("--spatial-aq", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--temporal-aq", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--aq-strength", type=int, default=8); p.add_argument("--multipass", default="fullres")
+    p.add_argument("--b-ref-mode", default="middle"); p.add_argument("--gop", type=int, default=30,
+        help="Must match max(12, delivery_fps//2) for the target runtime job.")
     p.add_argument("--width", type=int, default=0); p.add_argument("--height", type=int, default=0); p.add_argument("--gpu-index", type=int, default=0)
     p.add_argument("--seek-seconds", type=float, default=1.0); p.add_argument("--seek-clip-seconds", type=float, default=1.0)
     p.add_argument("--timeout", type=float, default=1800.0)
@@ -142,16 +143,18 @@ def main() -> int:
     profile = ColorProfile.from_probe({"streams": [sv]})
     if profile.hdr or any(v in {"", "unknown", "unspecified", "reserved"} for v in (profile.primaries, profile.transfer, profile.space, profile.range)):
         raise SystemExit("initial resident encode envelope requires known SDR color metadata")
-    caps = detect_gpu_media_capabilities(ffmpeg); codec = str(sv.get("codec_name") or "")
-    decoder = caps.decoder_for(codec)
+    caps = detect_gpu_media_capabilities(ffmpeg); codec = str(sv.get("codec_name") or ""); decoder = caps.decoder_for(codec)
     if not decoder or args.encoder not in caps.encoders: raise SystemExit("required NVDEC/NVENC capability unavailable")
-    source_w, source_h = int(sv.get("width") or 0), int(sv.get("height") or 0)
-    width, height = (args.width or source_w), (args.height or source_h)
-    do_scale = (width, height) != (source_w, source_h)
-    scaler = caps.cuda_scale if do_scale else None
+    source_w, source_h = int(sv.get("width") or 0), int(sv.get("height") or 0); width, height = (args.width or source_w), (args.height or source_h)
+    do_scale = (width, height) != (source_w, source_h); scaler = caps.cuda_scale if do_scale else None
     if do_scale and not scaler: raise SystemExit("CUDA scaler unavailable for requested geometry")
-    contract = NvencContract(args.encoder, args.preset, args.rc, args.pix_fmt, args.profile,
-                             args.cq, args.qp, args.bitrate_kbps, args.maxrate_kbps, args.bufsize_kbps, args.lookahead, args.bframes)
+    contract = NvencContract(
+        encoder=args.encoder, preset=args.preset, rate_control=args.rc, pixel_format=args.pix_fmt, profile=args.profile,
+        cq=args.cq, qp=args.qp, bitrate_kbps=args.bitrate_kbps, maxrate_kbps=args.maxrate_kbps,
+        bufsize_kbps=args.bufsize_kbps, lookahead=args.lookahead, bframes=args.bframes, tune=args.tune,
+        spatial_aq=args.spatial_aq, temporal_aq=args.temporal_aq, aq_strength=args.aq_strength,
+        multipass=args.multipass, b_ref_mode=args.b_ref_mode, gop=args.gop,
+    )
     hardware = detect_hardware()
     if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
     key = ResidentEncodeKey(hardware.gpu, hardware.driver or "unknown-driver", caps.fingerprint, codec,
@@ -172,7 +175,7 @@ def main() -> int:
         decode_ok=bool(video(bp)) and bool(video(cp))
         ev=ResidentEncodeEvidence(bsec,csec,psnr,ssim,frame_ok,metadata_ok,audio_ok,seek_ok,decode_ok,baseline.stat().st_size,candidate.stat().st_size)
         recorded=ResidentEncodeStore(args.cache).record(key,contract,ev)
-    print(json.dumps({"physical_acceptance":"exact-evidence-recorded-not-global-pass" if recorded else "rejected","hardware":hardware.as_dict(),"decoder":decoder,"scaler":scaler,"contract":contract.token(),"speedup":ev.speedup,"psnr_db":psnr,"ssim":ssim,"seek_alignment_ok":seek_ok,"accepted":ev.accepted,"cache_key":key.token()},indent=2,ensure_ascii=False))
+    print(json.dumps({"physical_acceptance":"exact-evidence-recorded-not-global-pass" if recorded else "rejected","hardware":hardware.as_dict(),"decoder":decoder,"scaler":scaler,"contract":contract.token(),"contract_args":contract.ffmpeg_args(),"speedup":ev.speedup,"psnr_db":psnr,"ssim":ssim,"seek_alignment_ok":seek_ok,"accepted":ev.accepted,"cache_key":key.token()},indent=2,ensure_ascii=False))
     return 0 if recorded else 2
 
 if __name__ == "__main__": raise SystemExit(main())
