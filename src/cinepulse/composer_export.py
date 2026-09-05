@@ -12,7 +12,6 @@ GPU acceleration may replace this path only after H6 physical parity evidence.
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping
@@ -20,12 +19,11 @@ from collections.abc import Callable, Mapping
 import numpy as np
 
 from .composer_audio import VisualizerAudioEnvelope
-from .composer_audio_binding import features_for_item
+from .composer_audio_binding import composer_audio_features
 from .composer_base_probe import ComposerBaseProfile
 from .composer_decode_stream import ComposerDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
 from .composer_runtime import render_composer_frame
-from .gpu_compositor import FrameAudioFeatures
 from .overlay_composer import OverlayComposerState
 from .safe_output import AtomicOutput
 
@@ -100,7 +98,7 @@ def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> 
     # output_audio. Project duration bounds a longer replacement without cutting
     # video early when the audio stream happens to be shorter.
     audio = request.output_audio or request.source
-    command = [
+    return [
         str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-i", str(visual), "-i", str(audio),
         "-map", "0:v:0", "-map", "1:a:0?",
@@ -108,7 +106,6 @@ def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> 
         "-t", f"{request.profile.duration:.6f}",
         str(target),
     ]
-    return command
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -166,26 +163,25 @@ def export_composer_reference(
     with tempfile.TemporaryDirectory(prefix="cinepulse-composer-", dir=output.parent) as temporary:
         temp_root = Path(temporary)
         visual = temp_root / "composer-reference.mkv"
-        base_command = _base_decode_command(request, frames)
-        encoder_command = _video_encode_command(request, visual)
-        logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
         base = subprocess.Popen(
-            base_command,
+            _base_decode_command(request, frames),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=CREATE_NO_WINDOW,
         )
         encoder = subprocess.Popen(
-            encoder_command,
+            _video_encode_command(request, visual),
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             creationflags=CREATE_NO_WINDOW,
         )
+        logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
         decoders = ComposerDecoderPool(request.ffmpeg)
         try:
             assert base.stdout is not None
             assert encoder.stdin is not None
+            bound_envelopes = envelopes or {}
             for frame_index in range(frames):
                 if cancel():
                     raise InterruptedError("composer export cancelled")
@@ -206,10 +202,11 @@ def export_composer_reference(
                     info = infos[item.id]
                     position = playback_position(item.media, info, project_time)
                     media_frames[item.id] = decoders.frame(item.id, item.media, info, position)
-                features: dict[str, FrameAudioFeatures] = {}
-                for item in ordered:
-                    envelope = features_for_item(item, envelopes or {})
-                    features[item.id] = envelope.sample(project_time) if envelope else FrameAudioFeatures()
+                features = composer_audio_features(
+                    request.state,
+                    bound_envelopes,
+                    project_time=project_time,
+                )
                 composed = render_composer_frame(
                     base_frame,
                     request.state,
