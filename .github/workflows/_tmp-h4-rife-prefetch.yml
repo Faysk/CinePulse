@@ -1,0 +1,42 @@
+name: Temporary Hardware H4 RIFE Prefetch Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h4-rife-prefetch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Integrate bounded RIFE prefetch
+        run: python scripts/_tmp_h4_rife_prefetch.py
+      - name: H4 RIFE focused safety gate
+        run: |
+          python -m pip install --disable-pip-version-check --editable .
+          python -m compileall -q src/cinepulse
+          python -m unittest discover -s tests -p 'test_pipeline_runtime.py'
+          python -m unittest discover -s tests -p 'test_pipeline_budget.py'
+          python -m unittest discover -s tests -p 'test_rife_engine.py'
+          python -m unittest discover -s tests -p 'test_rife_tuning.py'
+          python -m unittest discover -s tests -p 'test_rife_safe_runner.py'
+          python -m unittest discover -s tests -p 'test_rife_runtime_fallback.py'
+      - name: Commit integration and remove temporary writers
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/_tmp-h4-rife-prefetch.yml scripts/_tmp_h4_rife_prefetch.py
+          git add src/cinepulse/studio.py
+          git commit -m "Hardware H4: prefetch RIFE input with bounded backpressure"
+          git push origin HEAD:preview-restoration-lab
