@@ -77,6 +77,8 @@ from .gpu_media import (
     GpuMediaKey, GpuMediaPolicy, GpuMediaTuningStore, detect_gpu_media_capabilities,
     invalidate_on_runtime_failure as invalidate_gpu_media_policy, select_proven_policy as select_gpu_media_policy,
 )
+from .gpu_encode import ResidentEncodeStore
+from .gpu_delivery import select_resident_delivery_route
 from .pipeline_runtime import BackgroundCommand, measure_resource_headroom
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
@@ -4804,7 +4806,89 @@ class VideoOptimizerStudio:
                 command += ["-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t", f"{project_duration:.6f}"]
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
-                self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
+
+                # H5: start from the complete Stable CPU/zscale command. The
+                # resident path is permissioned only by exact physical evidence.
+                baseline_command = list(command)
+                resident_route = None
+                resident_store = ResidentEncodeStore(PATHS.cache / "hardware" / "resident-encode.json")
+                try:
+                    resident_probe = probe_media(visual_source)
+                    resident_stream = next(
+                        (stream for stream in resident_probe.get("streams", []) if stream.get("codec_type") == "video"),
+                        {},
+                    )
+                    resident_profile = ColorProfile.from_probe(resident_probe)
+                    resident_caps = detect_gpu_media_capabilities(str(FFMPEG))
+                    color_ready = bool(
+                        not color_plan.output.hdr
+                        and color_plan.output.bit_depth <= 8
+                        and resident_profile.primaries == color_plan.output.primaries
+                        and resident_profile.transfer == color_plan.output.transfer
+                        and resident_profile.space == color_plan.output.space
+                        and resident_profile.range == color_plan.output.range
+                    )
+                    resident_route = select_resident_delivery_route(
+                        hardware=self._hardware, caps=resident_caps, store=resident_store,
+                        source_stream=resident_stream, source_profile=resident_profile,
+                        source_fps=visual_fps, target_width=target_w, target_height=target_h,
+                        target_fps=target_fps, delivery_plan=delivery_plan,
+                        bitrate_mbps=bitrate_mbps, use_cpu=settings.use_cpu,
+                        color_already_final=color_ready, gpu_index=0,
+                    )
+                except Exception as exc:
+                    self._log(f"H5 resident delivery: probe/evidence indisponível; baseline preservado ({exc}).")
+                    resident_route = None
+
+                if resident_route is not None and resident_route.approved:
+                    candidate = list(baseline_command)
+                    try:
+                        input_index = next(
+                            index for index in range(len(candidate) - 1)
+                            if candidate[index] == "-i" and candidate[index + 1] == visual_source
+                        )
+                        candidate[input_index:input_index] = resident_route.input_args()
+                        vf_index = next(
+                            index for index in range(len(candidate) - 1)
+                            if candidate[index] == "-vf" and candidate[index + 1] == final_filter
+                        )
+                        del candidate[vf_index:vf_index + 2]
+                        resident_filter = resident_route.video_filter(target_w, target_h)
+                        if resident_filter:
+                            candidate[vf_index:vf_index] = ["-vf", resident_filter]
+                        baseline_video_args = delivery_plan.video_args(
+                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
+                            bitrate_mbps=bitrate_mbps, fps=target_fps,
+                        )
+                        replacement_args = resident_route.contract.ffmpeg_args()
+                        start = next(
+                            index for index in range(len(candidate) - len(baseline_video_args) + 1)
+                            if candidate[index:index + len(baseline_video_args)] == baseline_video_args
+                        )
+                        candidate[start:start + len(baseline_video_args)] = replacement_args
+                        command = candidate
+                        self._log(
+                            f"H5 resident delivery: evidência exata aprovada; {resident_route.decoder} -> "
+                            f"{resident_route.scaler or 'sem scale'} -> hevc_nvenc."
+                        )
+                    except (StopIteration, ValueError, AttributeError) as exc:
+                        self._log(f"H5 resident delivery: envelope não casou; baseline preservado ({exc}).")
+                        resident_route = None
+                        command = baseline_command
+
+                try:
+                    self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
+                except RuntimeError as exc:
+                    if resident_route is None or not resident_route.approved or resident_route.key is None:
+                        raise
+                    resident_store.invalidate(resident_route.key)
+                    try: partial_output.unlink(missing_ok=True)
+                    except OSError: pass
+                    self._log(
+                        "H5 resident delivery: fast path aprovado falhou em produção; evidência exata "
+                        f"invalidada e finalização repetida pelo baseline CPU/zscale. Motivo: {exc}"
+                    )
+                    self._run_ffmpeg(baseline_command, project_duration, progress_base, 100 - progress_base)
                 self._release_temp_path(visual_source, temp_paths)
             else:
                 self._set_stage("Finalizando", "VFX e entrega já foram codificados no mesmo passe; iniciando verificação final.")
