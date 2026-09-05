@@ -2,14 +2,15 @@ from __future__ import annotations
 
 """Preview-only GPU compositor contracts for CinePulse H6.
 
-The first H6 envelope deliberately targets the part FFmpeg/CUDA can express
-reliably today: media-layer composition with ``overlay_cuda``. Procedural music
-VFX and non-normal blend modes remain on the established NumPy renderer until
-an actual shader backend has its own visual-equivalence evidence.
+The H6 envelope targets the part FFmpeg/CUDA can express reliably today:
+normal alpha media-layer composition with ``overlay_cuda``. Procedural music
+VFX, arbitrary rotation and non-normal blend modes remain on the established
+NumPy renderer until an actual shader backend has its own visual-equivalence
+evidence.
 
 Capability is never permission. Runtime use requires an exact accepted record
-for GPU/driver/FFmpeg/base-profile/layer contract and otherwise fails closed to
-the existing CPU compositor.
+for GPU/driver/FFmpeg/base-profile/compositor contract and otherwise fails
+closed to the existing CPU compositor.
 """
 
 from dataclasses import asdict, dataclass
@@ -20,18 +21,17 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
-from typing import Literal
+from typing import Iterable, Literal
 
 from .gpu_media import CREATE_NO_WINDOW
 
 
-# Schema 2 invalidates early H6 records whose benchmark baseline was FFmpeg's
-# software overlay rather than the actual Composer NumPy/RGBA reference path.
-COMPOSITOR_SCHEMA = 2
+COMPOSITOR_SCHEMA = 3
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 80.0
 COMPOSITOR_SSIM_FLOOR = 0.999999
 COMPOSITOR_MIN_SPEEDUP = 1.03
+COMPOSITOR_MAX_STACK_LAYERS = 4
 
 LayerKind = Literal["png", "gif", "apng", "webp", "video-alpha"]
 BlendMode = Literal["normal", "multiply", "screen", "add", "overlay"]
@@ -80,6 +80,18 @@ class OverlayLayer:
     def contract_token(self) -> str:
         raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def canonical_overlay_stack(layers: Iterable[OverlayLayer]) -> tuple[OverlayLayer, ...]:
+    indexed = tuple(enumerate(layers))
+    return tuple(layer for _index, layer in sorted(indexed, key=lambda item: (item[1].z_order, item[0])))
+
+
+def overlay_stack_contract_token(layers: Iterable[OverlayLayer]) -> str:
+    ordered = canonical_overlay_stack(layers)
+    payload = [asdict(layer) for layer in ordered]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
 @dataclass(frozen=True)
@@ -240,6 +252,7 @@ class GpuCompositorStore:
             "speedup": evidence.speedup,
             "updated_unix": time.time(),
         }
+        payload["version"] = self.VERSION
         self._atomic_write(payload)
         return True
 
@@ -275,8 +288,6 @@ class GpuCompositorStore:
 
 
 def _static_layer_supported(layer: OverlayLayer) -> bool:
-    # CUDA remains deliberately narrower than the CPU reference. Adding a CPU
-    # blend mode never grants GPU permission without new physical H6 evidence.
     return bool(
         layer.blend == "normal"
         and layer.scale == 1.0
@@ -288,6 +299,15 @@ def _static_layer_supported(layer: OverlayLayer) -> bool:
 def cuda_layer_eligible(layer: OverlayLayer, caps: GpuCompositorCapabilities) -> bool:
     """Return benchmark eligibility, not runtime permission."""
     return caps.media_layers_supported and _static_layer_supported(layer)
+
+
+def cuda_stack_eligible(layers: Iterable[OverlayLayer], caps: GpuCompositorCapabilities) -> bool:
+    ordered = canonical_overlay_stack(layers)
+    return bool(
+        caps.media_layers_supported
+        and 1 <= len(ordered) <= COMPOSITOR_MAX_STACK_LAYERS
+        and all(_static_layer_supported(layer) for layer in ordered)
+    )
 
 
 def overlay_cuda_position(
@@ -303,6 +323,44 @@ def overlay_cuda_position(
     )
 
 
+def build_cuda_overlay_stack_filter(
+    layers: Iterable[OverlayLayer],
+    *,
+    canvas_width: int,
+    canvas_height: int,
+) -> str:
+    """Build a bounded, deterministic CUDA overlay stack.
+
+    The whole ordered stack is one evidence unit. A record for an individual
+    layer can never unlock a stack because repeated alpha rounding and ordering
+    can change the result. The graph stays GPU-resident between overlay stages
+    and downloads exactly once at the end.
+    """
+    ordered = canonical_overlay_stack(layers)
+    if not 1 <= len(ordered) <= COMPOSITOR_MAX_STACK_LAYERS:
+        raise ValueError(f"CUDA compositor stack must contain 1..{COMPOSITOR_MAX_STACK_LAYERS} layers")
+    if any(not _static_layer_supported(layer) for layer in ordered):
+        raise ValueError("stack contains an unproven transform/blend outside H6 CUDA envelope")
+
+    chains: list[str] = ["[0:v]format=yuv420p,hwupload_cuda[basegpu]"]
+    previous = "basegpu"
+    for index, layer in enumerate(ordered, start=1):
+        prep = ["format=yuva420p"]
+        if layer.opacity < 0.999999:
+            prep.append(f"colorchannelmixer=aa={layer.opacity:.8f}")
+        prep.append("hwupload_cuda")
+        layer_label = f"layergpu{index}"
+        chains.append(f"[{index}:v]{','.join(prep)}[{layer_label}]")
+        x_expr, y_expr = overlay_cuda_position(layer, canvas_width, canvas_height)
+        output_label = f"stackgpu{index}"
+        chains.append(
+            f"[{previous}][{layer_label}]overlay_cuda=x='{x_expr}':y='{y_expr}'[{output_label}]"
+        )
+        previous = output_label
+    chains.append(f"[{previous}]hwdownload,format=yuv420p[vout]")
+    return ";".join(chains)
+
+
 def build_cuda_overlay_filter(
     layer: OverlayLayer,
     *,
@@ -311,27 +369,10 @@ def build_cuda_overlay_filter(
     layer_width: int,
     layer_height: int,
 ) -> str:
-    """Build one conservative CUDA alpha-overlay graph.
-
-    The graph deliberately uploads software YUV420P/YUVA420P frames. This is
-    not yet a fully CUDA-resident decode path; its first job is to remove the
-    expensive full-frame software alpha blend while retaining a byte-comparable
-    CPU baseline. A later benchmark may prove a resident decoder/scaler path.
-    """
+    """Compatibility wrapper for the original single-layer H6 benchmark."""
     del layer_width, layer_height
-    if not _static_layer_supported(layer):
-        raise ValueError(
-            "layer requires unproven transform/blend outside initial H6 CUDA envelope"
-        )
-    x_expr, y_expr = overlay_cuda_position(layer, canvas_width, canvas_height)
-    base = "[0:v]format=yuv420p,hwupload_cuda[basegpu]"
-    prep = ["format=yuva420p"]
-    if layer.opacity < 0.999999:
-        prep.append(f"colorchannelmixer=aa={layer.opacity:.8f}")
-    prep.append("hwupload_cuda")
-    layer_chain = ",".join(prep)
-    return (
-        f"{base};[1:v]{layer_chain}[layergpu];"
-        f"[basegpu][layergpu]overlay_cuda=x='{x_expr}':y='{y_expr}',"
-        "hwdownload,format=yuv420p[vout]"
+    return build_cuda_overlay_stack_filter(
+        (layer,),
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
     )
