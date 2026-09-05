@@ -35,13 +35,23 @@ class HardwareAdvisorTests(unittest.TestCase):
         advice = analyze_stage("RIFE 2/3", group(gpu=35, cpu=44, ram=55, vram_free=1800, temp=65, read=130, write=90))
         self.assertEqual(advice.bottleneck, "io-suspected")
 
-    def test_thermal_pressure_wins_before_starvation(self) -> None:
-        advice = analyze_stage("IA 2/3", group(gpu=40, cpu=40, ram=50, vram_free=2200, temp=88))
-        self.assertEqual(advice.bottleneck, "thermal-pressure")
+    def test_heat_alone_is_observational_and_does_not_force_downshift_advice(self) -> None:
+        advice = analyze_stage("IA 2/3", group(gpu=40, cpu=40, ram=50, vram_free=2200, temp=92))
+        self.assertEqual(advice.bottleneck, "gpu-starved")
+        self.assertNotIn("Reduza concorrência", advice.action)
+        self.assertIn("não reduza carga", advice.reason)
+        self.assertIn("92.0", advice.reason)
+
+    def test_hot_saturated_gpu_remains_positive_without_throughput_regression_evidence(self) -> None:
+        advice = analyze_stage("Real-ESRGAN", group(gpu=96, cpu=60, ram=62, vram_free=1400, temp=93))
+        self.assertEqual(advice.bottleneck, "gpu-saturated")
+        self.assertEqual(advice.severity, "ok")
+        self.assertIn("não reduza carga", advice.reason)
 
     def test_memory_pressure_wins_before_starvation(self) -> None:
-        advice = analyze_stage("IA 2/3", group(gpu=40, cpu=40, ram=95, vram_free=200, temp=70))
+        advice = analyze_stage("IA 2/3", group(gpu=40, cpu=40, ram=95, vram_free=200, temp=92))
         self.assertEqual(advice.bottleneck, "memory-pressure")
+        self.assertIn("Diminua", advice.action)
 
     def test_cpu_bound_stage_is_reported(self) -> None:
         advice = analyze_stage("Preparando master", group(gpu=45, cpu=94, ram=60, vram_free=2000, temp=70))
@@ -56,10 +66,10 @@ class HardwareAdvisorTests(unittest.TestCase):
         advice = analyze_stage("IA 2/3", group(samples=1, gpu=20, cpu=20))
         self.assertEqual(advice.bottleneck, "unknown")
 
-    def test_summary_rolls_up_constraints_without_claiming_physical_pass(self) -> None:
+    def test_summary_rolls_up_constraints_without_claiming_temperature_is_constraint(self) -> None:
         summary = {
             "stages": {
-                "IA 2/3": group(gpu=45, cpu=50, ram=50, vram_free=1800, temp=70),
+                "IA 2/3": group(gpu=45, cpu=50, ram=50, vram_free=1800, temp=92),
                 "Master": group(gpu=20, cpu=96, ram=50, vram_free=1800, temp=70),
                 "RIFE 2/3": group(gpu=80, cpu=60, ram=94, vram_free=900, temp=70),
             }
@@ -68,6 +78,7 @@ class HardwareAdvisorTests(unittest.TestCase):
         self.assertIn("IA 2/3", advice.gpu_starved_stages)
         self.assertIn("Master", advice.cpu_bound_stages)
         self.assertTrue(advice.memory_constrained)
+        self.assertFalse(advice.thermal_constrained)
         self.assertEqual(advice.physical_acceptance, "pending")
         self.assertTrue(advice.needs_attention)
 
