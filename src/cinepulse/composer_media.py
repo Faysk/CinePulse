@@ -110,7 +110,15 @@ def pixel_format_has_alpha(pixel_format: str) -> bool:
 
 
 def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaInfo:
-    """Build a conservative media contract from FFprobe JSON output."""
+    """Build a conservative media contract from FFprobe JSON output.
+
+    Some animated-image demuxers omit ``nb_frames`` even when duration and a
+    reliable frame rate are present. Treating those files as one-frame assets
+    makes every playback timestamp resolve to frame zero, so derive the frame
+    count from timing when the explicit count is unavailable. Static images do
+    not normally expose a positive duration and therefore keep the one-frame
+    hold contract.
+    """
     if not isinstance(payload, dict):
         raise ValueError("FFprobe payload must be an object")
     streams = payload.get("streams")
@@ -135,6 +143,10 @@ def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaI
         fps = frames / duration
     if duration <= 0 and fps > 0 and frames > 0:
         duration = frames / fps
+    if frames <= 0 and fps > 0 and duration > 0:
+        # Round rather than floor so 29.97-style metadata does not silently lose
+        # the final effective frame because of decimal duration representation.
+        frames = max(1, int(round(duration * fps)))
 
     # Static images commonly report neither duration nor frame rate. Give them
     # a deterministic one-frame timeline without pretending they are animated.
@@ -143,7 +155,7 @@ def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaI
     if fps <= 0:
         fps = 1.0
     if duration <= 0:
-        duration = max(1.0 / fps, 1e-6)
+        duration = max(frames / fps, 1e-6)
 
     pixel_format = str(stream.get("pix_fmt") or "").strip().lower()
     codec = str(stream.get("codec_name") or "unknown").strip().lower() or "unknown"
