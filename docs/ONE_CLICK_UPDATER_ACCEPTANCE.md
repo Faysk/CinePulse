@@ -9,6 +9,7 @@ A Stable updater release is acceptable only when all of the following are true o
 - MSI selects the exact `CinePulse-X.Y.Z-Setup.msi` asset;
 - GitHub asset URL, SemVer and SHA-256 are validated before promotion;
 - active render, queue processing or AI installation blocks update application rather than being interrupted;
+- if work starts while the package is downloading, the verified package remains prepared and installation is deferred until CinePulse is idle instead of closing the new render or downloading again;
 - Portable update continues through the existing transactional pending-update applier;
 - MSI handoff waits for the CinePulse process to exit, uses MajorUpgrade with bootstrap suppressed, then reopens the installed launcher;
 - failed discovery is silent at startup; failed staging/application keeps the current installation usable;
