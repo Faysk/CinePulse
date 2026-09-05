@@ -25,7 +25,10 @@ from typing import Literal
 from .gpu_media import CREATE_NO_WINDOW
 
 
-COMPOSITOR_SCHEMA = 1
+# Schema 2 invalidates early H6 records whose benchmark baseline was FFmpeg's
+# software overlay rather than the actual Composer NumPy/RGBA reference path.
+COMPOSITOR_SCHEMA = 2
+COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 80.0
 COMPOSITOR_SSIM_FLOOR = 0.999999
 COMPOSITOR_MIN_SPEEDUP = 1.03
@@ -122,9 +125,6 @@ def detect_gpu_compositor_capabilities(ffmpeg: str) -> GpuCompositorCapabilities
         cuda="cuda" in hwaccels,
         overlay_cuda="overlay_cuda" in filters,
         scale_cuda="scale_cuda" in filters or "scale_npp" in filters,
-        # The generated graph names hwupload_cuda explicitly. Generic hwupload
-        # cannot satisfy that graph and therefore must not be treated as an
-        # equivalent capability.
         hwupload_cuda="hwupload_cuda" in filters,
     )
 
@@ -172,6 +172,7 @@ class GpuCompositorEvidence:
     metadata_ok: bool
     alpha_contract_ok: bool
     audio_sync_ok: bool
+    reference_id: str = COMPOSITOR_REFERENCE_ID
 
     @property
     def speedup(self) -> float:
@@ -180,7 +181,8 @@ class GpuCompositorEvidence:
     @property
     def accepted(self) -> bool:
         return bool(
-            self.baseline_seconds > 0
+            self.reference_id == COMPOSITOR_REFERENCE_ID
+            and self.baseline_seconds > 0
             and self.candidate_seconds > 0
             and self.speedup >= COMPOSITOR_MIN_SPEEDUP
             and self.psnr_db >= COMPOSITOR_PSNR_FLOOR_DB
@@ -211,7 +213,10 @@ class GpuCompositorStore:
         if not caps.media_layers_supported:
             return False
         record = self._load().get("records", {}).get(key.token())
-        return bool(isinstance(record, dict) and record.get("accepted"))
+        if not isinstance(record, dict) or not record.get("accepted"):
+            return False
+        evidence = record.get("evidence")
+        return bool(isinstance(evidence, dict) and evidence.get("reference_id") == COMPOSITOR_REFERENCE_ID)
 
     def record(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> bool:
         if not evidence.accepted:
