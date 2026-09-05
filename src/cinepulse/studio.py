@@ -56,7 +56,9 @@ from .loop_engine import (
 from .paths import PATHS
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
-from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
+from .performance_policy import (
+    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads, realesrgan_pipeline_threads,
+)
 from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 from .cpu_tuning import CpuTuningKey, CpuTuningStore
 from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore
@@ -4400,6 +4402,10 @@ class VideoOptimizerStudio:
             cpu_topology = detect_cpu_topology()
             dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
             machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
+            machine_profile = profile_for_threads(settings.cpu_threads, cpu_topology.logical_cpus)
+            overnight_mode = machine_profile == PROFILE_OVERNIGHT
+            if overnight_mode:
+                self._log("H8 Overnight: controlador sustentado ativo; somente downshift de recursos é permitido.")
             cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
 
             neural_steps_active = bool(
@@ -4434,11 +4440,15 @@ class VideoOptimizerStudio:
                 gpu_index=0,
                 allow_extract_overlap=realesrgan_budget.overlap_extract,
                 allow_pack_overlap=realesrgan_budget.overlap_pack,
+                overnight=overnight_mode,
+                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
             )
             h5_rife_controller = AdaptiveRuntimeController(
                 gpu_index=0,
                 allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
                 allow_pack_overlap=False,
+                overnight=overnight_mode,
+                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
             )
 
             def h5_guard(controller: AdaptiveRuntimeController) -> Callable[[], RuntimePressureDecision]:
@@ -4450,8 +4460,9 @@ class VideoOptimizerStudio:
                         reason = ", ".join(decision.reasons) or "pressão observada"
                         self._log(
                             f"H5 DOWNSHIFT level={decision.level}: {reason}; "
-                            f"chunk={decision.chunk_scale:.2f}x, extract_overlap={decision.allow_extract_overlap}, "
-                            f"pack_overlap={decision.allow_pack_overlap}. Qualidade/modelo/FPS permanecem inalterados."
+                            f"chunk={decision.chunk_scale:.2f}x, cpu={decision.cpu_scale:.2f}x, "
+                            f"extract_overlap={decision.allow_extract_overlap}, pack_overlap={decision.allow_pack_overlap}, "
+                            f"cooldown_hint={decision.cooldown_hint_seconds:.0f}s. Qualidade/modelo/FPS permanecem inalterados."
                         )
                     return decision
                 return observe
@@ -5388,8 +5399,10 @@ class VideoOptimizerStudio:
                     overlap_extract = overlap_extract and decision.allow_extract_overlap
                     overlap_pack = overlap_pack and decision.allow_pack_overlap
                     active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
+                    active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
                 else:
                     active_chunk_frames = chunk_frames
+                    active_cpu_threads = cpu_threads
                 count = min(active_chunk_frames, total_frames - processed)
                 chunk_index += 1
                 chunk_start = start_time + processed / max(1.0, source_fps)
@@ -5559,7 +5572,7 @@ class VideoOptimizerStudio:
                     "-framerate", f"{source_fps:.8f}", "-start_number", "1", "-i", str(outgoing / "frame%08d.png"),
                     "-map", "0:v:0", "-an", "-frames:v", str(frames),
                     "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1", "-g", "1", "-slicecrc", "1",
-                    "-pix_fmt", "yuv420p", "-threads", str(cpu_threads),
+                    "-pix_fmt", "yuv420p", "-threads", str(active_cpu_threads),
                 ]
                 if overlap_pack and next_processed < total_frames:
                     background_merge = merge_base + [str(chunk_video)]
