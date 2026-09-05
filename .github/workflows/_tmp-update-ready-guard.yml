@@ -1,0 +1,41 @@
+name: Temporary Updater Ready Guard
+
+on:
+  push:
+    branches:
+      - feature/one-click-updater
+
+permissions:
+  contents: write
+
+jobs:
+  guard:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/one-click-updater
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Patch and test updater race guard
+        shell: pwsh
+        run: |
+          python scripts/_tmp_patch_update_ready_guard.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m compileall -q src/cinepulse/studio.py src/cinepulse/update_manager.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PYTHONPATH = 'src'
+          python -m unittest tests.test_update_manager tests.test_update_ux tests.test_update_release_contract tests.test_update_bootstrap_contract -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Commit guard and remove temporary helpers
+        shell: pwsh
+        run: |
+          git config user.name "Faysk"
+          git config user.email "faysk.nan@gmail.com"
+          git rm .github/workflows/_tmp-update-ready-guard.yml scripts/_tmp_patch_update_ready_guard.py
+          git add src/cinepulse/studio.py
+          git commit -m "Updater: defer prepared install while work is active"
+          git push origin HEAD:feature/one-click-updater
