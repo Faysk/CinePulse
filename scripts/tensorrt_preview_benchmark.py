@@ -17,9 +17,14 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
+
 from cinepulse.rife_safe_runner import validate_png, validate_png_sequence
 from cinepulse.tensorrt_preview import TensorRtEvidence, TensorRtKey, TensorRtPreviewStore, build_external_command, probe_external_backend
 from cinepulse.hardware import detect_hardware
+
+
+TEMPORAL_DELTA_MAE_FLOOR = 0.75  # gray levels on 0..255 sampled motion deltas
 
 
 def parser() -> argparse.ArgumentParser:
@@ -62,6 +67,48 @@ def metric(ffmpeg: str, baseline: Path, candidate: Path, name: str, timeout: flo
     return values[-1]
 
 
+def _gray_frame(ffmpeg: str, path: Path) -> np.ndarray:
+    result = subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(path),
+         "-vf", "scale=64:36:flags=area,format=gray", "-frames:v", "1",
+         "-f", "rawvideo", "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False,
+    )
+    if result.returncode or len(result.stdout) != 64 * 36:
+        raise RuntimeError(f"could not decode temporal sample {path.name}")
+    return np.frombuffer(result.stdout, dtype=np.uint8).astype(np.float32).reshape(36, 64)
+
+
+def temporal_parity(ffmpeg: str, baseline: list[Path], candidate: list[Path]) -> tuple[bool, float | None]:
+    """Compare motion deltas rather than inferring temporal quality from count.
+
+    We sample up to five adjacent frame pairs across the sequence.  For each
+    pair, the baseline and candidate frame-to-frame luma deltas are compared.
+    A static scene naturally has near-zero deltas on both sides and passes;
+    duplicated/jittered/interpolated motion diverges and fails even if every PNG
+    is individually valid and the frame count is perfect.
+    """
+    if len(baseline) != len(candidate) or len(baseline) < 2:
+        return False, None
+    pair_count = len(baseline) - 1
+    indexes = sorted({round(i * (pair_count - 1) / max(1, min(5, pair_count) - 1)) for i in range(min(5, pair_count))})
+    errors: list[float] = []
+    cache: dict[tuple[str, int], np.ndarray] = {}
+
+    def frame(which: str, frames: list[Path], index: int) -> np.ndarray:
+        token = (which, index)
+        if token not in cache:
+            cache[token] = _gray_frame(ffmpeg, frames[index])
+        return cache[token]
+
+    for index in indexes:
+        b_delta = frame("b", baseline, index + 1) - frame("b", baseline, index)
+        c_delta = frame("c", candidate, index + 1) - frame("c", candidate, index)
+        errors.append(float(np.mean(np.abs(b_delta - c_delta))))
+    mae = max(errors) if errors else None
+    return bool(mae is not None and mae <= TEMPORAL_DELTA_MAE_FLOOR), mae
+
+
 def black_frame_ok(ffmpeg: str, frames: list[Path]) -> bool:
     selected=[frames[0],frames[len(frames)//2],frames[-1]] if frames else []
     for frame in dict.fromkeys(selected):
@@ -80,19 +127,20 @@ def main() -> int:
     width,height=validate_png(baseline_frames[0]); hardware=detect_hardware()
     if not hardware.gpu: raise SystemExit("NVIDIA GPU required; no physical TensorRT evidence recorded")
     key=TensorRtKey(hardware.gpu,hardware.driver or "unknown-driver",backend.tensorrt_version,backend.fingerprint,args.model,model_fingerprint(args.model_path),width,height,args.precision)
+    temporal_mae: float | None = None
     with tempfile.TemporaryDirectory(prefix="cinepulse-h7-") as temporary:
         output=Path(temporary)/"candidate"; output.mkdir()
         command=build_external_command(backend,model=args.model,model_path=args.model_path,input_path=args.input,output_path=output,width=width,height=height,precision=args.precision)
         started=time.perf_counter(); result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding="utf-8",errors="replace",timeout=max(1.0,args.timeout),check=False); candidate_seconds=max(.000001,time.perf_counter()-started)
         text=result.stdout or ""; oom=any(t in text.lower() for t in ("out of memory","oom","failed to allocate","cuda_error_out_of_memory"))
-        integrity=frame_ok=black=False; psnr=ssim=0.0
+        integrity=frame_ok=black=temporal_ok=False; psnr=ssim=0.0
         if result.returncode==0:
             try:
-                frames=validate_png_sequence(output,len(baseline_frames)); integrity=True; frame_ok=len(frames)==len(baseline_frames); black=black_frame_ok(ffmpeg,frames); psnr=metric(ffmpeg,args.baseline,output,"psnr",args.timeout); ssim=metric(ffmpeg,args.baseline,output,"ssim",args.timeout)
-            except (OSError,ValueError,RuntimeError): integrity=False
-        evidence=TensorRtEvidence(max(0.0,args.baseline_seconds),candidate_seconds,integrity,frame_ok,black,frame_ok and integrity,psnr,ssim,None,oom)
+                frames=validate_png_sequence(output,len(baseline_frames)); integrity=True; frame_ok=len(frames)==len(baseline_frames); black=black_frame_ok(ffmpeg,frames); psnr=metric(ffmpeg,args.baseline,output,"psnr",args.timeout); ssim=metric(ffmpeg,args.baseline,output,"ssim",args.timeout); temporal_ok, temporal_mae=temporal_parity(ffmpeg,baseline_frames,frames)
+            except (OSError,ValueError,RuntimeError): integrity=False; temporal_ok=False
+        evidence=TensorRtEvidence(max(0.0,args.baseline_seconds),candidate_seconds,integrity,frame_ok,black,temporal_ok,psnr,ssim,None,oom)
         recorded=TensorRtPreviewStore(args.cache).record(key,backend,evidence)
-    print(json.dumps({"physical_acceptance":"exact-preview-evidence-recorded-not-global-pass" if recorded else "rejected","preview_only":True,"stable_fallback":"NCNN Vulkan","hardware":hardware.as_dict(),"backend":{"version":backend.version,"tensorrt_version":backend.tensorrt_version,"license_id":backend.license_id,"fingerprint":backend.fingerprint},"model":args.model,"precision":args.precision,"resolution":[width,height],"speedup":evidence.speedup,"psnr_db":psnr,"ssim":ssim,"accepted":evidence.accepted,"cache_key":key.token()},ensure_ascii=False,indent=2))
+    print(json.dumps({"physical_acceptance":"exact-preview-evidence-recorded-not-global-pass" if recorded else "rejected","preview_only":True,"stable_fallback":"NCNN Vulkan","hardware":hardware.as_dict(),"backend":{"version":backend.version,"tensorrt_version":backend.tensorrt_version,"license_id":backend.license_id,"fingerprint":backend.fingerprint},"model":args.model,"precision":args.precision,"resolution":[width,height],"speedup":evidence.speedup,"psnr_db":psnr,"ssim":ssim,"temporal_delta_mae_gray":temporal_mae,"temporal_ok":evidence.temporal_ok,"accepted":evidence.accepted,"cache_key":key.token()},ensure_ascii=False,indent=2))
     return 0 if recorded else 2
 
 if __name__=="__main__": raise SystemExit(main())
