@@ -20,3 +20,7 @@ A Stable updater release is acceptable only when all of the following are true o
 - Quality, Recovery Reliability, Installer v2 Acceptance and Release Candidate pass on the exact final head.
 
 The first Stable release containing this implementation is the bootstrap boundary: an older 1.1.3 installation cannot execute code it does not yet contain. After that release is installed once, later Stable releases are discoverable through the in-app flow.
+
+## Final-head policy
+
+Any later branch commit invalidates exact-head acceptance and requires the permanent validation matrix to run again. Focused updater tests are necessary but do not replace the Windows installer lifecycle and release-candidate gates.
