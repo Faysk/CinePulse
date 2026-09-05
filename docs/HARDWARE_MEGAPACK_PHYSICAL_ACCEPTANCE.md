@@ -51,7 +51,7 @@ Run `scripts/gpu_compositor_benchmark.py` for every compositor contract intended
 
 PASS requires exact output dimensions/frame count/alpha contract, audio sync where present, PSNR/SSIM parity and a real speedup. Test PNG plus at least one animated/alpha source relevant to the approved envelope. Unsupported dynamic transforms, visualizers or blend modes must remain on the CPU reference path until independently proven.
 
-The Overlay Composer / Music Visualizer Preview feature itself must still work through the CPU reference route when no GPU evidence exists.
+The Overlay Composer / Music Visualizer Preview feature itself must still work through the CPU reference route when no GPU evidence exists. For audio-reactive acceptance, exercise the default master source plus at least one explicitly configured stem binding (for example vocals or drums), save/reload the Preview project, and verify that the same source mapping and audio synchronization survive the round trip. Missing optional stems must fall back to master exactly as the project contract states.
 
 ## H7 — optional Preview TensorRT
 
