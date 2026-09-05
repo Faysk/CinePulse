@@ -1,0 +1,36 @@
+name: Temporary Merge Latest Stable
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - '.github/workflows/_tmp-merge-latest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Inspect merge with latest main
+        shell: bash
+        run: |
+          set +e
+          git config user.name 'CinePulse Merge Audit'
+          git config user.email 'actions@users.noreply.github.com'
+          git fetch origin main
+          git merge --no-commit --no-ff origin/main
+          code=$?
+          echo "MERGE_EXIT=$code"
+          echo '--- STATUS ---'
+          git status --short
+          echo '--- UNMERGED FILES ---'
+          git diff --name-only --diff-filter=U
+          echo '--- CONFLICT DIFF ---'
+          git diff --cc
+          exit 0
