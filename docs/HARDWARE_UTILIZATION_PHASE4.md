@@ -13,6 +13,14 @@ Before the expensive neural stages, CinePulse can collect a small, local-only he
 
 The write probe is intentionally small, non-sparse, `fsync`-flushed and deleted immediately. If free-space headroom is insufficient or the probe fails, no throughput value is invented.
 
+## Runtime integration status
+
+The live headroom contract is now consumed by the actual Studio render path before neural processing. The same per-render snapshot derives separate Real-ESRGAN and RIFE budgets, and those budgets are passed into the existing bounded PNG chunk planner.
+
+The throughput probe runs only when the RenderPlan contains a neural enhancement or RIFE step. Non-neural renders therefore do not pay the physical scratch-probe cost. Real-ESRGAN and RIFE keep their existing model, scale, frame target, integrity and fallback behavior; H4 changes only how many frames may be materialized in one bounded workset.
+
+Focused source tests cover the live RAM/VRAM/scratch snapshot, low-space fail-closed behavior, probe cleanup, bounded budget derivation and both neural tuning safety contracts.
+
 ## What the evidence is allowed to change
 
 The H4 budget may only change the size of a materialized neural PNG chunk and, in later H4 steps, whether a strictly bounded extract/pack overlap is permitted.
