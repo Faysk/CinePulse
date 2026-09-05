@@ -1,0 +1,48 @@
+name: Temporary Composer Pipe Cleanup Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-composer-pipe-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install runtime
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Patch explicit process stream cleanup
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/cinepulse/composer_export.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        finally:\n            decoders.close()\n            for process in (base, encoder):\n                if process.poll() is None:\n                    try:\n                        process.terminate()\n                        process.wait(timeout=3)\n                    except (OSError, subprocess.SubprocessError):\n                        try:\n                            process.kill()\n                        except OSError:\n                            pass\n    return ComposerExportResult(output, frames)\n'''
+          new = '''        finally:\n            decoders.close()\n            for process in (base, encoder):\n                if process.poll() is None:\n                    try:\n                        process.terminate()\n                        process.wait(timeout=3)\n                    except (OSError, subprocess.SubprocessError):\n                        try:\n                            process.kill()\n                        except OSError:\n                            pass\n            # Popen does not close user-visible pipe objects just because the\n            # child exited. Close every stream explicitly so repeated Preview\n            # exports/cancellations cannot accumulate Windows handles or leak\n            # ResourceWarning noise into the release gate.\n            for stream in (base.stdout, base.stderr, encoder.stdin, encoder.stderr):\n                if stream is None:\n                    continue\n                try:\n                    if not stream.closed:\n                        stream.close()\n                except OSError:\n                    pass\n    return ComposerExportResult(output, frames)\n'''
+          if text.count(old) != 1:
+              raise SystemExit('expected Composer process cleanup block not found exactly once')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+      - name: Focused Composer recovery tests
+        run: |
+          python -m compileall -q src/cinepulse/composer_export.py src/cinepulse/composer_auto_export.py
+          python -m unittest tests.test_composer_export tests.test_composer_auto_export
+      - name: Commit cleanup and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/_tmp-composer-pipe-cleanup.yml
+          git add src/cinepulse/composer_export.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: close Composer FFmpeg pipes deterministically"
+          git push origin HEAD:preview-restoration-lab
