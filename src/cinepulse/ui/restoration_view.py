@@ -132,8 +132,8 @@ def build_restoration_panel(studio, parent) -> None:
     slider(4, "Contraste", studio.restoration_contrast, 0.70, 1.35, "70–135%")
     slider(5, "Saturação", studio.restoration_saturation, 0.65, 1.40, "65–140%")
     slider(6, "Gamma", studio.restoration_gamma, 0.75, 1.30, "0.75–1.30")
-    slider(7, "Temperatura", studio.restoration_temperature, -1.0, 1.0, "frio↔quente")
-    slider(8, "Tint", studio.restoration_tint, -1.0, 1.0, "verde↔magenta")
+    slider(7, "Temperatura", studio.restoration_temperature, -0.30, 0.30, "±30%")
+    slider(8, "Tint", studio.restoration_tint, -0.25, 0.25, "±25%")
 
     actions = ttk.Frame(controls, style="PanelAlt.TFrame")
     actions.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(11, 0))
