@@ -30,7 +30,9 @@ from .gpu_compositor import (
 from .visualizer_geometry import geometry_for
 
 
-COMPOSER_SCHEMA = 1
+COMPOSER_SCHEMA = 2
+LEGACY_COMPOSER_SCHEMA = 1
+AUDIO_SOURCE_BINDINGS = ("master", "vocals", "drums", "bass", "other")
 VisualizerKind = Literal["waveform", "spectrum", "circular"]
 VisualizerBinding = Literal["master", "vocals", "drums", "bass", "other"]
 ExecutionRoute = Literal["cuda-overlay", "cpu-overlay", "cpu-visualizer"]
@@ -124,6 +126,42 @@ class ComposerRoute:
 @dataclass
 class OverlayComposerState:
     items: list[ComposerItem] = field(default_factory=list)
+    audio_sources: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        normalized: dict[str, str] = {}
+        for binding, source in dict(self.audio_sources).items():
+            key = self._audio_binding(binding)
+            value = str(source or "").strip()
+            if not value:
+                raise ValueError(f"composer audio source for {key} cannot be empty")
+            normalized[key] = value
+        self.audio_sources.clear()
+        self.audio_sources.update(normalized)
+
+    @staticmethod
+    def _audio_binding(binding: object) -> str:
+        value = str(binding or "").strip().lower()
+        if value not in AUDIO_SOURCE_BINDINGS:
+            raise ValueError(f"unsupported composer audio binding: {value or '<empty>'}")
+        return value
+
+    def set_audio_source(self, binding: object, source: str | Path) -> None:
+        key = self._audio_binding(binding)
+        value = str(Path(source).expanduser()).strip()
+        if not value:
+            raise ValueError(f"composer audio source for {key} cannot be empty")
+        self.audio_sources[key] = value
+
+    def clear_audio_source(self, binding: object) -> bool:
+        key = self._audio_binding(binding)
+        return self.audio_sources.pop(key, None) is not None
+
+    def resolved_audio_sources(self, master_source: str | Path) -> dict[str, str]:
+        resolved = dict(self.audio_sources)
+        if not resolved.get("master"):
+            resolved["master"] = str(Path(master_source).expanduser())
+        return resolved
 
     def add(self, item: ComposerItem) -> None:
         if any(existing.id == item.id for existing in self.items):
@@ -139,16 +177,23 @@ class OverlayComposerState:
         return tuple(sorted((item for item in self.items if item.enabled), key=lambda item: (item.z_order, item.id)))
 
     def as_dict(self) -> dict[str, object]:
-        return {"schema": COMPOSER_SCHEMA, "items": [asdict(item) for item in self.items]}
+        return {
+            "schema": COMPOSER_SCHEMA,
+            "items": [asdict(item) for item in self.items],
+            "audio_sources": dict(sorted(self.audio_sources.items())),
+        }
 
     @classmethod
     def from_dict(cls, payload: object) -> "OverlayComposerState":
-        if not isinstance(payload, dict) or payload.get("schema") != COMPOSER_SCHEMA:
+        if not isinstance(payload, dict) or payload.get("schema") not in {LEGACY_COMPOSER_SCHEMA, COMPOSER_SCHEMA}:
             raise ValueError("unsupported overlay composer schema")
         raw_items = payload.get("items")
         if not isinstance(raw_items, list):
             raise ValueError("overlay composer items must be a list")
-        state = cls()
+        raw_audio = payload.get("audio_sources", {})
+        if not isinstance(raw_audio, dict):
+            raise ValueError("overlay composer audio_sources must be an object")
+        state = cls(audio_sources={str(key): str(value) for key, value in raw_audio.items()})
         for raw in raw_items:
             if not isinstance(raw, dict):
                 raise ValueError("overlay composer item must be an object")

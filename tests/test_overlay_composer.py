@@ -134,7 +134,7 @@ class OverlayComposerTests(unittest.TestCase):
             state.save(path)
             restored = OverlayComposerState.load(path)
             self.assertEqual(state.as_dict(), restored.as_dict())
-            self.assertEqual(1, json.loads(path.read_text(encoding="utf-8"))["schema"])
+            self.assertEqual(2, json.loads(path.read_text(encoding="utf-8"))["schema"])
             self.assertFalse(any(child.suffix == ".tmp" for child in path.parent.iterdir()))
 
     def test_invalid_or_duplicate_persisted_state_fails_closed(self) -> None:

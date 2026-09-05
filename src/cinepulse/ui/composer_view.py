@@ -18,7 +18,13 @@ from ..composer_media import probe_composer_media, validate_layer_media
 from ..composer_preview import ComposerPreviewResult, render_composer_preview
 from ..gpu_compositor import OverlayLayer
 from ..loop_engine import FFMPEG, FFPROBE
-from ..overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer, media_layer_from_path
+from ..overlay_composer import (
+    AUDIO_SOURCE_BINDINGS,
+    ComposerItem,
+    OverlayComposerState,
+    VisualizerLayer,
+    media_layer_from_path,
+)
 from .preview import to_ppm_bytes
 
 
@@ -34,7 +40,7 @@ VISUALIZER_LABELS = {
     "spectrum": "Spectrum",
     "circular": "Circular",
 }
-BINDINGS = ("master", "vocals", "drums", "bass", "other")
+BINDINGS = AUDIO_SOURCE_BINDINGS
 BLEND_MODES = ("normal", "multiply", "screen", "add", "overlay")
 
 
@@ -416,6 +422,73 @@ def show_overlay_composer(studio) -> None:
     )
     ttk.Button(actions, text="Remover", command=remove_selected).pack(side="right")
 
+    audio_card = ttk.LabelFrame(list_card, text="Áudio / stems", padding=8)
+    audio_card.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(9, 0))
+    audio_card.columnconfigure(1, weight=1)
+    audio_labels = {name: StringVar(value="") for name in BINDINGS}
+    audio_titles = {
+        "master": "Master",
+        "vocals": "Vocals",
+        "drums": "Drums",
+        "bass": "Bass",
+        "other": "Other",
+    }
+
+    def refresh_audio_sources() -> None:
+        source = _studio_source_path(studio)
+        for name in BINDINGS:
+            configured = state.audio_sources.get(name)
+            if configured:
+                path = Path(configured).expanduser()
+                suffix = " • ausente" if not path.is_file() else ""
+                audio_labels[name].set(f"{path.name}{suffix}")
+            elif name == "master":
+                label = source.name if source is not None else "vídeo fonte"
+                audio_labels[name].set(f"vídeo fonte • {label}")
+            else:
+                audio_labels[name].set("não configurado • fallback master")
+
+    def choose_audio_source(name: str) -> None:
+        path = filedialog.askopenfilename(
+            parent=window,
+            title=f"Selecionar áudio/stem — {audio_titles[name]}",
+            filetypes=(
+                ("Áudio/vídeo", "*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.mka *.mkv *.mp4 *.mov *.webm"),
+                ("Todos", "*.*"),
+            ),
+        )
+        if not path:
+            return
+        try:
+            state.set_audio_source(name, path)
+            refresh_audio_sources()
+            status.set(f"{audio_titles[name]}: {Path(path).name}")
+        except ValueError as exc:
+            messagebox.showerror("Overlay Composer", str(exc), parent=window)
+
+    def clear_audio_source(name: str) -> None:
+        state.clear_audio_source(name)
+        refresh_audio_sources()
+        if name == "master":
+            status.set("Master voltou a usar o áudio do vídeo fonte.")
+        else:
+            status.set(f"{audio_titles[name]} removido • binding volta ao fallback master.")
+
+    for row, name in enumerate(BINDINGS):
+        ttk.Label(audio_card, text=audio_titles[name], width=8).grid(row=row, column=0, sticky="w", pady=2)
+        ttk.Label(audio_card, textvariable=audio_labels[name]).grid(row=row, column=1, sticky="ew", padx=(4, 6), pady=2)
+        ttk.Button(audio_card, text="Escolher…", command=lambda key=name: choose_audio_source(key)).grid(
+            row=row, column=2, padx=(0, 4), pady=2
+        )
+        ttk.Button(audio_card, text="Limpar", command=lambda key=name: clear_audio_source(key)).grid(
+            row=row, column=3, pady=2
+        )
+    ttk.Label(
+        audio_card,
+        text="Stems não configurados usam master; caminhos ficam salvos no projeto Preview.",
+    ).grid(row=len(BINDINGS), column=0, columnspan=4, sticky="w", pady=(5, 0))
+    refresh_audio_sources()
+
     footer = ttk.Frame(shell)
     footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
     footer.columnconfigure(4, weight=1)
@@ -455,7 +528,10 @@ def show_overlay_composer(studio) -> None:
         try:
             loaded = OverlayComposerState.load(Path(path))
             state.items[:] = loaded.items
+            state.audio_sources.clear()
+            state.audio_sources.update(loaded.audio_sources)
             selected_id.set("")
+            refresh_audio_sources()
             refresh()
             status.set(f"Aberto: {Path(path).name}")
         except ValueError as exc:
@@ -586,7 +662,7 @@ def show_overlay_composer(studio) -> None:
                     ffmpeg=str(FFMPEG),
                     ffprobe=str(FFPROBE),
                     project_time=requested_time,
-                    audio_sources={"master": source},
+                    audio_sources=snapshot.resolved_audio_sources(source),
                     max_width=960,
                     max_height=540,
                 )
@@ -731,7 +807,7 @@ def show_overlay_composer(studio) -> None:
                     state=snapshot,
                     ffmpeg=str(FFMPEG),
                     ffprobe=str(FFPROBE),
-                    audio_sources={"master": source},
+                    audio_sources=snapshot.resolved_audio_sources(source),
                 )
 
                 def update_progress(done: int, total: int) -> None:
@@ -779,8 +855,8 @@ def show_overlay_composer(studio) -> None:
     ttk.Label(
         shell,
         text=(
-            "Prévia fiel limitada a 960×540; export CPU: FFV1 RGB lossless + áudio master. "
-            "Blend avançado cai no CPU; Stable intacto."
+            "Prévia fiel limitada a 960×540; export CPU: FFV1 RGB lossless + master/stems configurados. "
+            "Bindings sem stem usam master; Stable intacto."
         ),
     ).grid(row=3, column=0, columnspan=2, sticky="e", pady=(5, 0))
 
