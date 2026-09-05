@@ -116,10 +116,15 @@ class ComposerExportTests(unittest.TestCase):
     def test_empty_project_and_hdr_reject_before_output_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            source = root / "source.mkv"
             output = root / "out.mkv"
+            # The fixture must reach the HDR/project validation gates; a missing
+            # source would correctly fail earlier with FileNotFoundError and
+            # would not test the output-preservation contract named here.
+            source.write_bytes(b"existing-source")
             output.write_bytes(b"previous-good")
             request = ComposerExportRequest(
-                root / "source.mkv", output, self.profile(transfer="smpte2084"),
+                source, output, self.profile(transfer="smpte2084"),
                 OverlayComposerState(), "ffmpeg", "ffprobe", {},
             )
             with self.assertRaises(ValueError):
