@@ -28,6 +28,9 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 GPU_MEDIA_SCHEMA = 1
 DEFAULT_PSNR_FLOOR_DB = 55.0
 DEFAULT_SSIM_FLOOR = 0.999
+DECODE_PSNR_FLOOR_DB = 80.0
+DECODE_SSIM_FLOOR = 0.999999
+MIN_SPEEDUP = 1.03
 
 
 _CODEC_DECODERS: dict[str, tuple[str, ...]] = {
@@ -244,7 +247,19 @@ class GpuMediaEvidence:
 
     @property
     def quality_ok(self) -> bool:
+        if self.policy.operation == "decode":
+            return self.psnr_db >= DECODE_PSNR_FLOOR_DB and self.ssim >= DECODE_SSIM_FLOOR
         return self.psnr_db >= DEFAULT_PSNR_FLOOR_DB and self.ssim >= DEFAULT_SSIM_FLOOR
+
+    @property
+    def speedup(self) -> float:
+        if self.candidate_seconds <= 0:
+            return 0.0
+        return self.baseline_seconds / self.candidate_seconds
+
+    @property
+    def performance_ok(self) -> bool:
+        return self.speedup >= MIN_SPEEDUP
 
     @property
     def accepted(self) -> bool:
@@ -254,15 +269,10 @@ class GpuMediaEvidence:
             and self.frame_count_ok
             and self.audio_sync_ok
             and self.quality_ok
+            and self.performance_ok
             and self.baseline_seconds > 0
             and self.candidate_seconds > 0
         )
-
-    @property
-    def speedup(self) -> float:
-        if self.candidate_seconds <= 0:
-            return 0.0
-        return self.baseline_seconds / self.candidate_seconds
 
 
 class GpuMediaTuningStore:
