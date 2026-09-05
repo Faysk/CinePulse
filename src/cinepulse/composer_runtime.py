@@ -16,12 +16,9 @@ from typing import Mapping
 
 import numpy as np
 
-from .gpu_compositor import OverlayLayer
 from .overlay_composer import (
-    ComposerItem,
     OverlayComposerState,
     ReactiveFrameState,
-    VisualizerLayer,
     evaluate_media_frame,
     evaluate_visualizer_frame,
 )
@@ -113,30 +110,49 @@ def transform_overlay(source: np.ndarray, state: ReactiveFrameState, canvas_widt
     overlay = _rotate_nearest(overlay, state.rotation_degrees)
     if state.opacity < 1.0:
         overlay = overlay.copy()
-        overlay[..., 3] = np.rint(overlay[..., 3].astype(np.float32) * max(0.0, min(1.0, state.opacity))).astype(np.uint8)
-    center_x = float(state.x) * max(0, canvas_width - 1)
-    center_y = float(state.y) * max(0, canvas_height - 1)
+        overlay[..., 3] = np.rint(
+            overlay[..., 3].astype(np.float32) * max(0.0, min(1.0, state.opacity))
+        ).astype(np.uint8)
+    center_x = float(state.x) * max(0, int(canvas_width) - 1)
+    center_y = float(state.y) * max(0, int(canvas_height) - 1)
     left = int(round(center_x - (overlay.shape[1] - 1) * 0.5))
     top = int(round(center_y - (overlay.shape[0] - 1) * 0.5))
     return overlay, left, top
 
 
 def alpha_over(base: np.ndarray, overlay: np.ndarray, left: int, top: int) -> None:
-    """Straight-alpha source-over in place using deterministic float32 math."""
+    """Straight-alpha source-over in place using deterministic float32 math.
+
+    Both operands are validated here even when callers bypass the higher-level
+    composer runtime. That makes corruption/type mistakes fail closed instead of
+    being silently coerced into reference pixels that a GPU backend could later
+    be benchmarked against.
+    """
+    if not isinstance(base, np.ndarray) or base.ndim != 3 or base.shape[2] != 4 or base.dtype != np.uint8:
+        raise ValueError("composer alpha base must be uint8 HxWxRGBA")
+    over = _validate_overlay(overlay)
     canvas_h, canvas_w = base.shape[:2]
-    over_h, over_w = overlay.shape[:2]
-    x0 = max(0, int(left)); y0 = max(0, int(top))
-    x1 = min(canvas_w, int(left) + over_w); y1 = min(canvas_h, int(top) + over_h)
+    over_h, over_w = over.shape[:2]
+    x0 = max(0, int(left))
+    y0 = max(0, int(top))
+    x1 = min(canvas_w, int(left) + over_w)
+    y1 = min(canvas_h, int(top) + over_h)
     if x0 >= x1 or y0 >= y1:
         return
-    ox0 = x0 - int(left); oy0 = y0 - int(top)
-    src = overlay[oy0:oy0 + (y1-y0), ox0:ox0 + (x1-x0)].astype(np.float32) / 255.0
+    ox0 = x0 - int(left)
+    oy0 = y0 - int(top)
+    src = over[oy0:oy0 + (y1 - y0), ox0:ox0 + (x1 - x0)].astype(np.float32) / 255.0
     dst = base[y0:y1, x0:x1].astype(np.float32) / 255.0
     sa = src[..., 3:4]
     da = dst[..., 3:4]
     out_a = sa + da * (1.0 - sa)
     premul = src[..., :3] * sa + dst[..., :3] * da * (1.0 - sa)
-    out_rgb = np.divide(premul, np.maximum(out_a, 1e-8), out=np.zeros_like(premul), where=out_a > 1e-8)
+    out_rgb = np.divide(
+        premul,
+        np.maximum(out_a, 1e-8),
+        out=np.zeros_like(premul),
+        where=out_a > 1e-8,
+    )
     result = np.concatenate((out_rgb, out_a), axis=2)
     base[y0:y1, x0:x1] = np.clip(np.rint(result * 255.0), 0, 255).astype(np.uint8)
 
