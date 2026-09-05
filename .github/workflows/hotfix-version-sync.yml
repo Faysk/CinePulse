@@ -1,0 +1,55 @@
+name: Synchronize 1.1.3 release defaults
+
+on:
+  push:
+    branches:
+      - hotfix-1.1.3-storage-duration
+    paths:
+      - .github/workflows/hotfix-version-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Sync release defaults
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path('scripts/Build-Portable.ps1'),
+              Path('scripts/Build-Msi.ps1'),
+              Path('scripts/Invoke-RcAcceptance.ps1'),
+              Path('.github/workflows/release-candidate.yml'),
+              Path('scripts/Test-Updater.ps1'),
+              Path('scripts/Test-Msi.ps1'),
+              Path('scripts/Test-MsiLifecycle.ps1'),
+          ]
+          for path in paths:
+              text = path.read_text(encoding='utf-8-sig')
+              count = text.count('1.1.2')
+              if count < 1:
+                  raise SystemExit(f'{path}: expected at least one 1.1.2 release default')
+              path.write_text(text.replace('1.1.2', '1.1.3'), encoding='utf-8')
+              print(f'{path}: updated {count} occurrence(s)')
+          PY
+          python -m compileall -q src tests scripts
+      - name: Remove temporary writer workflow and commit
+        shell: bash
+        run: |
+          git rm .github/workflows/hotfix-version-sync.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/Build-Portable.ps1 scripts/Build-Msi.ps1 scripts/Invoke-RcAcceptance.ps1 .github/workflows/release-candidate.yml scripts/Test-Updater.ps1 scripts/Test-Msi.ps1 scripts/Test-MsiLifecycle.ps1
+          git commit -m "chore: synchronize 1.1.3 release defaults"
+          git push origin HEAD:hotfix-1.1.3-storage-duration
