@@ -73,6 +73,10 @@ class ComposerExportTests(unittest.TestCase):
         self.assertIn("-c:v ffv1", joined)
         self.assertIn("-level 3", joined)
         self.assertIn("-pix_fmt gbrap", joined)
+        self.assertIn("-color_primaries bt709", joined)
+        self.assertIn("-color_trc bt709", joined)
+        self.assertIn("-color_range pc", joined)
+        self.assertNotIn("-colorspace gbr", joined)
         self.assertNotIn("nvenc", joined.lower())
 
     def test_mux_preserves_source_audio_independent_from_analysis_master(self) -> None:
