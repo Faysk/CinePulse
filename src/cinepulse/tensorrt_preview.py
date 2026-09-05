@@ -8,7 +8,8 @@ backend is discoverable only when the user has installed it separately and it
 speaks the small external-runner protocol below.
 
 NCNN/Vulkan remains the Stable and unconditional fallback. TensorRT permission
-is exact-hardware evidence, never capability detection alone.
+is exact-hardware evidence, never capability detection alone. H7 records are
+also bound to the exact H2/H3 NCNN policy used as their quality baseline.
 """
 
 from dataclasses import asdict, dataclass
@@ -22,7 +23,9 @@ import time
 from typing import Literal
 
 
-TENSORRT_PREVIEW_SCHEMA = 2
+# Schema 3 binds every TensorRT permission to a proven NCNN baseline policy.
+# Older records cannot be replayed after NCNN tuning changes or invalidation.
+TENSORRT_PREVIEW_SCHEMA = 3
 BackendModel = Literal["realesrgan", "rife"]
 Precision = Literal["fp32", "fp16"]
 
@@ -99,9 +102,14 @@ class TensorRtKey:
     backend_fingerprint: str
     model: BackendModel
     model_fingerprint: str
+    ncnn_baseline_fingerprint: str
     width: int
     height: int
     precision: Precision
+
+    def __post_init__(self) -> None:
+        if not self.ncnn_baseline_fingerprint.strip():
+            raise ValueError("TensorRT evidence requires a proven NCNN baseline fingerprint")
 
     def token(self) -> str:
         return "|".join((
@@ -111,6 +119,7 @@ class TensorRtKey:
             self.backend_fingerprint.strip().lower(),
             self.model,
             self.model_fingerprint.strip().lower(),
+            self.ncnn_baseline_fingerprint.strip().lower(),
             f"{max(1, int(self.width))}x{max(1, int(self.height))}",
             self.precision,
         ))
@@ -175,6 +184,7 @@ class TensorRtPreviewStore:
         if (
             key.backend_fingerprint != backend.fingerprint
             or key.tensorrt_version != backend.tensorrt_version
+            or not key.ncnn_baseline_fingerprint.strip()
             or not evidence.accepted
         ):
             return False
