@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import stat
 import tempfile
 import unittest
@@ -12,10 +14,13 @@ from unittest.mock import patch
 from cinepulse.update_manager import (
     UpdateInfo,
     _download_limited,
+    _handoff_script,
     _read_limited,
     _safe_extract,
     _validated_update_info,
+    check_github_release,
     is_newer,
+    launch_staged,
     stage,
 )
 
@@ -33,6 +38,39 @@ class _Response(io.BytesIO):
         return False
 
 
+def _release_payload(version: str = "1.2.0", *, digest: bool = True) -> bytes:
+    assets = []
+    for name, marker in (
+        (f"CinePulse-{version}-windows-portable.zip", "a"),
+        (f"CinePulse-{version}-Setup.msi", "b"),
+    ):
+        asset = {
+            "name": name,
+            "state": "uploaded",
+            "browser_download_url": f"https://github.com/Faysk/CinePulse/releases/download/v{version}/{name}",
+        }
+        if digest:
+            asset["digest"] = "sha256:" + marker * 64
+        assets.append(asset)
+    assets.append(
+        {
+            "name": "SHA256SUMS.txt",
+            "state": "uploaded",
+            "browser_download_url": f"https://github.com/Faysk/CinePulse/releases/download/v{version}/SHA256SUMS.txt",
+            "digest": "sha256:" + "c" * 64,
+        }
+    )
+    return json.dumps(
+        {
+            "tag_name": f"v{version}",
+            "html_url": f"https://github.com/Faysk/CinePulse/releases/tag/v{version}",
+            "draft": False,
+            "prerelease": False,
+            "assets": assets,
+        }
+    ).encode("utf-8")
+
+
 class UpdateManagerTests(unittest.TestCase):
     def test_release_order(self) -> None:
         self.assertTrue(is_newer("1.0.0", "1.0.0-rc1"))
@@ -47,6 +85,107 @@ class UpdateManagerTests(unittest.TestCase):
         )
         self.assertEqual(version, "1.1.1")
         self.assertEqual(digest, "a" * 64)
+
+    def test_release_discovery_uses_asset_digest_without_second_request(self) -> None:
+        response = _Response(_release_payload())
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response) as open_url:
+            info = check_github_release("1.1.3", installation="portable", timeout=3)
+        self.assertIsNotNone(info)
+        assert info is not None
+        self.assertEqual("1.2.0", info.version)
+        self.assertEqual("portable", info.package_kind)
+        self.assertEqual("a" * 64, info.sha256)
+        self.assertEqual("CinePulse-1.2.0-windows-portable.zip", info.asset_name)
+        self.assertEqual(1, open_url.call_count)
+
+    def test_release_discovery_selects_msi_for_installed_mode(self) -> None:
+        response = _Response(_release_payload())
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response):
+            info = check_github_release("1.1.3", installation="installed", timeout=3)
+        self.assertIsNotNone(info)
+        assert info is not None
+        self.assertEqual("msi", info.package_kind)
+        self.assertEqual("b" * 64, info.sha256)
+        self.assertTrue(info.download_url.endswith("CinePulse-1.2.0-Setup.msi"))
+
+    def test_current_release_does_not_offer_update(self) -> None:
+        response = _Response(_release_payload("1.1.3"))
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response):
+            self.assertIsNone(check_github_release("1.1.3", installation="portable", timeout=3))
+
+    def test_release_without_digest_falls_back_to_sha256sums(self) -> None:
+        release = _Response(_release_payload(digest=False))
+        sums = _Response(
+            (
+                ("d" * 64) + "  CinePulse-1.2.0-windows-portable.zip\n" +
+                ("e" * 64) + "  CinePulse-1.2.0-Setup.msi\n"
+            ).encode("ascii")
+        )
+        with patch("cinepulse.update_manager.urllib.request.urlopen", side_effect=[release, sums]) as open_url:
+            info = check_github_release("1.1.3", installation="portable", timeout=3)
+        self.assertIsNotNone(info)
+        assert info is not None
+        self.assertEqual("d" * 64, info.sha256)
+        self.assertEqual(2, open_url.call_count)
+
+    def test_release_asset_url_must_stay_on_expected_github_release(self) -> None:
+        payload = json.loads(_release_payload().decode("utf-8"))
+        payload["assets"][0]["browser_download_url"] = "https://example.invalid/CinePulse-1.2.0-windows-portable.zip"
+        with patch(
+            "cinepulse.update_manager.urllib.request.urlopen",
+            return_value=_Response(json.dumps(payload).encode("utf-8")),
+        ):
+            with self.assertRaises(ValueError):
+                check_github_release("1.1.3", installation="portable", timeout=3)
+
+    def test_release_discovery_rejects_misflagged_prerelease_tag(self) -> None:
+        response = _Response(_release_payload("1.2.0-rc1"))
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response):
+            with self.assertRaises(ValueError):
+                check_github_release("1.1.3", installation="portable", timeout=3)
+
+    def test_checksum_fallback_must_stay_on_same_release(self) -> None:
+        payload = json.loads(_release_payload(digest=False).decode("utf-8"))
+        checksum = next(item for item in payload["assets"] if item["name"] == "SHA256SUMS.txt")
+        checksum["browser_download_url"] = (
+            "https://github.com/Faysk/CinePulse/releases/download/v9.9.9/SHA256SUMS.txt"
+        )
+        response = _Response(json.dumps(payload).encode("utf-8"))
+        with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response) as open_url:
+            with self.assertRaises(ValueError):
+                check_github_release("1.1.3", installation="portable", timeout=3)
+        self.assertEqual(1, open_url.call_count)
+
+    def test_github_update_info_is_bound_to_exact_asset_name(self) -> None:
+        with self.assertRaises(ValueError):
+            _validated_update_info(
+                UpdateInfo(
+                    "1.2.0",
+                    "https://github.com/Faysk/CinePulse/releases/download/v1.2.0/CinePulse-1.2.0-Setup.msi",
+                    "b" * 64,
+                    package_kind="msi",
+                    asset_name="different.msi",
+                    source="github-release",
+                )
+            )
+
+    def test_deferred_msi_handoff_rechecks_hash_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            updates = root / "updates"
+            staged = updates / "1.2.0" / "CinePulse-1.2.0-Setup.msi"
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(b"changed-after-staging")
+            info = UpdateInfo(
+                "1.2.0",
+                "https://github.com/Faysk/CinePulse/releases/download/v1.2.0/CinePulse-1.2.0-Setup.msi",
+                hashlib.sha256(b"original-package").hexdigest(),
+                package_kind="msi",
+                asset_name="CinePulse-1.2.0-Setup.msi",
+            )
+            with patch("cinepulse.update_manager._installed_update_root", return_value=updates):
+                with self.assertRaises(RuntimeError):
+                    launch_staged(info, staged, root / "app", 4321)
 
     def test_stage_rejects_invalid_version_before_filesystem_or_network(self) -> None:
         with self.assertRaises(ValueError):
@@ -64,6 +203,12 @@ class UpdateManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _validated_update_info(
                 UpdateInfo("1.1.1", "https://example.invalid/CinePulse.zip", "a" * 64, "http://example.invalid/notes")
+            )
+
+    def test_staging_rejects_unknown_package_kind(self) -> None:
+        with self.assertRaises(ValueError):
+            _validated_update_info(
+                UpdateInfo("1.1.1", "https://example.invalid/CinePulse.zip", "a" * 64, package_kind="exe")
             )
 
     def test_manifest_reader_rejects_oversized_response(self) -> None:
@@ -85,6 +230,34 @@ class UpdateManagerTests(unittest.TestCase):
             with patch("cinepulse.update_manager.urllib.request.urlopen", return_value=response):
                 with self.assertRaises(ValueError):
                     _download_limited(urllib.request.Request("https://example.invalid/update.zip"), destination, 5)
+
+    def test_msi_handoff_waits_for_app_before_major_upgrade_and_reopens(self) -> None:
+        info = UpdateInfo(
+            "1.2.0",
+            "https://github.com/Faysk/CinePulse/releases/download/v1.2.0/CinePulse-1.2.0-Setup.msi",
+            "b" * 64,
+            package_kind="msi",
+            asset_name="CinePulse-1.2.0-Setup.msi",
+        )
+        script = _handoff_script(info, Path(r"C:\Temp\update.msi"), Path(r"C:\Apps\CinePulse"), 4321)
+        self.assertIn("Wait-Process -Id $PidToWait", script)
+        self.assertIn("msiexec.exe", script)
+        self.assertIn("/passive /norestart", script)
+        self.assertIn("CinePulse-Installed.cmd", script)
+        self.assertLess(script.index("Wait-Process"), script.index("msiexec.exe"))
+
+    def test_portable_handoff_waits_then_relaunches_existing_transaction(self) -> None:
+        info = UpdateInfo(
+            "1.2.0",
+            "https://github.com/Faysk/CinePulse/releases/download/v1.2.0/CinePulse-1.2.0-windows-portable.zip",
+            "a" * 64,
+            package_kind="portable",
+        )
+        script = _handoff_script(info, Path(r"C:\App\.runtime\pending-update.json"), Path(r"C:\App"), 123)
+        self.assertIn("pending-update.json", script)
+        self.assertIn("CinePulse.cmd", script)
+        self.assertNotIn("msiexec.exe", script)
+        self.assertLess(script.index("Wait-Process"), script.index("Start-Process"))
 
     def test_zip_rejects_expanded_size_over_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

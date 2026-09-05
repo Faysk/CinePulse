@@ -111,6 +111,7 @@ def main() -> int:
     quality_workflow = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
     installer_acceptance = (ROOT / ".github/workflows/installer-v2-acceptance.yml").read_text(encoding="utf-8")
     publisher_workflow = (ROOT / ".github/workflows/publish-release.yml").read_text(encoding="utf-8")
+    update_manager_text = (ROOT / "src" / "cinepulse" / "update_manager.py").read_text(encoding="utf-8")
 
     h8_paths = (
         ROOT / "src" / "cinepulse" / "overnight_runtime.py",
@@ -130,7 +131,30 @@ def main() -> int:
         and str(channel.get("public_key") or "").strip()
         and str(channel.get("manifest_signature_url") or "").strip().startswith("https://")
     )
-    update_policy_safe = not manifest_url or signed_channel
+    github_release_update_contract_safe = (
+        all(
+            token in update_manager_text
+            for token in (
+                'https://api.github.com/repos/Faysk/CinePulse/releases/latest',
+                '_validate_release_asset_url',
+                'SHA256SUMS.txt',
+                'A release Stable precisa usar versão final x.y.z',
+                '_sha256_file(staged)',
+            )
+        )
+        and all(
+            token in publisher_workflow
+            for token in (
+                'Stable publisher requires x.y.z SemVer',
+                'dist/SHA256SUMS.txt',
+                'gh release',
+            )
+        )
+    )
+    # Portable may opt into the legacy manifest channel, but when it does that
+    # channel must be signed. Installed mode and the default portable path use
+    # the pinned GitHub release contract above.
+    update_policy_safe = github_release_update_contract_safe and (not manifest_url or signed_channel)
     neural_required = {"torch", "demucs", "soundfile"}
     neural_lock_complete = (
         neural_lock_path.is_file()
@@ -228,7 +252,8 @@ def main() -> int:
     checks = {
         "pytest_src_path_configured": "src" in pytest_config.get("pythonpath", []),
         "no_misleading_gpu_automatic_label": "GPU automática" not in ui_text,
-        "update_policy_signed_or_disabled": update_policy_safe,
+        "update_policy_trusted_source": update_policy_safe,
+        "github_release_update_contract_safe": github_release_update_contract_safe,
         "runtime_lock_hashed": bool(runtime_locked) and "--hash=sha256:" in runtime_lock_text,
         "neural_lock_complete_and_hashed": neural_lock_complete,
         "installer_consumes_neural_hash_lock": installer_uses_neural_lock,
@@ -259,7 +284,7 @@ def main() -> int:
         "declared_versions": declared_versions,
         "studio_lines": _line_count(studio_path),
         "loop_engine_lines": _line_count(ROOT / "src" / "cinepulse" / "loop_engine.py"),
-        "update_channel_mode": "signed" if manifest_url else "disabled",
+        "update_channel_mode": "signed-manifest+github-installed" if manifest_url else "github-release",
         "update_protected_roots": sorted(protected_update_roots),
         "runtime_locked_packages": runtime_locked,
         "runtime_locked_package_count": len(runtime_locked),
