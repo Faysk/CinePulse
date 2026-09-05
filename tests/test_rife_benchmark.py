@@ -150,7 +150,10 @@ class RifeBenchmarkTests(unittest.TestCase):
                 expected_frames=16,
                 black_frame_ok=True,
             )
-            with patch("cinepulse.rife_benchmark.run_candidate", side_effect=(baseline, fast)) as run:
+            with (
+                patch("cinepulse.rife_benchmark.run_candidate", side_effect=(baseline, fast)) as run,
+                patch("cinepulse.rife_benchmark.sampled_psnr", return_value=80.0),
+            ):
                 winner, samples = benchmark_and_record(
                     store,
                     key,
@@ -163,9 +166,39 @@ class RifeBenchmarkTests(unittest.TestCase):
                     ffmpeg="ffmpeg",
                 )
             self.assertEqual(fast_policy, winner)
-            self.assertEqual((baseline, fast), samples)
             self.assertEqual(2, run.call_count)
+            self.assertTrue(samples[1].quality_ok)
+            self.assertEqual(80.0, samples[1].quality_psnr_db)
             self.assertEqual(fast_policy, store.lookup(key))
+
+    def test_faster_candidate_below_visual_parity_floor_cannot_win(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = RifeTuningStore(root / "rife-tuning.json")
+            key = RifeTuningKey("RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160)
+            baseline_policy = RifePolicy("1:1:1")
+            fast_policy = RifePolicy("1:2:1")
+            baseline = RifeSample(baseline_policy, 10.0, True, output_frames=16, expected_frames=16)
+            fast = RifeSample(fast_policy, 4.0, True, output_frames=16, expected_frames=16)
+            with (
+                patch("cinepulse.rife_benchmark.run_candidate", side_effect=(baseline, fast)),
+                patch("cinepulse.rife_benchmark.sampled_psnr", return_value=41.0),
+            ):
+                winner, samples = benchmark_and_record(
+                    store,
+                    key,
+                    (baseline_policy, fast_policy),
+                    executable=Path("rife.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("input"),
+                    work_dir=root / "work",
+                    uhd=True,
+                    ffmpeg="ffmpeg",
+                )
+            self.assertEqual(baseline_policy, winner)
+            self.assertFalse(samples[1].quality_ok)
+            self.assertFalse(samples[1].accepted)
+            self.assertEqual(41.0, samples[1].quality_psnr_db)
 
     def test_corrupt_faster_candidate_cannot_beat_valid_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
