@@ -1,0 +1,59 @@
+name: Temporary H6 Composer Auto Export Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h6-composer-auto-integrate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install test runtime
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Patch Composer desktop export route
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/cinepulse/ui/composer_view.py')
+          text = path.read_text(encoding='utf-8')
+          old_import = 'from ..composer_export import ComposerExportRequest, export_composer_reference\n'
+          new_import = 'from ..composer_auto_export import export_composer_auto\nfrom ..composer_export import ComposerExportRequest\n'
+          if text.count(old_import) != 1:
+              raise SystemExit('expected Composer export import not found exactly once')
+          text = text.replace(old_import, new_import, 1)
+          old_call = '                result = export_composer_reference(\n'
+          new_call = '                result = export_composer_auto(\n'
+          if text.count(old_call) != 1:
+              raise SystemExit('expected Composer reference export call not found exactly once')
+          text = text.replace(old_call, new_call, 1)
+          old_message = '                    f"Composer exportado: {result.output.name} • {result.frames} frame(s) • CPU reference lossless",\n'
+          new_message = '                    f"Composer exportado: {result.output.name} • {result.frames} frame(s) • {result.backend}",\n'
+          if text.count(old_message) != 1:
+              raise SystemExit('expected Composer completion message not found exactly once')
+          text = text.replace(old_message, new_message, 1)
+          path.write_text(text, encoding='utf-8', newline='\n')
+      - name: Focused H6 Composer tests
+        run: |
+          python -m compileall -q src/cinepulse/composer_auto_export.py src/cinepulse/composer_gpu_route.py src/cinepulse/gpu_compositor.py src/cinepulse/ui/composer_view.py
+          python -m unittest tests.test_composer_auto_export tests.test_composer_gpu_route tests.test_gpu_compositor tests.test_composer_view
+      - name: Commit integrated runtime and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/_tmp-h6-composer-auto-integrate.yml
+          git add src/cinepulse/ui/composer_view.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: route Composer export through proven H6 acceleration"
+          git push origin HEAD:preview-restoration-lab
