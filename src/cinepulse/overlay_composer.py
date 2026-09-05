@@ -158,9 +158,34 @@ class OverlayComposerState:
         return self.audio_sources.pop(key, None) is not None
 
     def resolved_audio_sources(self, master_source: str | Path) -> dict[str, str]:
-        resolved = dict(self.audio_sources)
-        if not resolved.get("master"):
-            resolved["master"] = str(Path(master_source).expanduser())
+        """Resolve the live analysis inputs without erasing persisted intent.
+
+        Project files keep the exact paths the user selected so the UI can show
+        an unavailable stem and recover automatically if the drive/file returns.
+        Rendering, however, must not fail merely because an optional stem moved.
+        Missing vocals/drums/bass/other are omitted so the audio-binding layer
+        falls back to master. A missing custom master falls back to the supplied
+        project source. This mapping drives analysis/reactivity only; it never
+        changes the final soundtrack implicitly.
+        """
+        fallback_master = str(Path(master_source).expanduser())
+        custom_master = self.audio_sources.get("master")
+        resolved: dict[str, str] = {
+            "master": (
+                str(Path(custom_master).expanduser())
+                if custom_master and Path(custom_master).expanduser().is_file()
+                else fallback_master
+            )
+        }
+        for binding in AUDIO_SOURCE_BINDINGS:
+            if binding == "master":
+                continue
+            configured = self.audio_sources.get(binding)
+            if not configured:
+                continue
+            candidate = Path(configured).expanduser()
+            if candidate.is_file():
+                resolved[binding] = str(candidate)
         return resolved
 
     def add(self, item: ComposerItem) -> None:
@@ -335,24 +360,17 @@ def route_item(
     store: GpuCompositorStore,
     compositor_key: GpuCompositorKey | None,
 ) -> ComposerRoute:
-    """Choose a fail-closed route without changing the requested appearance."""
     if item.visualizer is not None:
-        return ComposerRoute(
-            item.id,
-            "cpu-visualizer",
-            "procedural/audio-reactive shader parity is not yet physically proven; preserve CPU renderer",
-        )
+        return ComposerRoute(item.id, "cpu-visualizer", "procedural visualizer has no accepted H6 shader parity yet")
     layer = item.media
     assert layer is not None
-    if compositor_key is None:
-        return ComposerRoute(item.id, "cpu-overlay", "no exact H6 compositor evidence key is available")
     if not cuda_layer_eligible(layer, caps):
         return ComposerRoute(item.id, "cpu-overlay", "layer transform/blend is outside the proven CUDA envelope")
+    if compositor_key is None or compositor_key.layer_contract != layer.contract_token():
+        return ComposerRoute(item.id, "cpu-overlay", "no exact H6 compositor key for this layer")
     if not store.approved(compositor_key, caps):
-        return ComposerRoute(item.id, "cpu-overlay", "exact H6 CUDA evidence is absent or stale")
-    if compositor_key.layer_contract != layer.contract_token():
-        return ComposerRoute(item.id, "cpu-overlay", "H6 evidence belongs to a different layer contract")
-    return ComposerRoute(item.id, "cuda-overlay", "exact H6 visual-parity and throughput evidence approved")
+        return ComposerRoute(item.id, "cpu-overlay", "exact H6 physical evidence is absent or rejected")
+    return ComposerRoute(item.id, "cuda-overlay", "exact H6 physical evidence authorizes this static layer")
 
 
 def route_project(
@@ -362,7 +380,4 @@ def route_project(
     store: GpuCompositorStore,
     keys: dict[str, GpuCompositorKey],
 ) -> tuple[ComposerRoute, ...]:
-    return tuple(
-        route_item(item, caps=caps, store=store, compositor_key=keys.get(item.id))
-        for item in state.ordered()
-    )
+    return tuple(route_item(item, caps=caps, store=store, compositor_key=keys.get(item.id)) for item in state.ordered())
