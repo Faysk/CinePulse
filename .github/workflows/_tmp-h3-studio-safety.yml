@@ -1,0 +1,147 @@
+name: Temporary Hardware Phase 3 Studio Safety Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h3-studio-safety.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Patch evidence-gated Real-ESRGAN runtime fallback
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/cinepulse/studio.py')
+          text = path.read_text(encoding='utf-8')
+          old_import = 'from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore, downshift_policy, safe_candidates\n'
+          new_import = 'from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore\n'
+          if old_import not in text:
+              raise SystemExit('expected Real-ESRGAN tuning import not found')
+          text = text.replace(old_import, new_import, 1)
+
+          prelude_start = text.index('        pipeline_parts = realesrgan_pipeline_threads(')
+          prelude_end = text.index('        chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))', prelude_start)
+          prelude = '''        pipeline_parts = realesrgan_pipeline_threads(
+              cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb
+          ).split(":")
+          try:
+              fallback_load, fallback_proc, fallback_save = (max(1, int(value)) for value in pipeline_parts)
+          except (TypeError, ValueError):
+              fallback_load, fallback_proc, fallback_save = 2, 2, 2
+          fallback_policy = RealEsrganPolicy(
+              tile=256,
+              load_jobs=fallback_load,
+              process_jobs=fallback_proc,
+              save_jobs=fallback_save,
+              gpu_index=0,
+          )
+          conservative_policy = RealEsrganPolicy(tile=256, load_jobs=2, process_jobs=2, save_jobs=2, gpu_index=0)
+          tuning_key = RealEsrganTuningKey(
+              self._hardware.gpu or "unknown-gpu",
+              int(self._hardware.vram_mb or 0),
+              self._hardware.driver or "unknown-driver",
+              "realesr-animevideov3",
+              source_w,
+              source_h,
+              2,
+          )
+          tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
+          tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
+          active_policy = tuned_policy or fallback_policy
+          if tuned_policy is not None:
+              self._log(
+                  f"H3 Real-ESRGAN: política física aprovada carregada tile={active_policy.tile} "
+                  f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."
+              )
+          else:
+              self._log(
+                  f"H3 Real-ESRGAN: sem evidência física exata; preservando política Phase 2 "
+                  f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index}."
+              )
+  '''
+          text = text[:prelude_start] + prelude + text[prelude_end:]
+
+          loop_start = text.index('            self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")')
+          loop_end = text.index('            self._set_stage("IA 3/3", f"Lote {chunk_index}: compactando o resultado lossless e liberando PNGs.")', loop_start)
+          loop = '''            self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")
+              attempted: set[RealEsrganPolicy] = set()
+              policy = active_policy
+              while True:
+                  attempted.add(policy)
+                  safe_rmtree(outgoing)
+                  outgoing.mkdir(parents=True, exist_ok=True)
+                  command = [
+                      str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
+                      "-n", "realesr-animevideov3", "-s", "2", "-f", "png",
+                  ] + policy.command_args()
+                  try:
+                      self._log(
+                          f"H3 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "
+                          f"pipeline={policy.pipeline} gpu={policy.gpu_index}."
+                      )
+                      self._run_ai(
+                          command, outgoing, frames,
+                          stage_base + weight * fraction_chunk * 0.18,
+                          weight * fraction_chunk * 0.58,
+                      )
+                      produced = len(list(outgoing.glob("frame*.png")))
+                      if produced != frames:
+                          raise RuntimeError(
+                              f"Real-ESRGAN produziu {produced} de {frames} quadros esperados no lote."
+                          )
+                      active_policy = policy
+                      break
+                  except InterruptedError:
+                      raise
+                  except RuntimeError as exc:
+                      failure_text = str(exc).lower()
+                      oom_like = any(
+                          token in failure_text
+                          for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
+                      )
+                      was_tuned = tuned_policy is not None and policy == tuned_policy
+                      if was_tuned:
+                          if tuning_store.invalidate(tuning_key, reason=str(exc)):
+                              self._log("H3 Real-ESRGAN: política física aprovada falhou e foi invalidada para esta chave exata.")
+                          tuned_policy = None
+                      if policy != conservative_policy and conservative_policy not in attempted:
+                          self._log(
+                              f"H3 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'falha/integridade'} "
+                              f"com tile={policy.tile} pipeline={policy.pipeline}; única repetição segura com "
+                              f"tile={conservative_policy.tile} pipeline={conservative_policy.pipeline}."
+                          )
+                          policy = conservative_policy
+                          continue
+                      raise
+
+  '''
+          text = text[:loop_start] + loop + text[loop_end:]
+          path.write_text(text, encoding='utf-8', newline='\n')
+      - name: Focused source tests
+        run: |
+          python -m pip install --disable-pip-version-check --editable .
+          python -m unittest discover -s tests -p 'test_realesrgan_tuning.py'
+          python -m unittest discover -s tests -p 'test_hardware_advisor.py'
+          python -m compileall -q src/cinepulse
+      - name: Commit integration and remove temporary writer
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/_tmp-h3-studio-safety.yml
+          git add src/cinepulse/studio.py
+          git commit -m "Hardware Phase 3: enforce evidence-gated neural fallback"
+          git push origin HEAD:preview-restoration-lab
