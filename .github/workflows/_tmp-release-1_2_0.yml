@@ -36,7 +36,6 @@ jobs:
               'scripts/Build-Portable.ps1': [("[string]$Version = '1.1.3'", "[string]$Version = '1.2.0'")],
               'scripts/Build-Msi.ps1': [("[string]$Version = '1.1.3'", "[string]$Version = '1.2.0'")],
               'scripts/Invoke-RcAcceptance.ps1': [("[string]$Version = '1.1.3'", "[string]$Version = '1.2.0'")],
-              '.github/workflows/release-candidate.yml': [('        default: 1.1.3', '        default: 1.2.0')],
           }
           for raw_path, pairs in replacements.items():
               path = Path(raw_path)
