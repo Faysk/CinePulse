@@ -1,9 +1,10 @@
 """Preview-only temporal reconstruction for detected overlay regions.
 
-This is a conservative local backend: neighboring frames donate the hidden
-source only when the context around the overlay still matches the target frame.
-It is intentionally NumPy-only so CinePulse can ship a useful fallback before
-optional neural inpainting components are introduced.
+Burned-in overlays occupy the same screen coordinates in every frame, so raw
+neighbor patches are not valid donors: they contain the same text/QR/logo. This
+backend instead estimates the hidden patch from the visible boundary around the
+region for the target and context-compatible nearby frames, then uses a temporal
+median to stabilize that estimate.
 """
 
 from __future__ import annotations
@@ -106,6 +107,38 @@ def _feather_mask(height: int, width: int, pixels: int) -> np.ndarray:
     return np.clip((distance + 1.0) / (pixels + 1.0), 0.0, 1.0)
 
 
+def _boundary_guided_patch(frame: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray | None:
+    """Estimate a hidden rectangular patch from pixels immediately around it.
+
+    Horizontal and vertical interpolants are averaged when both are available.
+    This deliberately favors smooth, conservative reconstruction over invented
+    high-frequency detail. Complex regions can later be upgraded by an optional
+    neural inpainting backend without changing the Preview orchestration contract.
+    """
+
+    x, y, region_width, region_height = box
+    frame_height, frame_width, _ = frame.shape
+    estimates: list[np.ndarray] = []
+
+    if x > 0 and x + region_width < frame_width:
+        left = frame[y : y + region_height, x - 1].astype(np.float32)
+        right = frame[y : y + region_height, x + region_width].astype(np.float32)
+        weights = ((np.arange(region_width, dtype=np.float32) + 1.0) / (region_width + 1.0))[None, :, None]
+        horizontal = left[:, None, :] * (1.0 - weights) + right[:, None, :] * weights
+        estimates.append(horizontal)
+
+    if y > 0 and y + region_height < frame_height:
+        top = frame[y - 1, x : x + region_width].astype(np.float32)
+        bottom = frame[y + region_height, x : x + region_width].astype(np.float32)
+        weights = ((np.arange(region_height, dtype=np.float32) + 1.0) / (region_height + 1.0))[:, None, None]
+        vertical = top[None, :, :] * (1.0 - weights) + bottom[None, :, :] * weights
+        estimates.append(vertical)
+
+    if not estimates:
+        return None
+    return np.mean(np.stack(estimates), axis=0)
+
+
 def reconstruct_region_temporally(
     frames: Sequence[np.ndarray],
     *,
@@ -113,11 +146,12 @@ def reconstruct_region_temporally(
     region: OverlayRegion,
     policy: TemporalReconstructionPolicy = TemporalReconstructionPolicy(),
 ) -> ReconstructionResult:
-    """Reconstruct one overlay region from context-compatible nearby frames.
+    """Reconstruct one persistent overlay from visible boundary information.
 
-    Donors are limited to a temporal radius and rejected when the ring around
-    the overlay differs too much from the target. The surviving donor patches
-    are combined with a temporal median and feathered into the target frame.
+    Neighboring frames are used only when the ring around the overlay resembles
+    the target scene. Their *occluded* pixels are never copied directly. Instead
+    every accepted frame contributes a boundary-guided estimate and the temporal
+    median stabilizes those estimates before feathering them into the target.
     """
 
     if not frames:
@@ -150,7 +184,9 @@ def reconstruct_region_temporally(
         donor = arrays[index]
         mae = _context_mae(target, donor, row_slice, column_slice, context_mask)
         if mae <= policy.max_context_mae:
-            accepted.append((index, mae, donor[y : y + region_height, x : x + region_width]))
+            estimate = _boundary_guided_patch(donor, box)
+            if estimate is not None:
+                accepted.append((index, mae, estimate))
 
     accepted.sort(key=lambda item: item[1])
     if len(accepted) < policy.minimum_donors:
@@ -161,8 +197,17 @@ def reconstruct_region_temporally(
             context_mae=tuple(item[1] for item in accepted),
         )
 
-    donor_stack = np.stack([item[2].astype(np.float32, copy=False) for item in accepted])
-    replacement = np.median(donor_stack, axis=0)
+    target_estimate = _boundary_guided_patch(target, box)
+    if target_estimate is None:
+        return ReconstructionResult(
+            frame=target.copy(),
+            applied=False,
+            donor_indices=tuple(item[0] for item in accepted),
+            context_mae=tuple(item[1] for item in accepted),
+        )
+
+    estimates = [target_estimate, *[item[2] for item in accepted]]
+    replacement = np.median(np.stack(estimates), axis=0)
     original_patch = target[y : y + region_height, x : x + region_width].astype(np.float32, copy=False)
     alpha = _feather_mask(region_height, region_width, policy.feather_pixels)[..., None]
     blended = original_patch * (1.0 - alpha) + replacement * alpha
