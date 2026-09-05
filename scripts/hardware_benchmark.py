@@ -8,6 +8,7 @@ from pathlib import Path
 from cinepulse.cpu_tuning import CpuTuningKey, CpuTuningSample, CpuTuningStore
 from cinepulse.hardware_advisor import analyze_hardware_summary
 from cinepulse.hardware_telemetry import BENCHMARK_SCENARIOS, benchmark_summary, compare_benchmarks, load_telemetry
+from cinepulse.hardware_throughput import throughput_from_telemetry
 from cinepulse.realesrgan_tuning import (
     RealEsrganPolicy,
     RealEsrganSample,
@@ -145,18 +146,49 @@ def _realesrgan_key(args: argparse.Namespace) -> RealEsrganTuningKey:
     )
 
 
+def _summary_with_throughput(path: Path, scenario: str | None) -> dict:
+    telemetry = load_telemetry(path)
+    payload = benchmark_summary(telemetry, scenario=scenario)
+    payload["throughput"] = throughput_from_telemetry(telemetry)
+    return payload
+
+
+def _throughput_comparison(baseline: dict, candidate: dict) -> dict[str, object]:
+    before = baseline.get("throughput", {}).get("stages", {}) if isinstance(baseline.get("throughput"), dict) else {}
+    after = candidate.get("throughput", {}).get("stages", {}) if isinstance(candidate.get("throughput"), dict) else {}
+    result: dict[str, object] = {}
+    for stage in sorted(set(before) | set(after)):
+        left = before.get(stage) if isinstance(before.get(stage), dict) else {}
+        right = after.get(stage) if isinstance(after.get(stage), dict) else {}
+        try:
+            left_rate = float(left.get("units_per_second")) if left else None
+            right_rate = float(right.get("units_per_second")) if right else None
+        except (TypeError, ValueError):
+            left_rate = right_rate = None
+        rate_speedup = right_rate / left_rate if left_rate and right_rate and left_rate > 0 else None
+        result[stage] = {
+            "baseline_units_per_second": left_rate,
+            "candidate_units_per_second": right_rate,
+            "throughput_speedup": rate_speedup,
+            "work_unit": right.get("work_unit") or left.get("work_unit") or "unknown",
+        }
+    return result
+
+
 def main() -> int:
     args = parser().parse_args()
     if args.command == "summarize":
-        payload = benchmark_summary(load_telemetry(args.telemetry), scenario=args.scenario)
+        payload = _summary_with_throughput(args.telemetry, args.scenario)
     elif args.command == "compare":
-        baseline = benchmark_summary(load_telemetry(args.baseline), scenario=args.scenario)
-        candidate = benchmark_summary(load_telemetry(args.candidate), scenario=args.scenario)
+        baseline = _summary_with_throughput(args.baseline, args.scenario)
+        candidate = _summary_with_throughput(args.candidate, args.scenario)
+        comparison = compare_benchmarks(baseline, candidate)
+        comparison["throughput"] = _throughput_comparison(baseline, candidate)
         payload = {
             "scenario": args.scenario,
             "baseline": baseline,
             "candidate": candidate,
-            "comparison": compare_benchmarks(baseline, candidate),
+            "comparison": comparison,
         }
     elif args.command == "advise":
         telemetry = load_telemetry(args.telemetry)
