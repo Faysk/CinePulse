@@ -23,7 +23,7 @@ from .composer_audio_binding import composer_audio_features
 from .composer_base_probe import ComposerBaseProfile
 from .composer_decode_stream import ComposerMediaDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
-from .composer_runtime import render_composer_frame
+from .composer_runtime import ComposerFrameInputs, render_composer_frame
 from .overlay_composer import OverlayComposerState
 from .safe_output import AtomicOutput
 
@@ -185,13 +185,15 @@ def export_composer_reference(
                     request.profile.height, request.profile.width, 4
                 ).copy()
                 project_time = frame_index / request.profile.fps
-                media_frames: dict[str, np.ndarray | None] = {}
+                media_frames: dict[str, np.ndarray] = {}
                 for item in ordered:
                     if item.media is None:
                         continue
                     info = infos[item.id]
                     position = playback_position(item.media, info, project_time=project_time)
-                    media_frames[item.id] = decoders.frame(item.id, position)
+                    decoded = decoders.frame(item.id, position)
+                    if decoded is not None:
+                        media_frames[item.id] = decoded
                 features = composer_audio_features(
                     request.state,
                     bound_envelopes,
@@ -200,9 +202,11 @@ def export_composer_reference(
                 composed = render_composer_frame(
                     base_frame,
                     request.state,
-                    media_frames=media_frames,
-                    audio_features=features,
-                    output_size=(request.profile.width, request.profile.height),
+                    ComposerFrameInputs(
+                        project_time=project_time,
+                        media_rgba=media_frames,
+                        audio=features,
+                    ),
                 )
                 try:
                     encoder.stdin.write(composed.tobytes())
