@@ -43,7 +43,7 @@ def plan() -> DeliveryPlan:
 
 
 def profile() -> ColorProfile:
-    return ColorProfile("yuv420p", 8, "bt709", "bt709", "bt709", "tv", False)
+    return ColorProfile("bt709", "bt709", "bt709", "tv", "yuv420p", 8, False)
 
 
 def select(*, store=None, source_fps=60.0, target_fps=60, target=(3840, 2160), source=(1920, 1080), color_final=True):
