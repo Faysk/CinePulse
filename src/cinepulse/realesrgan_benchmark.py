@@ -157,6 +157,13 @@ def benchmark_and_record(
             timeout_seconds=timeout_seconds,
         )
         samples.append(sample)
+
+    # Candidate zero is the known/current runtime baseline. If that baseline
+    # cannot complete the exact same sample with integrity, the benchmark run
+    # itself is not trustworthy enough to promote a different policy.
+    if not samples[0].accepted:
+        return None, tuple(samples)
+
     winner = store.record_samples(key, samples, fallback=materialized[0])
     return winner, tuple(samples)
 
