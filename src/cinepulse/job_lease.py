@@ -14,6 +14,7 @@ from typing import Callable, Iterator
 
 LEASE_SCHEMA = 1
 _GUARD_STALE_SECONDS = 30.0
+_GUARD_UNLINK_RETRY_SECONDS = 1.0
 
 
 class LeaseError(RuntimeError):
@@ -126,6 +127,42 @@ def _atomic_json(path: Path, payload: dict) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _unlink_guard_with_retry(path: Path, *, expected_nonce: str | None = None) -> None:
+    """Remove a guard without leaking Windows sharing races.
+
+    A contender may be reading the JSON guard exactly when its owner exits the
+    critical section. POSIX permits unlinking an open file; Windows returns a
+    sharing violation. Retry briefly, and when ownership is known re-check the
+    nonce before every deletion attempt so a newly acquired guard can never be
+    removed by the previous owner.
+    """
+    deadline = time.monotonic() + _GUARD_UNLINK_RETRY_SECONDS
+    while True:
+        if expected_nonce is not None:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+                continue
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                # Ownership cannot be proven; leave the guard for normal stale
+                # recovery instead of risking deletion of another owner.
+                return
+            if payload.get("nonce") != expected_nonce:
+                return
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 @dataclass(frozen=True)
@@ -244,6 +281,13 @@ class JobLease:
                         os.replace(guard, evidence)
                     except FileNotFoundError:
                         pass
+                    except PermissionError:
+                        # Another contender may have the guard open for a
+                        # read on Windows. It will close immediately; retry the
+                        # acquisition loop rather than failing the lease.
+                        if time.monotonic() >= deadline:
+                            raise LeaseBusy(f"job {self.job_id} não conseguiu recuperar guard stale em uso")
+                        time.sleep(0.01)
                     continue
                 if time.monotonic() >= deadline:
                     raise LeaseBusy(f"job {self.job_id} está com uma mutação de lease em andamento")
@@ -256,18 +300,13 @@ class JobLease:
                     handle.flush()
                     os.fsync(handle.fileno())
             except BaseException:
-                guard.unlink(missing_ok=True)
+                _unlink_guard_with_retry(guard)
                 raise
             break
         try:
             yield
         finally:
-            try:
-                current = json.loads(guard.read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                current = {}
-            if current.get("nonce") == guard_nonce:
-                guard.unlink(missing_ok=True)
+            _unlink_guard_with_retry(guard, expected_nonce=guard_nonce)
 
     def read(self) -> LeaseRecord | None:
         try:
