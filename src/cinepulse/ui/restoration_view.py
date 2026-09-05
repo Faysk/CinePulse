@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, PhotoImage, StringVar, TclError, ttk
 
-from ..loop_engine import FFMPEG, first_video_size
+from ..loop_engine import FFMPEG, first_video_size, probe_media
 from ..restoration_preview import PreviewRestorationPlan, inspect_and_plan_preview_restoration
 from .preview import demo_background, extract_video_frame, to_ppm_bytes
 from .restoration_lab import RESTORATION_PRESETS, RestorationUiState, analysis_summary, color_preview, overlay_boxes_preview
@@ -23,7 +23,7 @@ _LABEL_PRESETS = {label: key for key, label, _description in RESTORATION_PRESETS
 
 def _safe_size(path: str) -> tuple[int, int] | None:
     try:
-        size = first_video_size(path)
+        size = first_video_size(probe_media(path))
     except Exception:
         return None
     if not size or len(size) != 2:
