@@ -200,14 +200,17 @@ def spatial_scale_factor(
 
 
 def _master_fps(data: PlanInput) -> float:
-    """Cadence used before optional one-shot RIFE interpolation.
+    """Cadence used by the target-aware master.
 
-    RIFE keeps the original temporal information and is applied only once at
-    the end of the visual composition.  Non-RIFE modes intentionally reach the
-    requested cadence in the master using FFmpeg/repetition when needed.
+    Music-loop projects interpolate the reusable clip once *before* the master
+    and VFX expansion, so the master can already run at target cadence.  This
+    avoids repeating the same neural interpolation for every loop iteration.
+    Original-video projects keep the previous one-shot final RIFE policy.
     """
 
     if data.interpolation_mode == "rife" and data.target_fps > data.source_fps + 0.01:
+        if data.project_mode == "music":
+            return float(data.target_fps)
         return float(data.source_fps)
     return float(data.target_fps)
 
@@ -399,20 +402,65 @@ def build_render_plan(data: PlanInput) -> RenderPlan:
             )
         )
 
-    # Phase 2 removes the old 24/30 -> 60 RIFE pass.  RIFE is now one-shot and
-    # can only run after the visual composition if target FPS truly requires it.
-    steps.append(
-        RenderStep(
-            key="rife_base",
-            title="RIFE base",
-            status="skip",
-            reason="eliminado na Phase 2; nunca interpolar para um master intermediário e interpolar novamente depois",
-            device="—",
-            input_spec=current,
-            output_spec=current,
-            notes=("CP-002: no máximo uma chamada RIFE por render.",),
-        )
+    # Hotfix 1.1.3: music loops interpolate the reusable clip once before the
+    # timeline is expanded. Synthetic VFX are then rendered directly at target
+    # cadence. Original-video projects retain the one-shot final RIFE policy.
+    music_rife_requested = (
+        data.project_mode == "music"
+        and data.interpolation_mode == "rife"
+        and target.fps > current.fps + 0.01
     )
+    rife_base_runs = bool(music_rife_requested and data.rife_available)
+    if music_rife_requested:
+        if data.rife_available:
+            rife_base_out = FrameSpec(current.width, current.height, target.fps, current.pixel_format)
+            steps.append(
+                RenderStep(
+                    key="rife_base",
+                    title="RIFE do clipe reutilizável",
+                    status="run",
+                    reason=f"interpola o clipe uma única vez: {current.fps:g} → {target.fps:g} fps antes de expandir o loop",
+                    device="CPU" if data.use_cpu else "GPU",
+                    input_spec=current,
+                    output_spec=rife_base_out,
+                    materializes_frames=True,
+                    notes=(
+                        "Hotfix 1.1.3: a duração da música não multiplica o trabalho neural do clipe repetido.",
+                        "CP-002 continua one-shot: não existe segunda chamada RIFE depois dos VFX.",
+                    ),
+                )
+            )
+            current = rife_base_out
+        else:
+            steps.append(
+                RenderStep(
+                    key="rife_base",
+                    title="RIFE do clipe reutilizável",
+                    status="conditional",
+                    reason="RIFE está ausente; o master atingirá a cadência alvo com fallback FFmpeg explícito",
+                    device="—",
+                    input_spec=current,
+                    output_spec=current,
+                    notes=("Nenhum master neural é materializado sem o componente local.",),
+                )
+            )
+    else:
+        steps.append(
+            RenderStep(
+                key="rife_base",
+                title="RIFE do clipe reutilizável",
+                status="skip",
+                reason=(
+                    "reservado a loops musicais que realmente precisam elevar o FPS"
+                    if data.project_mode != "music"
+                    else f"ignorado: {current.fps:g} fps já atendem ao destino de {target.fps:g} fps"
+                ),
+                device="—",
+                input_spec=current,
+                output_spec=current,
+                notes=("CP-002: no máximo uma chamada RIFE por render.",),
+            )
+        )
 
     needs_master = data.project_mode == "music" or data.effects_active or data.transition_active
     if needs_master:
@@ -656,7 +704,8 @@ def build_render_plan(data: PlanInput) -> RenderPlan:
         "master_fps": _master_fps(data) if needs_master else None,
         "required_spatial_scale": round(required_scale, 6),
         "spatial_upscale_required": requires_upscale,
-        "rife_calls_planned": 1 if final_rife_runs and data.rife_available else 0,
+        "rife_calls_planned": int(rife_base_runs) + (1 if final_rife_runs and data.rife_available else 0),
+        "rife_loop_optimized": bool(rife_base_runs),
         "current_pipeline_compatible": True,
         "color_intent": color_plan.intent,
         "color_label": color_plan.label,

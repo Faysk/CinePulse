@@ -268,7 +268,7 @@ def estimate_storage(
         clip_seconds = project_seconds
 
     def stage_duration(key: str) -> float:
-        if plan.project_mode == "music" and key in {"color", "enhancement", "master", "transition"}:
+        if plan.project_mode == "music" and key in {"color", "enhancement", "rife_base", "master", "transition"}:
             return clip_seconds
         return project_seconds
 
@@ -278,11 +278,16 @@ def estimate_storage(
     cache_growth = 0.0
 
     ai = plan.step("enhancement")
+    rife_base = plan.step("rife_base")
     rife = plan.step("rife_final")
     color = plan.step("color")
     ai_will_attempt = ai.attempts and plan.enhancement_mode == "realesrgan"
-    rife_will_attempt = rife.attempts and plan.interpolation_mode == "rife"
-    color_prepass = color.runs and (ai_will_attempt or (rife_will_attempt and not plan.needs_master))
+    rife_final_will_attempt = rife.attempts and plan.interpolation_mode == "rife"
+    color_prepass = color.runs and (
+        ai_will_attempt
+        or rife_base.runs
+        or (rife_final_will_attempt and not plan.needs_master)
+    )
 
     # The worker materializes an explicit lossless color prepass only when a
     # neural stage is the first consumer.  Otherwise color conversion is fused
@@ -317,6 +322,27 @@ def estimate_storage(
         current_persistent = 0.0
         peak = max(peak, stage_peak)
 
+    rife_chunk = MAX_CHUNK_FRAMES
+    if rife_base.runs and rife_base.input_spec and rife_base.output_spec and rife_base.materializes_frames:
+        seconds = stage_duration("rife_base")
+        ratio = rife_base.output_spec.fps / max(1.0, rife_base.input_spec.fps)
+        rife_chunk = choose_chunk_frames(
+            rife_base.input_spec, rife_base.output_spec, budget_gb=chunk_budget_gb,
+            output_frames_per_input=ratio,
+        )
+        working = _neural_chunk_gb(
+            rife_base.input_spec, rife_base.output_spec, rife_chunk,
+            output_frames_per_input=ratio,
+        )
+        interpolated = _compressed_gb(rife_base.output_spec, seconds, lossless=True)
+        stage_peak = max(current_persistent + working, current_persistent + interpolated * 2.05)
+        stages.append(StorageStageEstimate(
+            "rife_base", "RIFE do clipe reutilizável", interpolated, working, stage_peak, seconds,
+            f"{rife_chunk} quadro(s) fonte/lote; o master neural cobre apenas o clipe reutilizável.",
+        ))
+        current_persistent = interpolated
+        peak = max(peak, stage_peak)
+
     for key in ("master", "transition", "vfx"):
         step = plan.step(key)
         if not step.runs or step.output_spec is None:
@@ -333,7 +359,6 @@ def estimate_storage(
         current_persistent = produced
         peak = max(peak, stage_peak)
 
-    rife_chunk = MAX_CHUNK_FRAMES
     if rife.attempts and rife.input_spec and rife.output_spec and rife.materializes_frames:
         seconds = stage_duration("rife_final")
         ratio = rife.output_spec.fps / max(1.0, rife.input_spec.fps)

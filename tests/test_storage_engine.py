@@ -72,9 +72,11 @@ class StorageEngineTests(unittest.TestCase):
             self.assertAlmostEqual(long_by_key[key].duration_seconds, 10.0)
             self.assertAlmostEqual(short_by_key[key].peak_scratch_gb, long_by_key[key].peak_scratch_gb, places=6)
         self.assertAlmostEqual(short.cache_growth_gb, long.cache_growth_gb, places=6)
+        self.assertAlmostEqual(long_by_key["rife_base"].duration_seconds, 10.0)
+        self.assertNotIn("rife_final", long_by_key)
         self.assertAlmostEqual(long_by_key["vfx"].duration_seconds, 264.0)
-        self.assertAlmostEqual(long_by_key["rife_final"].duration_seconds, 264.0)
         self.assertGreater(long_by_key["vfx"].persistent_gb, short_by_key["vfx"].persistent_gb * 20)
+        self.assertLess(long.peak_scratch_gb, 100.0)
         self.assertEqual(long.clip_duration_seconds, 10.0)
         self.assertEqual(long.project_duration_seconds, 264.0)
 

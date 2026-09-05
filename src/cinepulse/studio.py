@@ -3483,7 +3483,9 @@ class VideoOptimizerStudio:
             effects_active=bool(settings.effects),
             transition_active=bool(transition_active),
             enhancement_mode=self._normalized_enhancement_mode(settings.enhancement),
-            rife_active=render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION,
+            rife_active=(
+                render_plan.step("rife_base").attempts or render_plan.step("rife_final").attempts
+            ) and settings.interpolation == RIFE_OPTION,
         )
         return build_delivery_plan(
             output="preview.mp4" if preview else settings.output,
@@ -4325,7 +4327,9 @@ class VideoOptimizerStudio:
                 effects_active=effects_active,
                 transition_active=transition_active,
                 enhancement_mode=self._normalized_enhancement_mode(settings.enhancement),
-                rife_active=render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION,
+                rife_active=(
+                    render_plan.step("rife_base").attempts or render_plan.step("rife_final").attempts
+                ) and settings.interpolation == RIFE_OPTION,
             )
             self._log(f"COLOR {color_plan.label}: {color_plan.reason}")
             for assumption in color_plan.assumptions:
@@ -4394,7 +4398,11 @@ class VideoOptimizerStudio:
             # fused into the master instead of materializing an extra file.
             color_step = render_plan.step("color")
             ai_will_run = render_plan.step("enhancement").attempts and settings.enhancement == ENHANCE_AI
-            color_prepass = color_step.runs and (ai_will_run or (render_plan.step("rife_final").attempts and not render_plan.needs_master))
+            color_prepass = color_step.runs and (
+                ai_will_run
+                or render_plan.step("rife_base").runs
+                or (render_plan.step("rife_final").attempts and not render_plan.needs_master)
+            )
             if color_prepass:
                 converted = self._temp_file(job_dir, "studio_color_", temp_paths, suffix=".mkv")
                 working_video = self._prepare_color_source(
@@ -4424,13 +4432,40 @@ class VideoOptimizerStudio:
                 working_start = 0.0
                 color_already_converted = True
 
+            working_fps = source_fps
+            rife_base_step = render_plan.step("rife_base")
+            if rife_base_step.runs and settings.interpolation == RIFE_OPTION:
+                base_rife_weight = 18.0
+                try:
+                    self._set_stage(
+                        "RIFE do clipe",
+                        f"Interpolando o clipe reutilizável uma única vez para {target_fps} fps antes de expandir o loop.",
+                    )
+                    previous_working = working_video
+                    working_video = self._interpolate_rife(
+                        working_video, job_dir, working_start, video_duration, working_fps, target_fps,
+                        settings.use_cpu, settings.cpu_threads, temp_paths, progress_base, base_rife_weight,
+                        color_plan=color_plan,
+                    )
+                    self._release_temp_path(previous_working, temp_paths)
+                    working_start = 0.0
+                    working_fps = float(target_fps)
+                    progress_base += base_rife_weight
+                    color_already_converted = True
+                    self._log(
+                        f"RIFE loop-aware: clipe {video_duration:.3f}s interpolado uma vez; "
+                        f"timeline final {project_duration:.3f}s reutiliza esse master."
+                    )
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    self._log(f"RIFE do clipe falhou; o master usará fallback FFmpeg: {exc}")
+
             needs_master = render_plan.needs_master
             visual_source = working_video
-            working_fps = source_fps
-            # Core Integrity Phase 2 intentionally removed the old RIFE-base
-            # execution path.  The planner may only request one RIFE pass and
-            # that pass occurs after visual composition when target FPS exceeds
-            # the effective source cadence.
+            # Hotfix 1.1.3 keeps RIFE one-shot: music loops process the reusable
+            # clip before master/VFX; original-video projects may still use the
+            # final RIFE stage after visual composition.
             if needs_master:
                 master_step = render_plan.step("master")
                 if master_step.output_spec is None:
