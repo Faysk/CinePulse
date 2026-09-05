@@ -13,6 +13,7 @@ from .ai_suite import inventory
 from .paths import PATHS, ensure_runtime_directories
 from .integrity import verify as verify_integrity
 from .runtime_distribution import installation_mode, find_powershell
+from .hardware_telemetry import telemetry_capabilities
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -65,6 +66,7 @@ def collect() -> dict:
             "ffprobe": _version([ffprobe, "-version"]) if ffprobe else None,
             "nvidia": _version(["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"]),
         },
+        "telemetry": telemetry_capabilities(),
         "gpu_policy": {
             "prefer_dedicated": os.environ.get("CINEPULSE_PREFER_DEDICATED_GPU") == "1",
             "cuda_device_order": os.environ.get("CUDA_DEVICE_ORDER"),

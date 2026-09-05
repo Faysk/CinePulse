@@ -1,0 +1,394 @@
+from __future__ import annotations
+
+"""Preview-only media probing and deterministic playback for Overlay Composer.
+
+The composer accepts still/animated images and alpha-capable video, but the
+render path must not guess timing or transparency from a filename. This module
+turns FFprobe metadata into a small backend-neutral contract that preview, CPU
+rendering and any future evidence-gated GPU compositor can share.
+
+For variable-frame-rate media the CPU reference also records decoded frame
+start timestamps. Playback therefore follows GIF/APNG/WebP delays and VFR alpha
+video timing instead of approximating every asset as constant-rate media.
+
+It is intentionally isolated from Stable RenderSettings.
+"""
+
+from bisect import bisect_right
+from dataclasses import dataclass
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+from typing import Iterable
+
+from .gpu_compositor import OverlayLayer
+
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+MAX_TIMELINE_FRAMES = 1_000_000
+
+_ALPHA_PREFIXES = (
+    "rgba",
+    "bgra",
+    "argb",
+    "abgr",
+    "yuva",
+    "gbrap",
+    "ya",
+)
+
+
+@dataclass(frozen=True)
+class ComposerMediaInfo:
+    source: str
+    width: int
+    height: int
+    fps: float
+    duration: float
+    frame_count: int
+    pixel_format: str
+    codec: str
+    has_alpha: bool
+    animated: bool
+    frame_starts: tuple[float, ...] = ()
+    timing_exact: bool = False
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("composer media dimensions must be positive")
+        if self.fps <= 0:
+            raise ValueError("composer media fps must be positive")
+        if self.duration <= 0:
+            raise ValueError("composer media duration must be positive")
+        if self.frame_count <= 0:
+            raise ValueError("composer media frame count must be positive")
+        if len(self.frame_starts) > MAX_TIMELINE_FRAMES:
+            raise ValueError("composer media timeline exceeds safe frame bound")
+        if self.frame_starts:
+            if len(self.frame_starts) != self.frame_count:
+                raise ValueError("composer media exact timeline must match frame count")
+            previous = -1.0
+            for index, value in enumerate(self.frame_starts):
+                current = float(value)
+                if not math.isfinite(current) or current < 0:
+                    raise ValueError("composer media frame timestamps must be finite and non-negative")
+                if index == 0 and abs(current) > 1e-6:
+                    raise ValueError("composer media exact timeline must be normalized to zero")
+                if index and current <= previous:
+                    raise ValueError("composer media exact timeline must be strictly increasing")
+                previous = current
+        if self.timing_exact and len(self.frame_starts) != self.frame_count:
+            raise ValueError("exact composer timing requires one timestamp per frame")
+
+
+@dataclass(frozen=True)
+class ComposerPlaybackPosition:
+    active: bool
+    local_time: float
+    frame_index: int
+    loop_index: int
+
+
+def _parse_rate(value: object) -> float:
+    text = str(value or "").strip()
+    if not text or text in {"0/0", "N/A"}:
+        return 0.0
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        try:
+            den = float(denominator)
+            return float(numerator) / den if den else 0.0
+        except ValueError:
+            return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def _parse_float(*values: object) -> float:
+    for value in values:
+        try:
+            parsed = float(str(value))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed) and parsed > 0:
+            return parsed
+    return 0.0
+
+
+def _parse_number(*values: object) -> float | None:
+    for value in values:
+        try:
+            parsed = float(str(value))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed):
+            return parsed
+    return None
+
+
+def _parse_int(*values: object) -> int:
+    for value in values:
+        try:
+            parsed = int(str(value))
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def _exact_frame_timeline(
+    payload: object,
+    *,
+    fallback_duration: float,
+    fallback_fps: float,
+) -> tuple[tuple[float, ...], float]:
+    """Return normalized decoded-frame starts plus exact effective duration.
+
+    FFprobe's best-effort timestamps are preferred because they represent the
+    decoded display order consumed by the sequential reference decoder. Any
+    missing/non-monotonic timestamp makes the exact timeline unavailable and the
+    caller falls back to the conservative CFR inference contract.
+    """
+    if not isinstance(payload, dict):
+        return (), 0.0
+    raw_frames = payload.get("frames")
+    if not isinstance(raw_frames, list) or not raw_frames:
+        return (), 0.0
+    if len(raw_frames) > MAX_TIMELINE_FRAMES:
+        raise ValueError("composer media timeline exceeds safe frame bound")
+
+    timestamps: list[float] = []
+    frame_rows: list[dict] = []
+    for row in raw_frames:
+        if not isinstance(row, dict):
+            return (), 0.0
+        timestamp = _parse_number(row.get("best_effort_timestamp_time"), row.get("pts_time"))
+        if timestamp is None:
+            return (), 0.0
+        timestamps.append(timestamp)
+        frame_rows.append(row)
+
+    base = timestamps[0]
+    starts = [max(0.0, value - base) for value in timestamps]
+    starts[0] = 0.0
+    for previous, current in zip(starts, starts[1:]):
+        if current <= previous:
+            return (), 0.0
+
+    last_duration = _parse_float(frame_rows[-1].get("pkt_duration_time"))
+    if last_duration > 0:
+        effective_duration = starts[-1] + last_duration
+    elif fallback_duration > starts[-1]:
+        effective_duration = fallback_duration
+    elif fallback_fps > 0:
+        effective_duration = starts[-1] + (1.0 / fallback_fps)
+    else:
+        return (), 0.0
+
+    if not math.isfinite(effective_duration) or effective_duration <= starts[-1]:
+        return (), 0.0
+    return tuple(float(value) for value in starts), float(effective_duration)
+
+
+def pixel_format_has_alpha(pixel_format: str) -> bool:
+    value = str(pixel_format or "").strip().lower()
+    return any(value.startswith(prefix) for prefix in _ALPHA_PREFIXES)
+
+
+def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaInfo:
+    """Build a conservative media contract from FFprobe JSON output.
+
+    When decoded frame timestamps are available they become the authoritative
+    playback timeline. If FFprobe cannot provide a complete monotonic timeline,
+    the older duration/rate inference remains as a fail-safe rather than
+    inventing partial VFR timing.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("FFprobe payload must be an object")
+    streams = payload.get("streams")
+    if not isinstance(streams, list):
+        raise ValueError("FFprobe payload has no stream list")
+    stream = next(
+        (item for item in streams if isinstance(item, dict) and item.get("codec_type") == "video"),
+        None,
+    )
+    if not isinstance(stream, dict):
+        raise ValueError("overlay media has no video stream")
+
+    format_payload = payload.get("format")
+    fmt = format_payload if isinstance(format_payload, dict) else {}
+    width = _parse_int(stream.get("width"))
+    height = _parse_int(stream.get("height"))
+    fps = _parse_rate(stream.get("avg_frame_rate")) or _parse_rate(stream.get("r_frame_rate"))
+    duration = _parse_float(stream.get("duration"), fmt.get("duration"))
+    frames = _parse_int(stream.get("nb_frames"))
+
+    frame_starts, exact_duration = _exact_frame_timeline(
+        payload,
+        fallback_duration=duration,
+        fallback_fps=fps,
+    )
+    timing_exact = bool(frame_starts)
+    if timing_exact:
+        frames = len(frame_starts)
+        duration = exact_duration
+
+    if fps <= 0 and frames > 1 and duration > 0:
+        fps = frames / duration
+    if duration <= 0 and fps > 0 and frames > 0:
+        duration = frames / fps
+    if frames <= 0 and fps > 0 and duration > 0:
+        # Round rather than floor so 29.97-style metadata does not silently lose
+        # the final effective frame because of decimal duration representation.
+        frames = max(1, int(round(duration * fps)))
+
+    # Static images commonly report neither duration nor frame rate. Give them
+    # a deterministic one-frame timeline without pretending they are animated.
+    if frames <= 0:
+        frames = 1
+    if fps <= 0:
+        fps = 1.0
+    if duration <= 0:
+        duration = max(frames / fps, 1e-6)
+
+    pixel_format = str(stream.get("pix_fmt") or "").strip().lower()
+    codec = str(stream.get("codec_name") or "unknown").strip().lower() or "unknown"
+    animated = frames > 1 or duration > (1.5 / fps)
+
+    return ComposerMediaInfo(
+        source=str(Path(source)),
+        width=width,
+        height=height,
+        fps=float(fps),
+        duration=float(duration),
+        frame_count=int(frames),
+        pixel_format=pixel_format,
+        codec=codec,
+        has_alpha=pixel_format_has_alpha(pixel_format),
+        animated=animated,
+        frame_starts=frame_starts,
+        timing_exact=timing_exact,
+    )
+
+
+def probe_composer_media(
+    ffprobe: str,
+    source: str | Path,
+    *,
+    timeout: float = 60.0,
+    exact_timing: bool = True,
+) -> ComposerMediaInfo:
+    """Probe one Composer asset.
+
+    ``exact_timing=False`` is the lightweight UI-validation path: it returns the
+    same structural/alpha metadata without enumerating every decoded frame.
+    Export keeps the default exact path so GIF/APNG/WebP delays and VFR alpha
+    video are resolved from decoded timestamps before any output is prepared.
+    """
+    path = Path(source)
+    entries = (
+        "stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,r_frame_rate,duration,nb_frames:"
+        "format=duration"
+    )
+    command = [
+        str(ffprobe),
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_streams",
+        "-show_format",
+    ]
+    if exact_timing:
+        command += ["-show_frames"]
+        entries += ":frame=best_effort_timestamp_time,pts_time,pkt_duration_time"
+    command += ["-show_entries", entries, "-of", "json", str(path)]
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(1.0, float(timeout)),
+            check=False,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"could not probe composer media: {exc}") from exc
+    if result.returncode:
+        details = (result.stderr or "").strip()
+        raise RuntimeError(details or "FFprobe could not inspect composer media")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("FFprobe returned invalid JSON for composer media") from exc
+    return media_info_from_probe(path, payload)
+
+
+def validate_layer_media(layer: OverlayLayer, info: ComposerMediaInfo) -> tuple[str, ...]:
+    """Return fail-closed compatibility errors for one layer/asset pair."""
+    problems: list[str] = []
+    if Path(layer.source) != Path(info.source):
+        problems.append("probed asset does not match layer source")
+    if layer.kind == "video-alpha" and not info.has_alpha:
+        problems.append("video-alpha layer has no alpha-capable pixel format")
+    if layer.kind in {"gif", "apng", "webp"} and not info.animated:
+        problems.append("animated image layer contains only one effective frame")
+    return tuple(problems)
+
+
+def playback_position(
+    layer: OverlayLayer,
+    info: ComposerMediaInfo,
+    *,
+    project_time: float,
+    start_time: float = 0.0,
+) -> ComposerPlaybackPosition:
+    """Resolve one project timestamp into the asset timeline.
+
+    Before ``start_time`` the layer is inactive. Looping layers wrap on media
+    duration; non-looping layers become inactive immediately after their last
+    frame instead of freezing forever. Static PNGs remain active because their
+    one-frame duration is treated as a held still. Exact decoded timestamps win
+    over nominal FPS whenever the probe supplied a complete VFR timeline.
+    """
+    t = float(project_time) - max(0.0, float(start_time))
+    if t < 0:
+        return ComposerPlaybackPosition(False, 0.0, 0, 0)
+
+    is_static = info.frame_count <= 1 and not info.animated
+    if is_static:
+        return ComposerPlaybackPosition(True, 0.0, 0, 0)
+
+    duration = max(float(info.duration), 1e-9)
+    if layer.loop:
+        loop_index = max(0, int(math.floor(t / duration)))
+        local = t % duration
+    else:
+        if t >= duration:
+            return ComposerPlaybackPosition(False, duration, info.frame_count - 1, 0)
+        loop_index = 0
+        local = t
+
+    if info.timing_exact and len(info.frame_starts) == info.frame_count:
+        frame = bisect_right(info.frame_starts, local + 1e-12) - 1
+        frame = min(info.frame_count - 1, max(0, frame))
+    else:
+        frame = min(info.frame_count - 1, max(0, int(math.floor(local * info.fps + 1e-9))))
+    return ComposerPlaybackPosition(True, local, frame, loop_index)
+
+
+def validate_project_media(
+    layers: Iterable[tuple[OverlayLayer, ComposerMediaInfo]],
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    for index, (layer, info) in enumerate(layers):
+        for problem in validate_layer_media(layer, info):
+            errors.append(f"layer {index}: {problem}")
+    return tuple(errors)
