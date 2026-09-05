@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from cinepulse.gpu_compositor import (
+    COMPOSITOR_MAX_STACK_LAYERS,
+    COMPOSITOR_REFERENCE_ID,
+    GpuCompositorCapabilities,
+    GpuCompositorEvidence,
+    GpuCompositorKey,
+    GpuCompositorStore,
+    OverlayLayer,
+    build_cuda_overlay_filter,
+    build_cuda_overlay_stack_filter,
+    canonical_overlay_stack,
+    cuda_layer_eligible,
+    cuda_stack_eligible,
+    overlay_cuda_position,
+    overlay_stack_contract_token,
+)
+
+
+def caps() -> GpuCompositorCapabilities:
+    return GpuCompositorCapabilities("ffmpeg", "ffmpeg-test", True, True, True, True)
+
+
+def key(layer: OverlayLayer) -> GpuCompositorKey:
+    return GpuCompositorKey(
+        gpu_name="RTX Test",
+        driver="999.1",
+        ffmpeg_fingerprint="ffmpeg-test",
+        width=3840,
+        height=2160,
+        fps_milli=60000,
+        pixel_format="yuv420p",
+        primaries="bt709",
+        transfer="bt709",
+        space="bt709",
+        color_range="tv",
+        layer_contract=layer.contract_token(),
+    )
+
+
+class GpuCompositorTests(unittest.TestCase):
+    def test_layer_contract_exposes_requested_preview_controls(self) -> None:
+        layer = OverlayLayer(
+            "logo.png", "png", x=0.25, y=0.75, opacity=0.8, z_order=2,
+            rotation_degrees=0.0, loop=True, spin_rpm=0.0, pulse=0.0,
+            beat_reaction=0.0, audio_binding="vocals", blend="screen",
+        )
+        self.assertEqual("vocals", layer.audio_binding)
+        self.assertEqual("screen", layer.blend)
+        self.assertEqual(2, layer.z_order)
+        self.assertTrue(layer.contract_token())
+
+    def test_cpu_blends_are_valid_but_cuda_envelope_stays_normal_only(self) -> None:
+        for mode in ("normal", "multiply", "screen", "add", "overlay"):
+            layer = OverlayLayer("a.png", "png", blend=mode)  # type: ignore[arg-type]
+            self.assertEqual(mode, layer.blend)
+            self.assertEqual(mode == "normal", cuda_layer_eligible(layer, caps()))
+        with self.assertRaises(ValueError):
+            OverlayLayer("a.png", "png", blend="difference")  # type: ignore[arg-type]
+
+    def test_initial_cuda_envelope_rejects_unproven_scale_rotation_and_reactivity(self) -> None:
+        self.assertTrue(cuda_layer_eligible(OverlayLayer("a.png", "png"), caps()))
+        self.assertFalse(cuda_layer_eligible(OverlayLayer("a.png", "png", scale=1.25), caps()))
+        self.assertFalse(cuda_layer_eligible(OverlayLayer("a.png", "png", rotation_degrees=5), caps()))
+        self.assertFalse(cuda_layer_eligible(OverlayLayer("a.png", "png", beat_reaction=1), caps()))
+
+    def test_filter_uses_supported_yuv420_alpha_formats_and_downloads_result(self) -> None:
+        graph = build_cuda_overlay_filter(
+            OverlayLayer("a.png", "png", x=0.25, y=0.75, opacity=0.5),
+            canvas_width=1920,
+            canvas_height=1080,
+            layer_width=256,
+            layer_height=256,
+        )
+        self.assertIn("format=yuv420p,hwupload_cuda", graph)
+        self.assertIn("format=yuva420p", graph)
+        self.assertIn("overlay_cuda", graph)
+        self.assertIn("hwdownload,format=yuv420p", graph)
+        self.assertIn("colorchannelmixer=aa=0.50000000", graph)
+        with self.assertRaises(ValueError):
+            build_cuda_overlay_filter(
+                OverlayLayer("a.png", "png", blend="multiply"),
+                canvas_width=1920,
+                canvas_height=1080,
+                layer_width=256,
+                layer_height=256,
+            )
+
+    def test_stack_is_z_ordered_and_downloads_only_after_last_overlay(self) -> None:
+        top = OverlayLayer("top.png", "png", z_order=20, x=0.8)
+        bottom = OverlayLayer("bottom.png", "png", z_order=10, opacity=0.75, x=0.2)
+        ordered = canonical_overlay_stack((top, bottom))
+        self.assertEqual((bottom, top), ordered)
+        self.assertTrue(cuda_stack_eligible((top, bottom), caps()))
+        graph = build_cuda_overlay_stack_filter((top, bottom), canvas_width=1920, canvas_height=1080)
+        self.assertEqual(2, graph.count("overlay_cuda="))
+        self.assertEqual(1, graph.count("hwdownload"))
+        self.assertLess(graph.index("[1:v]"), graph.index("[2:v]"))
+        self.assertIn("0.20000000", graph)
+        self.assertIn("0.80000000", graph)
+
+    def test_stack_contract_binds_order_and_every_layer(self) -> None:
+        first = OverlayLayer("a.png", "png", z_order=0)
+        second = OverlayLayer("b.png", "png", z_order=1)
+        base = overlay_stack_contract_token((first, second))
+        self.assertEqual(base, overlay_stack_contract_token((second, first)))
+        self.assertNotEqual(base, overlay_stack_contract_token((first, OverlayLayer("b.png", "png", z_order=1, opacity=0.9))))
+
+    def test_stack_is_hard_bounded_and_rejects_any_unproven_member(self) -> None:
+        valid = tuple(OverlayLayer(f"{index}.png", "png", z_order=index) for index in range(COMPOSITOR_MAX_STACK_LAYERS))
+        self.assertTrue(cuda_stack_eligible(valid, caps()))
+        too_many = valid + (OverlayLayer("extra.png", "png", z_order=99),)
+        self.assertFalse(cuda_stack_eligible(too_many, caps()))
+        with self.assertRaises(ValueError):
+            build_cuda_overlay_stack_filter(too_many, canvas_width=1920, canvas_height=1080)
+        mixed = valid[:-1] + (OverlayLayer("bad.png", "png", z_order=3, rotation_degrees=5),)
+        self.assertFalse(cuda_stack_eligible(mixed, caps()))
+
+    def test_position_is_normalized_center_space(self) -> None:
+        x, y = overlay_cuda_position(OverlayLayer("a.png", "png", x=0.25, y=0.75), 1920, 1080)
+        self.assertIn("0.25000000", x)
+        self.assertIn("0.75000000", y)
+
+    def test_evidence_must_be_near_identical_faster_and_from_real_reference(self) -> None:
+        good = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
+        visible_change = GpuCompositorEvidence(10.0, 6.0, 50.0, 0.999, True, True, True, True)
+        slower = GpuCompositorEvidence(10.0, 10.0, 90.0, 1.0, True, True, True, True)
+        wrong_reference = GpuCompositorEvidence(
+            10.0, 6.0, 90.0, 1.0, True, True, True, True,
+            reference_id="ffmpeg-overlay-v0",
+        )
+        self.assertEqual(COMPOSITOR_REFERENCE_ID, good.reference_id)
+        self.assertTrue(good.accepted)
+        self.assertFalse(visible_change.accepted)
+        self.assertFalse(slower.accepted)
+        self.assertFalse(wrong_reference.accepted)
+
+    def test_runtime_permission_is_exact_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = GpuCompositorStore(Path(temporary) / "compositor.json")
+            layer = OverlayLayer("logo.png", "png")
+            evidence = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
+            self.assertFalse(store.approved(key(layer), caps()))
+            self.assertTrue(store.record(key(layer), evidence))
+            self.assertTrue(store.approved(key(layer), caps()))
+            no_cuda = GpuCompositorCapabilities("ffmpeg", "ffmpeg-test", False, True, True, True)
+            self.assertFalse(store.approved(key(layer), no_cuda))
+            changed = OverlayLayer("logo.png", "png", opacity=0.8)
+            self.assertFalse(store.approved(key(changed), caps()))
+
+
+if __name__ == "__main__":
+    unittest.main()

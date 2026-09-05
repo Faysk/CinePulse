@@ -9,9 +9,20 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .hardware import detect_hardware
+from .paths import PATHS
+from .rife_tuning import RifePolicy, RifeTuningKey, RifeTuningStore, fallback_policy
+
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_IEND = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+OOM_TOKENS = (
+    "out of memory",
+    "oom",
+    "failed to allocate",
+    "vk_error_out_of_device_memory",
+    "device memory allocation failed",
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +31,8 @@ class RifeExecutionPolicy:
     jobs: str
     native_target: int
     requested_target: int
+    gpu_index: int = 0
+    measured: bool = False
 
 
 def _png_dimensions(path: Path) -> tuple[int, int]:
@@ -69,7 +82,17 @@ def validate_png_sequence(directory: Path, expected: int) -> list[Path]:
     return frames
 
 
-def execution_policy(input_frames: int, width: int, height: int, requested_target: int, device: str) -> RifeExecutionPolicy:
+def execution_policy(
+    input_frames: int,
+    width: int,
+    height: int,
+    requested_target: int,
+    device: str,
+    *,
+    jobs_override: str = "",
+    gpu_index: int = 0,
+    measured: bool = False,
+) -> RifeExecutionPolicy:
     if input_frames < 2:
         raise ValueError("RIFE requer ao menos dois quadros de entrada")
     if requested_target < 2:
@@ -78,15 +101,19 @@ def execution_policy(input_frames: int, width: int, height: int, requested_targe
     uhd = max(width, height) >= 3840 or width * height >= 3840 * 2160
     if device == "cpu":
         jobs = "1:2:2"
-    elif uhd:
-        jobs = "1:1:1"
+        selected_gpu = -1
     else:
-        jobs = "2:2:2"
+        fallback = fallback_policy(uhd=uhd, gpu_index=max(0, int(gpu_index)))
+        jobs = jobs_override or fallback.jobs
+        RifePolicy(jobs, max(0, int(gpu_index)))
+        selected_gpu = max(0, int(gpu_index))
     return RifeExecutionPolicy(
         uhd=uhd,
         jobs=jobs,
         native_target=native_target,
         requested_target=requested_target,
+        gpu_index=selected_gpu,
+        measured=bool(measured and device != "cpu"),
     )
 
 
@@ -117,9 +144,20 @@ def _find_ffmpeg(rife_executable: Path, override: str = "") -> str:
 
 def _run(command: list[str], *, cwd: Path | None = None) -> None:
     print("CINEPULSE_RIFE_SAFE RUN " + subprocess.list2cmdline(command), flush=True)
-    result = subprocess.run(command, cwd=str(cwd) if cwd else None, check=False)
+    result = subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.stdout:
+        print(result.stdout.rstrip(), flush=True)
     if result.returncode:
-        raise RuntimeError(f"processo terminou com código {result.returncode}")
+        raise RuntimeError((result.stdout or "") + f"\nprocesso terminou com código {result.returncode}")
 
 
 def _move_native_frames(native_dir: Path, output_dir: Path, expected: int) -> None:
@@ -127,6 +165,107 @@ def _move_native_frames(native_dir: Path, output_dir: Path, expected: int) -> No
     for index, frame in enumerate(frames, start=1):
         os.replace(frame, output_dir / f"{index:08d}.png")
     validate_png_sequence(output_dir, expected)
+
+
+def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
+    hardware = detect_hardware()
+    if not hardware.gpu:
+        return None, None, None
+    key = RifeTuningKey(
+        hardware.gpu,
+        int(hardware.vram_mb or 0),
+        hardware.driver or "unknown-driver",
+        model.name or "rife-v4.6",
+        width,
+        height,
+    )
+    store = RifeTuningStore(PATHS.cache / "hardware" / "rife-tuning.json")
+    policy = store.lookup(key, gpu_index=0)
+    return policy, key, store
+
+
+def _native_command(
+    *,
+    rife_executable: Path,
+    model: Path,
+    incoming: Path,
+    native_dir: Path,
+    policy: RifeExecutionPolicy,
+) -> list[str]:
+    command = [
+        str(rife_executable),
+        "-i",
+        str(incoming),
+        "-o",
+        str(native_dir),
+        "-n",
+        str(policy.native_target),
+        "-m",
+        str(model),
+    ]
+    command += ["-g", str(policy.gpu_index)]
+    command += ["-j", policy.jobs]
+    if policy.uhd:
+        command.append("-u")
+    command += ["-f", "%08d.png"]
+    return command
+
+
+def _run_native_with_rollback(
+    *,
+    rife_executable: Path,
+    model: Path,
+    incoming: Path,
+    native_dir: Path,
+    policy: RifeExecutionPolicy,
+    fallback: RifeExecutionPolicy,
+    tuning_key: RifeTuningKey | None,
+    tuning_store: RifeTuningStore | None,
+) -> RifeExecutionPolicy:
+    attempted_fallback = policy.jobs == fallback.jobs and policy.gpu_index == fallback.gpu_index
+    current = policy
+    while True:
+        shutil.rmtree(native_dir, ignore_errors=True)
+        native_dir.mkdir(parents=False)
+        print(
+            "CINEPULSE_RIFE_SAFE POLICY "
+            f"native={current.native_target} requested={current.requested_target} "
+            f"uhd={current.uhd} jobs={current.jobs} gpu={current.gpu_index} measured={current.measured}",
+            flush=True,
+        )
+        try:
+            _run(
+                _native_command(
+                    rife_executable=rife_executable,
+                    model=model,
+                    incoming=incoming,
+                    native_dir=native_dir,
+                    policy=current,
+                ),
+                cwd=rife_executable.parent,
+            )
+            validate_png_sequence(native_dir, current.native_target)
+            return current
+        except Exception as exc:
+            if current.measured and tuning_key is not None and tuning_store is not None:
+                tuning_store.invalidate(tuning_key)
+                print(
+                    "CINEPULSE_RIFE_SAFE TUNING_INVALIDATED "
+                    f"jobs={current.jobs} reason={type(exc).__name__}",
+                    flush=True,
+                )
+            if attempted_fallback or (current.jobs == fallback.jobs and current.gpu_index == fallback.gpu_index):
+                raise
+            text = str(exc).lower()
+            oom = any(token in text for token in OOM_TOKENS)
+            print(
+                "CINEPULSE_RIFE_SAFE ROLLBACK "
+                f"reason={'oom' if oom else 'instability/integrity'} "
+                f"from={current.jobs} to={fallback.jobs}",
+                flush=True,
+            )
+            current = fallback
+            attempted_fallback = True
 
 
 def run_safe_rife(
@@ -143,47 +282,50 @@ def run_safe_rife(
     if len(input_frames) < 2:
         raise ValueError("RIFE recebeu menos de dois PNGs válidos")
     width, height = validate_png(input_frames[0])
-    policy = execution_policy(len(input_frames), width, height, requested_target, device)
+    uhd = max(width, height) >= 3840 or width * height >= 3840 * 2160
+    tuned: RifePolicy | None = None
+    tuning_key: RifeTuningKey | None = None
+    tuning_store: RifeTuningStore | None = None
+    if device == "gpu":
+        tuned, tuning_key, tuning_store = _hardware_tuning_policy(width, height, model)
+    fallback_spec = fallback_policy(uhd=uhd, gpu_index=0)
+    fallback = execution_policy(
+        len(input_frames), width, height, requested_target, device,
+        jobs_override=fallback_spec.jobs if device == "gpu" else "",
+        gpu_index=fallback_spec.gpu_index,
+        measured=False,
+    )
+    policy = execution_policy(
+        len(input_frames), width, height, requested_target, device,
+        jobs_override=tuned.jobs if tuned is not None else fallback.jobs,
+        gpu_index=tuned.gpu_index if tuned is not None else fallback.gpu_index,
+        measured=tuned is not None,
+    )
     outgoing.mkdir(parents=True, exist_ok=True)
     if any(outgoing.iterdir()):
         raise ValueError(f"diretório de saída RIFE não está vazio: {outgoing}")
     native_dir = outgoing.with_name(f".{outgoing.name}.native-{os.getpid()}")
-    if native_dir.exists():
-        shutil.rmtree(native_dir, ignore_errors=True)
+    shutil.rmtree(native_dir, ignore_errors=True)
     native_dir.mkdir(parents=False)
     try:
-        command = [
-            str(rife_executable),
-            "-i",
-            str(incoming),
-            "-o",
-            str(native_dir),
-            "-n",
-            str(policy.native_target),
-            "-m",
-            str(model),
-        ]
-        if device == "cpu":
-            command += ["-g", "-1"]
-        command += ["-j", policy.jobs]
-        if policy.uhd:
-            command.append("-u")
-        command += ["-f", "%08d.png"]
-        print(
-            "CINEPULSE_RIFE_SAFE POLICY "
-            f"input={len(input_frames)} native={policy.native_target} requested={requested_target} "
-            f"uhd={policy.uhd} jobs={policy.jobs} device={device}",
-            flush=True,
+        applied = _run_native_with_rollback(
+            rife_executable=rife_executable,
+            model=model,
+            incoming=incoming,
+            native_dir=native_dir,
+            policy=policy,
+            fallback=fallback,
+            tuning_key=tuning_key,
+            tuning_store=tuning_store,
         )
-        _run(command, cwd=rife_executable.parent)
-        native_frames = validate_png_sequence(native_dir, policy.native_target)
-        if requested_target == policy.native_target:
+        native_frames = validate_png_sequence(native_dir, applied.native_target)
+        if requested_target == applied.native_target:
             _move_native_frames(native_dir, outgoing, requested_target)
-            return policy
+            return applied
 
         ffmpeg_executable = _find_ffmpeg(rife_executable, ffmpeg)
         first_number = int(native_frames[0].stem)
-        input_rate = max(1, policy.native_target - 1)
+        input_rate = max(1, applied.native_target - 1)
         output_rate = max(1, requested_target - 1)
         retime = [
             ffmpeg_executable,
@@ -209,10 +351,10 @@ def run_safe_rife(
         _run(retime)
         validate_png_sequence(outgoing, requested_target)
         print(
-            f"CINEPULSE_RIFE_SAFE RETIME native={policy.native_target} requested={requested_target} mode=uniform-blend",
+            f"CINEPULSE_RIFE_SAFE RETIME native={applied.native_target} requested={requested_target} mode=uniform-blend",
             flush=True,
         )
-        return policy
+        return applied
     finally:
         shutil.rmtree(native_dir, ignore_errors=True)
 

@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from tkinter import (
@@ -55,6 +56,12 @@ from .loop_engine import (
 from .paths import PATHS
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
+from .performance_policy import (
+    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads, realesrgan_pipeline_threads,
+)
+from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
+from .cpu_tuning import CpuTuningKey, CpuTuningStore
+from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -64,6 +71,15 @@ from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, ri
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
 from .rife_engine import RifePaths, build_command as build_rife_command, target_frame_count
+from .pipeline_budget import derive_pipeline_budget
+from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
+from .gpu_media import (
+    GpuMediaKey, GpuMediaPolicy, GpuMediaTuningStore, detect_gpu_media_capabilities,
+    invalidate_on_runtime_failure as invalidate_gpu_media_policy, select_proven_policy as select_gpu_media_policy,
+)
+from .gpu_encode import ResidentEncodeStore
+from .gpu_delivery import select_resident_delivery_route
+from .pipeline_runtime import BackgroundCommand, measure_resource_headroom
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
@@ -246,7 +262,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 75,
         "audio_mode": "Preservar dinâmica original",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 20,
         "quality_check": True,
         "deep_verify": False,
@@ -275,7 +291,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 85,
         "audio_mode": "Normalizar para YouTube — -14 LUFS",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 20,
         "quality_check": True,
         "deep_verify": False,
@@ -304,7 +320,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 80,
         "audio_mode": "Normalizar para YouTube — -14 LUFS",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 15,
         "quality_check": True,
         "deep_verify": False,
@@ -333,7 +349,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 70,
         "audio_mode": "Preservar dinâmica original",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 20,
         "quality_check": True,
         "deep_verify": False,
@@ -488,7 +504,7 @@ class VideoOptimizerStudio:
         self.preview_seconds = IntVar(value=10)
         self.audio_mode = StringVar(value="Preservar dinâmica original")
         self.interpolation = StringVar(value="Movimento suave — FFmpeg")
-        self.cpu_threads = IntVar(value=max(1, min(8, os.cpu_count() or 4)))
+        self.cpu_threads = IntVar(value=default_cpu_threads(os.cpu_count() or 4))
         self.minimum_free_gb = DoubleVar(value=20.0)
         self.scratch_dir = StringVar(value=str(WORK_DIR))
         self.cache_quota_gb = DoubleVar(value=50.0)
@@ -779,6 +795,11 @@ class VideoOptimizerStudio:
             category="Interface",
             record=False,
         )
+
+    def _show_overlay_composer(self) -> None:
+        # Preview-only lazy import keeps Stable startup and RenderSettings isolated.
+        from .ui.composer_view import show_overlay_composer
+        show_overlay_composer(self)
 
     def _show_quick_guide(self) -> None:
         show_quick_guide(self)
@@ -1243,7 +1264,7 @@ class VideoOptimizerStudio:
         defaults = {
             "audio_mode": "Preservar dinâmica original",
             "interpolation": "Movimento suave — FFmpeg",
-            "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+            "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
             "minimum_free_gb": 20.0,
             "scratch_dir": str(WORK_DIR),
             "cache_quota_gb": 50.0,
@@ -1349,7 +1370,7 @@ class VideoOptimizerStudio:
             "section_dynamics": round(self.section_dynamics.get()),
             "audio_mode": self.audio_mode.get(),
             "interpolation": self.interpolation.get(),
-            "cpu_threads": int(self.cpu_threads.get()),
+            "cpu_threads": clamp_cpu_threads(int(self.cpu_threads.get()), self._hardware.cpu_threads),
             "minimum_free_gb": float(self.minimum_free_gb.get()),
             "scratch_dir": self.scratch_dir.get().strip(),
             "cache_quota_gb": float(self.cache_quota_gb.get()),
@@ -1516,6 +1537,7 @@ class VideoOptimizerStudio:
         header_tools = ttk.Frame(header)
         header_tools.pack(side="right", padx=(16, 0), anchor="n")
         ttk.Label(header_tools, text=f"v{__version__}", style="Muted.TLabel").pack(side="left", padx=(0, 8), pady=(7, 0))
+        ttk.Button(header_tools, text="Overlay Composer • Preview", command=self._show_overlay_composer).pack(side="left", padx=(0, 8))
         self.header_update_button = ttk.Button(
             header_tools, text="", style="Primary.TButton", command=self._apply_available_update,
         )
@@ -4393,6 +4415,98 @@ class VideoOptimizerStudio:
                     },
                 )
 
+            cpu_topology = detect_cpu_topology()
+            dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
+            machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
+            machine_profile = profile_for_threads(settings.cpu_threads, cpu_topology.logical_cpus)
+            overnight_mode = machine_profile == PROFILE_OVERNIGHT
+            if overnight_mode:
+                self._log("H8 Overnight: controlador sustentado ativo; somente downshift de recursos é permitido.")
+            cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
+
+            neural_steps_active = bool(
+                render_plan.step("enhancement").attempts
+                or render_plan.step("rife_base").runs
+                or render_plan.step("rife_final").attempts
+            )
+            neural_headroom = measure_resource_headroom(
+                job_dir, gpu_index=0, probe_write=neural_steps_active, probe_size_mb=32
+            )
+            h4_common = dict(
+                ram_available_gb=neural_headroom.ram_available_gb,
+                vram_free_mb=neural_headroom.vram_free_mb,
+                scratch_free_gb=neural_headroom.scratch_free_gb,
+                scratch_write_mbps=neural_headroom.scratch_write_mbps,
+                dedicated=(machine_mode == "dedicated"),
+            )
+            realesrgan_budget = derive_pipeline_budget("realesrgan", **h4_common)
+            rife_budget = derive_pipeline_budget("rife", **h4_common)
+            self._log(
+                "H4 HEADROOM: "
+                f"RAM={neural_headroom.ram_available_gb if neural_headroom.ram_available_gb is not None else 'n/a'} GiB • "
+                f"VRAM livre={neural_headroom.vram_free_mb if neural_headroom.vram_free_mb is not None else 'n/a'} MiB • "
+                f"scratch livre={neural_headroom.scratch_free_gb:.2f} GiB • "
+                f"write={neural_headroom.scratch_write_mbps if neural_headroom.scratch_write_mbps is not None else 'n/a'} MB/s • "
+                f"probe={neural_headroom.probe_bytes / (1024 ** 2):.0f} MiB"
+            )
+            self._log(f"H4 Real-ESRGAN budget: {realesrgan_budget.reason}")
+            self._log(f"H4 RIFE budget: {rife_budget.reason}")
+
+            h5_ai_controller = AdaptiveRuntimeController(
+                gpu_index=0,
+                allow_extract_overlap=realesrgan_budget.overlap_extract,
+                allow_pack_overlap=realesrgan_budget.overlap_pack,
+                overnight=overnight_mode,
+                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
+            )
+            h5_rife_controller = AdaptiveRuntimeController(
+                gpu_index=0,
+                allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
+                allow_pack_overlap=False,
+                overnight=overnight_mode,
+                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
+            )
+
+            def h5_guard(controller: AdaptiveRuntimeController) -> Callable[[], RuntimePressureDecision]:
+                def observe() -> RuntimePressureDecision:
+                    previous = controller.level
+                    sample = history.latest_hardware_sample() if history is not None else None
+                    decision = controller.observe(sample)
+                    if decision.level > previous:
+                        reason = ", ".join(decision.reasons) or "pressão observada"
+                        self._log(
+                            f"H5 DOWNSHIFT level={decision.level}: {reason}; "
+                            f"chunk={decision.chunk_scale:.2f}x, cpu={decision.cpu_scale:.2f}x, "
+                            f"extract_overlap={decision.allow_extract_overlap}, pack_overlap={decision.allow_pack_overlap}, "
+                            f"cooldown_hint={decision.cooldown_hint_seconds:.0f}s. Qualidade/modelo/FPS permanecem inalterados."
+                        )
+                    return decision
+                return observe
+
+            h5_ai_guard = h5_guard(h5_ai_controller)
+            h5_rife_guard = h5_guard(h5_rife_controller)
+
+            def stage_threads(stage: str, *, gpu_active: bool = False) -> int:
+                plan = schedule_cpu_threads(
+                    stage, topology=cpu_topology, mode=machine_mode, gpu_active=gpu_active,
+                    max_threads=settings.cpu_threads,
+                )
+                tuning_key = CpuTuningKey.from_topology(
+                    stage, cpu_topology, mode=machine_mode, gpu_active=gpu_active,
+                )
+                proven = cpu_tuning.lookup(tuning_key, max_threads=settings.cpu_threads)
+                if proven is not None:
+                    self._log(
+                        f"H1 CPU {stage}: usando política medida {proven}/{plan.logical_cpus} threads "
+                        f"(cap {settings.cpu_threads}, {machine_mode}; integridade aprovada)."
+                    )
+                    return proven
+                self._log(
+                    f"H1 CPU {stage}: {plan.threads}/{plan.logical_cpus} threads "
+                    f"(cap {settings.cpu_threads}, {machine_mode}; sem evidência medida aplicável; {plan.reason})"
+                )
+                return plan.threads
+
             working_video = settings.video
             working_w, working_h = source_w, source_h
             working_start = loop_start
@@ -4420,7 +4534,7 @@ class VideoOptimizerStudio:
                     video_duration,
                     source_fps,
                     color_plan,
-                    settings.cpu_threads,
+                    stage_threads("color"),
                     progress_base,
                     5.0,
                 )
@@ -4432,8 +4546,14 @@ class VideoOptimizerStudio:
                 consumed_before_ai = working_video
                 working_video, working_w, working_h = self._enhance_clip_ai(
                     working_video, job_dir, working_start, video_duration, source_fps, source_w, source_h,
-                    temp_paths, temp_dirs, settings.cpu_threads, progress_base, 20,
-                    cache_source_video=settings.video, cache_quota_gb=settings.cache_quota_gb,
+                    temp_paths, temp_dirs, stage_threads("neural_gpu", gpu_active=True), progress_base, 20,
+                    cache_source_video=settings.video,
+                    cache_quota_gb=settings.cache_quota_gb,
+                    chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
+                    overlap_extract=realesrgan_budget.overlap_extract,
+                    overlap_pack=realesrgan_budget.overlap_pack,
+                    runtime_guard=h5_ai_guard,
+                    runtime_reporter=h5_ai_controller.record_throughput,
                 )
                 self._release_temp_path(consumed_before_ai, temp_paths)
                 progress_base += 20.0
@@ -4452,8 +4572,16 @@ class VideoOptimizerStudio:
                     previous_working = working_video
                     working_video = self._interpolate_rife(
                         working_video, job_dir, working_start, video_duration, working_fps, target_fps,
-                        settings.use_cpu, settings.cpu_threads, temp_paths, progress_base, base_rife_weight,
+                        settings.use_cpu,
+                        stage_threads("neural_gpu", gpu_active=True),
+                        temp_paths,
+                        progress_base,
+                        base_rife_weight,
                         color_plan=color_plan,
+                        chunk_budget_gb=rife_budget.chunk_budget_gb,
+                        overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
+                        runtime_guard=h5_rife_guard,
+                        runtime_reporter=h5_rife_controller.record_throughput,
                     )
                     self._release_temp_path(previous_working, temp_paths)
                     working_start = 0.0
@@ -4502,7 +4630,7 @@ class VideoOptimizerStudio:
                     "-i", working_video,
                     "-map", "0:v:0", "-an", "-t", f"{video_duration:.6f}", "-vf", master_filter,
                 ] + self._intermediate_encoder(work_w, work_h, settings.use_cpu, color_plan) + [
-                    "-threads", str(settings.cpu_threads), "-progress", "pipe:1", "-nostats", str(master)
+                    "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)), "-progress", "pipe:1", "-nostats", str(master)
                 ]
                 self._run_ffmpeg(command, video_duration, progress_base, 10)
                 self._release_temp_path(working_video, temp_paths)
@@ -4515,7 +4643,7 @@ class VideoOptimizerStudio:
                     visual_source = self._create_transition(
                         str(master), transitioned, video_duration, transition_label,
                         transition_duration, work_w, work_h, settings.use_cpu, progress_base, 7,
-                        settings.cpu_threads, color_plan,
+                        stage_threads("vfx_cpu"), color_plan,
                     )
                     if visual_source != previous_visual:
                         self._release_temp_path(previous_visual, temp_paths)
@@ -4544,7 +4672,7 @@ class VideoOptimizerStudio:
                     if settings.use_stems:
                         try:
                             reactive_audio = self._prepare_reactive_audio(
-                                audio_source, settings.audio_focus, settings.use_cpu, settings.cpu_threads,
+                                audio_source, settings.audio_focus, settings.use_cpu, stage_threads("audio"),
                             )
                         except InterruptedError:
                             raise
@@ -4584,7 +4712,7 @@ class VideoOptimizerStudio:
                             FFMPEG, visual_source, reactive_audio, str(vfx_output), project_duration,
                             settings.effects, settings.color, settings.intensity, settings.occupancy,
                             work_w, work_h, work_fps, "100M" if max(work_w, work_h) > 1280 else "50M",
-                            "180M", "360M", settings.use_cpu, settings.cpu_threads,
+                            "180M", "360M", settings.use_cpu, stage_threads("vfx_cpu"),
                             settings.audio_focus, settings.reaction_smoothing, settings.reaction_expression,
                             settings.dynamic_sections, settings.section_dynamics,
                             lambda fraction: self._push_progress(progress_base + remaining_for_vfx * fraction),
@@ -4627,8 +4755,16 @@ class VideoOptimizerStudio:
                     previous_visual = visual_source
                     visual_source = self._interpolate_rife(
                         visual_source, job_dir, 0.0, project_duration, visual_fps, target_fps,
-                        settings.use_cpu, settings.cpu_threads, temp_paths, progress_base, rife_weight,
+                        settings.use_cpu,
+                        stage_threads("neural_gpu", gpu_active=True),
+                        temp_paths,
+                        progress_base,
+                        rife_weight,
                         color_plan=color_plan,
+                        chunk_budget_gb=rife_budget.chunk_budget_gb,
+                        overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
+                        runtime_guard=h5_rife_guard,
+                        runtime_reporter=h5_rife_controller.record_throughput,
                     )
                     self._release_temp_path(previous_visual, temp_paths)
                     visual_fps = float(target_fps)
@@ -4684,10 +4820,92 @@ class VideoOptimizerStudio:
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
-                command += ["-threads", str(settings.cpu_threads), "-t", f"{project_duration:.6f}"]
+                command += ["-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t", f"{project_duration:.6f}"]
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
-                self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
+
+                # H5: start from the complete Stable CPU/zscale command. The
+                # resident path is permissioned only by exact physical evidence.
+                baseline_command = list(command)
+                resident_route = None
+                resident_store = ResidentEncodeStore(PATHS.cache / "hardware" / "resident-encode.json")
+                try:
+                    resident_probe = probe_media(visual_source)
+                    resident_stream = next(
+                        (stream for stream in resident_probe.get("streams", []) if stream.get("codec_type") == "video"),
+                        {},
+                    )
+                    resident_profile = ColorProfile.from_probe(resident_probe)
+                    resident_caps = detect_gpu_media_capabilities(str(FFMPEG))
+                    color_ready = bool(
+                        not color_plan.output.hdr
+                        and color_plan.output.bit_depth <= 8
+                        and resident_profile.primaries == color_plan.output.primaries
+                        and resident_profile.transfer == color_plan.output.transfer
+                        and resident_profile.space == color_plan.output.space
+                        and resident_profile.range == color_plan.output.range
+                    )
+                    resident_route = select_resident_delivery_route(
+                        hardware=self._hardware, caps=resident_caps, store=resident_store,
+                        source_stream=resident_stream, source_profile=resident_profile,
+                        source_fps=visual_fps, target_width=target_w, target_height=target_h,
+                        target_fps=target_fps, delivery_plan=delivery_plan,
+                        bitrate_mbps=bitrate_mbps, use_cpu=settings.use_cpu,
+                        color_already_final=color_ready, gpu_index=0,
+                    )
+                except Exception as exc:
+                    self._log(f"H5 resident delivery: probe/evidence indisponível; baseline preservado ({exc}).")
+                    resident_route = None
+
+                if resident_route is not None and resident_route.approved:
+                    candidate = list(baseline_command)
+                    try:
+                        input_index = next(
+                            index for index in range(len(candidate) - 1)
+                            if candidate[index] == "-i" and candidate[index + 1] == visual_source
+                        )
+                        candidate[input_index:input_index] = resident_route.input_args()
+                        vf_index = next(
+                            index for index in range(len(candidate) - 1)
+                            if candidate[index] == "-vf" and candidate[index + 1] == final_filter
+                        )
+                        del candidate[vf_index:vf_index + 2]
+                        resident_filter = resident_route.video_filter(target_w, target_h)
+                        if resident_filter:
+                            candidate[vf_index:vf_index] = ["-vf", resident_filter]
+                        baseline_video_args = delivery_plan.video_args(
+                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
+                            bitrate_mbps=bitrate_mbps, fps=target_fps,
+                        )
+                        replacement_args = resident_route.contract.ffmpeg_args()
+                        start = next(
+                            index for index in range(len(candidate) - len(baseline_video_args) + 1)
+                            if candidate[index:index + len(baseline_video_args)] == baseline_video_args
+                        )
+                        candidate[start:start + len(baseline_video_args)] = replacement_args
+                        command = candidate
+                        self._log(
+                            f"H5 resident delivery: evidência exata aprovada; {resident_route.decoder} -> "
+                            f"{resident_route.scaler or 'sem scale'} -> hevc_nvenc."
+                        )
+                    except (StopIteration, ValueError, AttributeError) as exc:
+                        self._log(f"H5 resident delivery: envelope não casou; baseline preservado ({exc}).")
+                        resident_route = None
+                        command = baseline_command
+
+                try:
+                    self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
+                except RuntimeError as exc:
+                    if resident_route is None or not resident_route.approved or resident_route.key is None:
+                        raise
+                    resident_store.invalidate(resident_route.key)
+                    try: partial_output.unlink(missing_ok=True)
+                    except OSError: pass
+                    self._log(
+                        "H5 resident delivery: fast path aprovado falhou em produção; evidência exata "
+                        f"invalidada e finalização repetida pelo baseline CPU/zscale. Motivo: {exc}"
+                    )
+                    self._run_ffmpeg(baseline_command, project_duration, progress_base, 100 - progress_base)
                 self._release_temp_path(visual_source, temp_paths)
             else:
                 self._set_stage("Finalizando", "VFX e entrega já foram codificados no mesmo passe; iniciando verificação final.")
@@ -4713,7 +4931,7 @@ class VideoOptimizerStudio:
             display_path = output_path
             if preview and settings.comparison_preview:
                 display_path = self._create_comparison_preview(
-                    output_path, settings, project_duration, loop_start, settings.cpu_threads,
+                    output_path, settings, project_duration, loop_start, stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
                 )
             self._events.put(("done", str(display_path), preview, display_path.stat().st_size, report_path, history.path if history else ""))
         except InterruptedError:
@@ -5058,7 +5276,10 @@ class VideoOptimizerStudio:
         self, video: str, output_dir: Path, start_time: float, duration: float, source_fps: float,
         source_w: int, source_h: int, temp_paths: list[Path], temp_dirs: list[Path],
         cpu_threads: int, base: float, weight: float, *, cache_source_video: str | None = None,
-        cache_quota_gb: float = 50.0,
+        cache_quota_gb: float = 50.0, chunk_budget_gb: float = 4.0, overlap_extract: bool = False,
+        overlap_pack: bool = False,
+        runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
+        runtime_reporter: Callable[[float], None] | None = None,
     ) -> tuple[str, int, int]:
         """Run Real-ESRGAN with a bounded PNG working set (CP-012/CP-021).
 
@@ -5096,7 +5317,47 @@ class VideoOptimizerStudio:
         chunk_frames = choose_chunk_frames(
             FrameSpec(source_w, source_h, source_fps, "RGBA/PNG"),
             FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG"),
+            budget_gb=max(0.5, float(chunk_budget_gb)),
         )
+        pipeline_parts = realesrgan_pipeline_threads(
+            cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb
+        ).split(":")
+        try:
+            fallback_load, fallback_proc, fallback_save = (max(1, int(value)) for value in pipeline_parts)
+        except (TypeError, ValueError):
+            fallback_load, fallback_proc, fallback_save = 2, 2, 2
+        fallback_policy = RealEsrganPolicy(
+            tile=256,
+            load_jobs=fallback_load,
+            process_jobs=fallback_proc,
+            save_jobs=fallback_save,
+            gpu_index=0,
+        )
+        conservative_policy = RealEsrganPolicy(
+            tile=256, load_jobs=2, process_jobs=2, save_jobs=2, gpu_index=0
+        )
+        tuning_key = RealEsrganTuningKey(
+            self._hardware.gpu or "unknown-gpu",
+            int(self._hardware.vram_mb or 0),
+            self._hardware.driver or "unknown-driver",
+            "realesr-animevideov3",
+            source_w,
+            source_h,
+            2,
+        )
+        tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
+        tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
+        active_policy = tuned_policy or fallback_policy
+        if tuned_policy is not None:
+            self._log(
+                f"H3 Real-ESRGAN: política física aprovada carregada tile={active_policy.tile} "
+                f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."
+            )
+        else:
+            self._log(
+                f"H3 Real-ESRGAN: sem evidência física exata; preservando política Phase 2 "
+                f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index}."
+            )
         chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))
         temp_dirs.append(chunk_root)
         chunks: list[Path] = []
@@ -5107,68 +5368,357 @@ class VideoOptimizerStudio:
 
         processed = 0
         chunk_index = 0
-        while processed < total_frames:
-            if self._cancelled:
-                raise InterruptedError
-            count = min(chunk_frames, total_frames - processed)
-            chunk_index += 1
-            chunk_start = start_time + processed / max(1.0, source_fps)
-            chunk_duration = count / max(1.0, source_fps)
-            chunk_dir = chunk_root / f"chunk_{chunk_index:05d}"
-            incoming, outgoing = chunk_dir / "entrada", chunk_dir / "melhorado"
-            incoming.mkdir(parents=True)
-            outgoing.mkdir(parents=True)
-            fraction_before = processed / total_frames
-            fraction_chunk = count / total_frames
-            stage_base = base + weight * fraction_before * 0.90
+        prefetch: tuple[int, int, Path, Path, BackgroundCommand] | None = None
+        pack: tuple[int, Path, Path, BackgroundCommand] | None = None
 
-            self._set_stage(
-                "IA 1/3",
-                f"Lote {chunk_index}: extraindo {count} quadro(s) ({processed + 1}–{processed + count}/{total_frames}).",
+        # H5: CUDA decode is evidence-gated, never inferred from mere capability.
+        # HDR/unknown-color sources already fail closed inside gpu_media.py.
+        gpu_media_store = GpuMediaTuningStore(PATHS.cache / "hardware" / "gpu-media-tuning.json")
+        gpu_media_key: GpuMediaKey | None = None
+        gpu_media_policy: GpuMediaPolicy | None = None
+        gpu_media_profile: ColorProfile | None = None
+        try:
+            gpu_probe = probe_media(video)
+            gpu_stream = next(
+                (stream for stream in gpu_probe.get("streams", []) if stream.get("codec_type") == "video"),
+                {},
             )
-            extract = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
-            if chunk_start > 0:
-                extract += ["-ss", f"{chunk_start:.6f}"]
-            extract += [
-                "-i", video,
-                "-map", "0:v:0", "-an", "-vf", f"fps={source_fps:.8f}",
-                "-frames:v", str(count), "-start_number", "1",
-                "-progress", "pipe:1", "-nostats", str(incoming / "frame%08d.png"),
-            ]
-            self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
-            frames = len(list(incoming.glob("frame*.png")))
-            if frames < 1:
-                raise RuntimeError("A IA não recebeu nenhum quadro do vídeo.")
+            gpu_media_profile = ColorProfile.from_probe(gpu_probe)
+            gpu_caps = detect_gpu_media_capabilities(str(FFMPEG))
+            gpu_media_key = GpuMediaKey.from_profile(
+                gpu_name=self._hardware.gpu or "unknown-gpu",
+                driver=self._hardware.driver or "unknown-driver",
+                ffmpeg_fingerprint=gpu_caps.fingerprint,
+                codec=str(gpu_stream.get("codec_name") or "unknown"),
+                width=source_w,
+                height=source_h,
+                target_width=source_w,
+                target_height=source_h,
+                profile=gpu_media_profile,
+                operation="decode",
+            )
+            gpu_media_policy = select_gpu_media_policy(
+                store=gpu_media_store,
+                key=gpu_media_key,
+                capabilities=gpu_caps,
+                profile=gpu_media_profile,
+            )
+        except Exception as exc:
+            self._log(f"H5 CUDA decode: capability/evidence probe indisponível; CPU preservada ({exc}).")
+            gpu_media_policy = None
+        if gpu_media_policy is not None:
+            self._log(
+                f"H5 CUDA decode: evidência exata aprovada; usando {gpu_media_policy.decoder} "
+                f"na GPU {gpu_media_policy.gpu_index} para alimentar a extração neural."
+            )
 
-            self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")
-            command = [
-                str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
-                "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", "2:2:2",
-            ]
-            self._run_ai(
-                command, outgoing, frames,
-                stage_base + weight * fraction_chunk * 0.18,
-                weight * fraction_chunk * 0.58,
+        def invalidate_gpu_extract(reason: BaseException | str) -> None:
+            nonlocal gpu_media_policy
+            if gpu_media_policy is None or gpu_media_key is None:
+                return
+            invalidate_gpu_media_policy(gpu_media_store, gpu_media_key)
+            self._log(
+                "H5 CUDA decode: política aprovada falhou em produção, foi invalidada e este lote "
+                f"será repetido uma vez pela CPU. Motivo: {reason}"
             )
+            gpu_media_policy = None
 
-            self._set_stage("IA 3/3", f"Lote {chunk_index}: compactando o resultado lossless e liberando PNGs.")
-            chunk_video = chunk_root / f"segment_{chunk_index:05d}.mkv"
-            merge = [
-                FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-                "-framerate", f"{source_fps:.8f}", "-start_number", "1", "-i", str(outgoing / "frame%08d.png"),
-                "-map", "0:v:0", "-an", "-frames:v", str(frames),
-                "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1", "-g", "1", "-slicecrc", "1",
-                "-pix_fmt", "yuv420p", "-threads", str(cpu_threads),
-                "-progress", "pipe:1", "-nostats", str(chunk_video),
+        def extraction_command(
+            frame_offset: int,
+            frame_count: int,
+            destination: Path,
+            *,
+            progress: bool,
+            policy: GpuMediaPolicy | None,
+        ) -> list[str]:
+            extraction_start = start_time + frame_offset / max(1.0, source_fps)
+            command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
+            if extraction_start > 0:
+                command += ["-ss", f"{extraction_start:.6f}"]
+            if policy is not None:
+                command += policy.input_args()
+            command += ["-i", video, "-map", "0:v:0", "-an"]
+            if policy is not None and gpu_media_profile is not None:
+                filters = f"hwdownload,format={gpu_media_profile.pixel_format},fps={source_fps:.8f}"
+            else:
+                filters = f"fps={source_fps:.8f}"
+            command += [
+                "-vf", filters,
+                "-frames:v", str(frame_count), "-start_number", "1",
             ]
-            self._run_ffmpeg(
-                merge, chunk_duration,
-                stage_base + weight * fraction_chunk * 0.76,
-                weight * fraction_chunk * 0.14,
+            if progress:
+                command += ["-progress", "pipe:1", "-nostats"]
+            command += [str(destination / "frame%08d.png")]
+            return command
+
+        def run_extraction(
+            frame_offset: int,
+            frame_count: int,
+            destination: Path,
+            *,
+            progress: bool,
+            expected_duration: float,
+            stage_progress_base: float,
+            stage_progress_weight: float,
+        ) -> None:
+            policy = gpu_media_policy
+            command = extraction_command(
+                frame_offset, frame_count, destination, progress=progress, policy=policy
             )
-            chunks.append(chunk_video)
-            safe_rmtree(chunk_dir)
-            processed += count
+            try:
+                self._run_ffmpeg(
+                    command, expected_duration, stage_progress_base, stage_progress_weight
+                )
+            except RuntimeError as exc:
+                if policy is None:
+                    raise
+                invalidate_gpu_extract(exc)
+                safe_rmtree(destination)
+                destination.mkdir(parents=True, exist_ok=True)
+                retry = extraction_command(
+                    frame_offset, frame_count, destination, progress=progress, policy=None
+                )
+                self._run_ffmpeg(
+                    retry, expected_duration, stage_progress_base, stage_progress_weight
+                )
+
+        try:
+            while processed < total_frames:
+                if self._cancelled:
+                    raise InterruptedError
+                decision = runtime_guard() if runtime_guard is not None else None
+                if decision is not None:
+                    if decision.level > 0 and prefetch is not None:
+                        prefetched_dir = prefetch[2]
+                        task = prefetch[4]
+                        task.cancel()
+                        try:
+                            task.wait(timeout=5.0)
+                        except Exception:
+                            pass
+                        safe_rmtree(prefetched_dir)
+                        prefetch = None
+                    overlap_extract = overlap_extract and decision.allow_extract_overlap
+                    overlap_pack = overlap_pack and decision.allow_pack_overlap
+                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
+                    active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
+                else:
+                    active_chunk_frames = chunk_frames
+                    active_cpu_threads = cpu_threads
+                count = min(active_chunk_frames, total_frames - processed)
+                chunk_index += 1
+                chunk_start = start_time + processed / max(1.0, source_fps)
+                chunk_duration = count / max(1.0, source_fps)
+                chunk_dir = chunk_root / f"chunk_{chunk_index:05d}"
+                incoming, outgoing = chunk_dir / "entrada", chunk_dir / "melhorado"
+                fraction_before = processed / total_frames
+                fraction_chunk = count / total_frames
+                stage_base = base + weight * fraction_before * 0.90
+
+                prefetched = prefetch is not None and prefetch[0] == processed and prefetch[1] == count
+                if prefetched:
+                    _offset, _count, prefetched_dir, prefetched_incoming, task = prefetch
+                    if prefetched_dir != chunk_dir or prefetched_incoming != incoming:
+                        task.cancel()
+                        raise RuntimeError("H4 prefetch perdeu sincronismo com o lote atual.")
+                    self._set_stage(
+                        "IA 1/3",
+                        f"Lote {chunk_index}: consumindo prefetch de {count} quadro(s) já extraído em paralelo.",
+                    )
+                    try:
+                        result = task.wait()
+                    except RuntimeError as exc:
+                        if gpu_media_policy is None:
+                            raise
+                        invalidate_gpu_extract(exc)
+                        safe_rmtree(incoming)
+                        incoming.mkdir(parents=True, exist_ok=True)
+                        run_extraction(
+                            processed,
+                            count,
+                            incoming,
+                            progress=True,
+                            expected_duration=chunk_duration,
+                            stage_progress_base=stage_base,
+                            stage_progress_weight=weight * fraction_chunk * 0.18,
+                        )
+                        result = None
+                    prefetch = None
+                    if result is not None and (result.cancelled or self._cancelled):
+                        raise InterruptedError
+                    self._log(f"H4 PREFETCH Real-ESRGAN: lote {chunk_index} pronto sem ocupar o processo foreground.")
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                else:
+                    incoming.mkdir(parents=True, exist_ok=True)
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                    self._set_stage(
+                        "IA 1/3",
+                        f"Lote {chunk_index}: extraindo {count} quadro(s) ({processed + 1}–{processed + count}/{total_frames}).",
+                    )
+                    run_extraction(
+                        processed,
+                        count,
+                        incoming,
+                        progress=True,
+                        expected_duration=chunk_duration,
+                        stage_progress_base=stage_base,
+                        stage_progress_weight=weight * fraction_chunk * 0.18,
+                    )
+
+                frames = len(list(incoming.glob("frame*.png")))
+                if frames < 1:
+                    raise RuntimeError("A IA não recebeu nenhum quadro do vídeo.")
+                if frames != count:
+                    self._log(
+                        f"H4 PREFETCH Real-ESRGAN: FFmpeg entregou {frames}/{count} quadros; "
+                        "desativando prefetch para os lotes restantes e preservando a tolerância histórica."
+                    )
+                    overlap_extract = False
+
+                next_processed = processed + count
+                if overlap_extract and next_processed < total_frames and prefetch is None:
+                    next_count = min(chunk_frames, total_frames - next_processed)
+                    next_index = chunk_index + 1
+                    next_dir = chunk_root / f"chunk_{next_index:05d}"
+                    next_incoming = next_dir / "entrada"
+                    next_incoming.mkdir(parents=True, exist_ok=True)
+                    next_command = extraction_command(
+                        next_processed,
+                        next_count,
+                        next_incoming,
+                        progress=False,
+                        policy=gpu_media_policy,
+                    )
+                    task = BackgroundCommand(
+                        next_command,
+                        cancel_requested=lambda: self._cancelled,
+                        log=self._log,
+                    ).start()
+                    prefetch = (next_processed, next_count, next_dir, next_incoming, task)
+                    self._log(
+                        f"H4 PREFETCH Real-ESRGAN: extração do lote {next_index} iniciada em paralelo; "
+                        "fila rígida=1 lote futuro / máximo 2 worksets ativos nesta etapa."
+                    )
+
+                self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")
+                attempted: set[RealEsrganPolicy] = set()
+                policy = active_policy
+                while True:
+                    attempted.add(policy)
+                    safe_rmtree(outgoing)
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                    command = [
+                        str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
+                        "-n", "realesr-animevideov3", "-s", "2", "-f", "png",
+                    ] + policy.command_args()
+                    try:
+                        self._log(
+                            f"H3 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "
+                            f"pipeline={policy.pipeline} gpu={policy.gpu_index}."
+                        )
+                        neural_started = time.monotonic()
+                        self._run_ai(
+                            command, outgoing, frames,
+                            stage_base + weight * fraction_chunk * 0.18,
+                            weight * fraction_chunk * 0.58,
+                        )
+                        neural_elapsed = max(1e-6, time.monotonic() - neural_started)
+                        produced = len(list(outgoing.glob("frame*.png")))
+                        if produced != frames:
+                            raise RuntimeError(
+                                f"Real-ESRGAN produziu {produced} de {frames} quadros esperados no lote."
+                            )
+                        if runtime_reporter is not None:
+                            runtime_reporter(produced / neural_elapsed)
+                        active_policy = policy
+                        break
+                    except InterruptedError:
+                        raise
+                    except RuntimeError as exc:
+                        failure_text = str(exc).lower()
+                        oom_like = any(
+                            token in failure_text
+                            for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
+                        )
+                        was_tuned = tuned_policy is not None and policy == tuned_policy
+                        if was_tuned:
+                            if tuning_store.invalidate(tuning_key, reason=str(exc)):
+                                self._log(
+                                    "H3 Real-ESRGAN: política física aprovada falhou e foi invalidada para esta chave exata."
+                                )
+                            tuned_policy = None
+                        if policy != conservative_policy and conservative_policy not in attempted:
+                            self._log(
+                                f"H3 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'falha/integridade'} "
+                                f"com tile={policy.tile} pipeline={policy.pipeline}; única repetição segura com "
+                                f"tile={conservative_policy.tile} pipeline={conservative_policy.pipeline}."
+                            )
+                            policy = conservative_policy
+                            continue
+                        raise
+
+                # Only one previous pack may remain in flight. Waiting here means
+                # pack(N-1) overlaps neural(N), but two pack encoders never stack.
+                if pack is not None:
+                    packed_index, packed_dir, packed_video, packed_task = pack
+                    packed_result = packed_task.wait()
+                    pack = None
+                    if packed_result.cancelled or self._cancelled:
+                        raise InterruptedError
+                    if not packed_video.is_file() or packed_video.stat().st_size <= 0:
+                        raise RuntimeError(f"H4 pack Real-ESRGAN lote {packed_index} não produziu FFV1 válido.")
+                    chunks.append(packed_video)
+                    safe_rmtree(packed_dir)
+                    self._log(f"H4 PACK Real-ESRGAN: lote {packed_index} concluído em ordem e workset liberado.")
+
+                self._set_stage("IA 3/3", f"Lote {chunk_index}: compactando o resultado lossless e liberando PNGs.")
+                chunk_video = chunk_root / f"segment_{chunk_index:05d}.mkv"
+                merge_base = [
+                    FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
+                    "-framerate", f"{source_fps:.8f}", "-start_number", "1", "-i", str(outgoing / "frame%08d.png"),
+                    "-map", "0:v:0", "-an", "-frames:v", str(frames),
+                    "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1", "-g", "1", "-slicecrc", "1",
+                    "-pix_fmt", "yuv420p", "-threads", str(active_cpu_threads),
+                ]
+                if overlap_pack and next_processed < total_frames:
+                    background_merge = merge_base + [str(chunk_video)]
+                    packed_task = BackgroundCommand(
+                        background_merge,
+                        cancel_requested=lambda: self._cancelled,
+                        log=self._log,
+                    ).start()
+                    pack = (chunk_index, chunk_dir, chunk_video, packed_task)
+                    self._log(
+                        f"H4 PACK Real-ESRGAN: lote {chunk_index} compactando em paralelo; "
+                        "fila rígida=1 pack anterior / teto total=3 worksets com prefetch."
+                    )
+                else:
+                    foreground_merge = merge_base + ["-progress", "pipe:1", "-nostats", str(chunk_video)]
+                    self._run_ffmpeg(
+                        foreground_merge, chunk_duration,
+                        stage_base + weight * fraction_chunk * 0.76,
+                        weight * fraction_chunk * 0.14,
+                    )
+                    if not chunk_video.is_file() or chunk_video.stat().st_size <= 0:
+                        raise RuntimeError(f"H4 pack Real-ESRGAN lote {chunk_index} não produziu FFV1 válido.")
+                    chunks.append(chunk_video)
+                    safe_rmtree(chunk_dir)
+                processed += count
+        finally:
+            if prefetch is not None:
+                task = prefetch[4]
+                task.cancel()
+                try:
+                    task.wait(timeout=5.0)
+                except Exception:
+                    pass
+            if pack is not None:
+                packed_task = pack[3]
+                packed_task.cancel()
+                try:
+                    packed_task.wait(timeout=5.0)
+                except Exception:
+                    pass
 
         if not chunks:
             raise RuntimeError("Real-ESRGAN não produziu segmentos.")
@@ -5337,6 +5887,10 @@ class VideoOptimizerStudio:
         weight: float,
         *,
         color_plan: ColorPipeline,
+        chunk_budget_gb: float = 4.0,
+        overlap_extract: bool = False,
+        runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
+        runtime_reporter: Callable[[float], None] | None = None,
     ) -> str:
         """Interpolate with RIFE using bounded frame chunks (CP-012).
 
@@ -5360,6 +5914,7 @@ class VideoOptimizerStudio:
         chunk_frames = choose_chunk_frames(
             FrameSpec(frame_w, frame_h, source_fps, "RGBA/PNG"),
             FrameSpec(frame_w, frame_h, target_fps, "RGBA/PNG"),
+            budget_gb=max(0.5, float(chunk_budget_gb)),
             output_frames_per_input=ratio,
         )
         chunk_root = Path(tempfile.mkdtemp(prefix=f"rife_{time.time_ns()}_", dir=job_dir))
@@ -5367,25 +5922,60 @@ class VideoOptimizerStudio:
         processed_source = 0
         produced_target = 0
         chunk_index = 0
+        prefetch: tuple[int, int, Path, BackgroundCommand] | None = None
         self._log(
             f"STORAGE RIFE: {source_count}→{total_target_count} frames em lotes de até {chunk_frames} frames fonte; "
             "PNGs são liberados após cada lote."
         )
+
+        def source_chunk_count(offset: int, limit: int | None = None) -> int:
+            remaining = source_count - offset
+            count = min(max(2, int(limit or chunk_frames)), remaining)
+            if remaining - count == 1:
+                count += 1
+            count = min(count, remaining)
+            return count if count >= 2 else 0
+
+        def extraction_command(frame_offset: int, frame_count: int, destination: Path, *, progress: bool) -> list[str]:
+            extraction_start = start_time + frame_offset / max(1.0, source_fps)
+            command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
+            if extraction_start > 0:
+                command += ["-ss", f"{extraction_start:.6f}"]
+            command += [
+                "-i", video, "-map", "0:v:0", "-an", "-vf", f"fps={source_fps:.8f}",
+                "-frames:v", str(frame_count), "-start_number", "0",
+            ]
+            if progress:
+                command += ["-progress", "pipe:1", "-nostats"]
+            command += [str(destination / "%08d.png")]
+            return command
+
         try:
             while processed_source < source_count:
                 if self._cancelled:
                     raise InterruptedError
-                remaining = source_count - processed_source
-                count = min(chunk_frames, remaining)
-                if remaining - count == 1:
-                    count += 1
-                count = min(count, remaining)
+                decision = runtime_guard() if runtime_guard is not None else None
+                if decision is not None:
+                    if decision.level > 0 and prefetch is not None:
+                        prefetched_incoming = prefetch[2]
+                        task = prefetch[3]
+                        task.cancel()
+                        try:
+                            task.wait(timeout=5.0)
+                        except Exception:
+                            pass
+                        safe_rmtree(prefetched_incoming)
+                        prefetch = None
+                    overlap_extract = overlap_extract and decision.allow_extract_overlap
+                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames, minimum=2)
+                else:
+                    active_chunk_frames = chunk_frames
+                count = source_chunk_count(processed_source, active_chunk_frames)
                 if count < 2:
                     # A one-frame tail cannot be interpolated independently;
                     # it is intentionally represented by the preceding chunk.
                     break
                 chunk_index += 1
-                chunk_start = start_time + processed_source / max(1.0, source_fps)
                 chunk_duration = count / max(1.0, source_fps)
                 desired = min(
                     total_target_count - produced_target,
@@ -5393,33 +5983,63 @@ class VideoOptimizerStudio:
                 )
                 incoming = chunk_root / f"chunk_{chunk_index:05d}_in"
                 outgoing = chunk_root / f"chunk_{chunk_index:05d}_out"
-                incoming.mkdir(parents=True)
-                outgoing.mkdir(parents=True)
                 fraction_before = processed_source / source_count
                 fraction_chunk = count / source_count
                 stage_base = base + weight * fraction_before * 0.90
 
-                self._set_stage(
-                    "RIFE 1/3",
-                    f"Lote {chunk_index}: extraindo {count} quadro(s) fonte ({processed_source + 1}–{processed_source + count}/{source_count}).",
-                )
-                extract = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
-                if chunk_start > 0:
-                    extract += ["-ss", f"{chunk_start:.6f}"]
-                extract += [
-                    "-i", video, "-map", "0:v:0", "-an", "-vf", f"fps={source_fps:.8f}",
-                    "-frames:v", str(count), "-start_number", "0",
-                    "-progress", "pipe:1", "-nostats", str(incoming / "%08d.png"),
-                ]
-                self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
+                prefetched = prefetch is not None and prefetch[0] == processed_source and prefetch[1] == count
+                if prefetched:
+                    _offset, _count, prefetched_incoming, task = prefetch
+                    if prefetched_incoming != incoming:
+                        task.cancel()
+                        raise RuntimeError("H4 prefetch RIFE perdeu sincronismo com o lote atual.")
+                    self._set_stage(
+                        "RIFE 1/3",
+                        f"Lote {chunk_index}: consumindo prefetch de {count} quadro(s) fonte já extraído em paralelo.",
+                    )
+                    result = task.wait()
+                    prefetch = None
+                    if result.cancelled or self._cancelled:
+                        raise InterruptedError
+                    self._log(f"H4 PREFETCH RIFE: lote {chunk_index} pronto sem ocupar o processo foreground.")
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                else:
+                    incoming.mkdir(parents=True, exist_ok=True)
+                    outgoing.mkdir(parents=True, exist_ok=True)
+                    self._set_stage(
+                        "RIFE 1/3",
+                        f"Lote {chunk_index}: extraindo {count} quadro(s) fonte ({processed_source + 1}–{processed_source + count}/{source_count}).",
+                    )
+                    extract = extraction_command(processed_source, count, incoming, progress=True)
+                    self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
+
                 extracted = len(list(incoming.glob("*.png")))
                 if extracted < 2:
                     raise RuntimeError("RIFE recebeu menos de dois quadros no lote.")
+
+                next_processed = processed_source + count
+                next_count = source_chunk_count(next_processed, active_chunk_frames) if next_processed < source_count else 0
+                if overlap_extract and next_count >= 2 and prefetch is None:
+                    next_index = chunk_index + 1
+                    next_incoming = chunk_root / f"chunk_{next_index:05d}_in"
+                    next_incoming.mkdir(parents=True, exist_ok=True)
+                    next_command = extraction_command(next_processed, next_count, next_incoming, progress=False)
+                    task = BackgroundCommand(
+                        next_command,
+                        cancel_requested=lambda: self._cancelled,
+                        log=self._log,
+                    ).start()
+                    prefetch = (next_processed, next_count, next_incoming, task)
+                    self._log(
+                        f"H4 PREFETCH RIFE: extração do lote {next_index} iniciada em paralelo; "
+                        "fila rígida=1 lote futuro / máximo 2 worksets ativos nesta etapa."
+                    )
 
                 self._set_stage("RIFE 2/3", f"Lote {chunk_index}: gerando {desired} quadros com rife-v4.6.")
                 command = build_rife_command(paths, incoming, outgoing, desired, use_cpu)
                 self._log("Comando RIFE: " + subprocess.list2cmdline(command))
                 recent: deque[str] = deque(maxlen=60)
+                neural_started = time.monotonic()
                 process = subprocess.Popen(
                     command,
                     cwd=str(RIFE_EXE.parent),
@@ -5457,9 +6077,12 @@ class VideoOptimizerStudio:
                     raise InterruptedError
                 if code:
                     raise RuntimeError("RIFE falhou.\n" + "\n".join(recent))
+                neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
                 if len(frames) < max(2, desired - 1):
                     raise RuntimeError(f"RIFE produziu {len(frames)} de {desired} quadros esperados no lote.")
+                if runtime_reporter is not None:
+                    runtime_reporter(len(frames) / neural_elapsed)
 
                 self._set_stage("RIFE 3/3", f"Lote {chunk_index}: compactando lossless e liberando PNGs.")
                 first_number = int(frames[0].stem)
@@ -5506,6 +6129,13 @@ class VideoOptimizerStudio:
             self._run_ffmpeg(concat, duration, base + weight * 0.90, weight * 0.10)
             return str(interpolated)
         finally:
+            if prefetch is not None:
+                task = prefetch[3]
+                task.cancel()
+                try:
+                    task.wait(timeout=5.0)
+                except Exception:
+                    pass
             safe_rmtree(chunk_root)
 
     @staticmethod
@@ -5532,28 +6162,79 @@ class VideoOptimizerStudio:
         path = Path(handle.name); handle.close(); paths.append(path); return path
 
     def _run_ffmpeg(self, command: list[str], duration: float, base: float, weight: float) -> None:
+        """Run FFmpeg without letting a blocked stdout pipe stall cancellation.
+
+        Progress parsing is performed on the render worker while a daemon reader
+        drains FFmpeg output. The worker therefore keeps polling the process and
+        can enforce cancellation even when Windows pipe EOF is delayed by a shim
+        or descendant process.
+        """
+        if self._cancelled:
+            raise InterruptedError
         self._log("Comando FFmpeg: " + subprocess.list2cmdline(command))
         recent: deque[str] = deque(maxlen=60)
+        lines = queue.Queue()
         process = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace", **popen_group_kwargs(),
         )
         self._process = process
         assert process.stdout is not None
-        for raw in process.stdout:
-            line = raw.strip()
-            if line:
-                recent.append(line); self._log(line)
-            if line.startswith("out_time="):
+
+        def reader() -> None:
+            try:
+                for raw in process.stdout:
+                    lines.put(raw)
+            except (OSError, ValueError):
+                # Cancellation may close the pipe from the worker thread after
+                # the process has already been terminated.
+                return
+
+        reader_thread = threading.Thread(target=reader, daemon=True)
+        reader_thread.start()
+
+        def drain_output() -> None:
+            while True:
                 try:
-                    hours, minutes, seconds = line.split("=", 1)[1].split(":")
-                    elapsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-                    self._push_progress(base + weight * min(1, elapsed / max(0.001, duration)))
-                except ValueError:
-                    pass
-            if self._cancelled and process.poll() is None:
-                terminate_process_tree(process, self._log)
-        code = process.wait()
+                    raw = lines.get_nowait()
+                except queue.Empty:
+                    return
+                line = raw.strip()
+                if line:
+                    recent.append(line)
+                    self._log(line)
+                if line.startswith("out_time="):
+                    try:
+                        hours, minutes, seconds = line.split("=", 1)[1].split(":")
+                        elapsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                        self._push_progress(base + weight * min(1, elapsed / max(0.001, duration)))
+                    except ValueError:
+                        pass
+
+        while process.poll() is None:
+            drain_output()
+            if self._cancelled:
+                terminate_process_tree(process, self._log, grace_seconds=2.0)
+                break
+            time.sleep(0.05)
+
+        drain_output()
+        try:
+            code = process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            terminate_process_tree(process, self._log, grace_seconds=1.0)
+            try:
+                code = process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("FFmpeg não encerrou após cancelamento forçado.") from exc
+        finally:
+            try:
+                process.stdout.close()
+            except (OSError, ValueError):
+                pass
+            reader_thread.join(timeout=1.0)
+            drain_output()
+
         if self._cancelled:
             raise InterruptedError
         if code:

@@ -38,8 +38,25 @@ class AtomicOutput:
         os.replace(self.partial, self.final)
         return self.final
 
-    def discard(self) -> None:
-        self.partial.unlink(missing_ok=True)
+    def discard(self, *, timeout_seconds: float = 5.0, retry_seconds: float = 0.05) -> None:
+        """Remove an abandoned partial, tolerating only transient Windows locks.
+
+        ``taskkill /T /F`` can return just before a terminated FFmpeg descendant
+        releases its output handle. Windows then raises ``PermissionError`` even
+        though cancellation itself succeeded. Retry that one condition for a
+        bounded interval; a persistent lock still propagates so recovery never
+        pretends cleanup worked.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        delay = max(0.001, float(retry_seconds))
+        while True:
+            try:
+                self.partial.unlink(missing_ok=True)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(delay)
 
 
 class RenderJournal:

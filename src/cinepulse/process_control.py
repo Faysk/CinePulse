@@ -45,6 +45,13 @@ def terminate_process_tree(
             )
             if result.returncode not in (0, 128):
                 logger(f"taskkill retornou {result.returncode}: {(result.stderr or result.stdout).strip()}")
+            if not _wait_for_exit(process, grace_seconds):
+                logger(f"Processo {pid} não confirmou encerramento após taskkill; usando TerminateProcess.")
+                try:
+                    process.kill()
+                    process.wait(timeout=2.0)
+                except (OSError, subprocess.TimeoutExpired):
+                    logger(f"Processo {pid} não confirmou encerramento após TerminateProcess.")
         else:
             pgid = os.getpgid(pid)
             os.killpg(pgid, SIGTERM)
