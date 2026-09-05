@@ -59,6 +59,35 @@ class SafeOutputTests(unittest.TestCase):
             self.assertFalse(atomic.backup.exists())
             self.assertEqual(b"new", final.read_bytes())
 
+    def test_discard_retries_transient_windows_style_permission_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            atomic = AtomicOutput.for_path(Path(temporary) / "video.mp4", pid=123)
+            atomic.prepare().write_bytes(b"partial")
+            real_unlink = Path.unlink
+            attempts = 0
+
+            def transient(path: Path, *args, **kwargs):
+                nonlocal attempts
+                if path == atomic.partial:
+                    attempts += 1
+                    if attempts < 3:
+                        raise PermissionError("sharing violation")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch("pathlib.Path.unlink", autospec=True, side_effect=transient):
+                atomic.discard(timeout_seconds=0.5, retry_seconds=0.001)
+            self.assertEqual(3, attempts)
+            self.assertFalse(atomic.partial.exists())
+
+    def test_discard_persistent_permission_error_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            atomic = AtomicOutput.for_path(Path(temporary) / "video.mp4", pid=123)
+            atomic.prepare().write_bytes(b"partial")
+            with patch("pathlib.Path.unlink", autospec=True, side_effect=PermissionError("still locked")):
+                with self.assertRaises(PermissionError):
+                    atomic.discard(timeout_seconds=0.0, retry_seconds=0.001)
+            self.assertTrue(atomic.partial.exists())
+
     def test_permission_error_means_process_may_still_be_alive(self) -> None:
         with patch("cinepulse.safe_output.os.kill", side_effect=PermissionError("denied")):
             self.assertTrue(process_alive(1234))
