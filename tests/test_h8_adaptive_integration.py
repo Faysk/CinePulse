@@ -62,7 +62,9 @@ class H8AdaptiveIntegrationTests(unittest.TestCase):
         decision = controller.observe(sample(temp=90.0))
         self.assertEqual(2, decision.level)
         self.assertEqual(10.0, decision.cooldown_hint_seconds)
-        self.assertEqual(14, decision.limit_cpu_threads(28))
+        # H8 critical pressure intentionally keeps 60% of the proven CPU
+        # envelope; it is not the H4 50% chunk-scale contract.
+        self.assertEqual(17, decision.limit_cpu_threads(28))
 
 
 if __name__ == "__main__":
