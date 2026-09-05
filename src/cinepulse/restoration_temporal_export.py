@@ -1,0 +1,334 @@
+"""Streaming temporal reconstruction backend for Preview restoration exports.
+
+This module is intentionally isolated from Stable. It decodes RGB frames through
+FFmpeg, reconstructs selected overlay regions from nearby source frames with a
+bounded rolling window, and feeds the reconstructed stream into a second FFmpeg
+process. Audio is mapped from the original source and color restoration is
+applied only after temporal reconstruction.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import threading
+from typing import BinaryIO
+
+import numpy as np
+
+from .restoration_inpaint import TemporalReconstructionPolicy, reconstruct_region_temporally
+from .restoration_preview import PreviewRestorationPlan
+
+
+class TemporalPreviewCancelled(RuntimeError):
+    """Raised when a streaming temporal Preview export is cancelled."""
+
+
+@dataclass(frozen=True)
+class PreviewVideoGeometry:
+    width: int
+    height: int
+    fps: float
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0 or self.fps <= 0:
+            raise ValueError("invalid Preview video geometry")
+
+    @property
+    def frame_bytes(self) -> int:
+        return self.width * self.height * 3
+
+
+def _parse_rate(value: str) -> float:
+    text = str(value or "").strip()
+    if not text or text == "0/0":
+        raise ValueError("invalid frame rate")
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        denominator_value = float(denominator)
+        if denominator_value == 0:
+            raise ValueError("invalid frame rate")
+        result = float(numerator) / denominator_value
+    else:
+        result = float(text)
+    if result <= 0:
+        raise ValueError("invalid frame rate")
+    return result
+
+
+def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
+    """Read only the geometry needed by the rawvideo streaming path."""
+
+    if not ffprobe:
+        raise ValueError("ffprobe executable is required for temporal Preview export")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,avg_frame_rate,r_frame_rate",
+            "-of",
+            "json",
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=creationflags,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "FFprobe falhou no Preview temporal.")
+    payload = json.loads(result.stdout or "{}")
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError("A fonte não possui stream de vídeo para reconstrução temporal.")
+    stream = streams[0]
+    fps_text = stream.get("avg_frame_rate") or stream.get("r_frame_rate")
+    return PreviewVideoGeometry(
+        width=int(stream.get("width") or 0),
+        height=int(stream.get("height") or 0),
+        fps=_parse_rate(str(fps_text or "")),
+    )
+
+
+def _read_exact(stream: BinaryIO, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def reconstruct_window_target(
+    frames: list[np.ndarray],
+    *,
+    target_index: int,
+    plan: PreviewRestorationPlan,
+    policy: TemporalReconstructionPolicy,
+) -> tuple[np.ndarray, int, int]:
+    """Reconstruct one target while keeping donor frames immutable.
+
+    Regions that cannot gather enough context-compatible donors remain unchanged;
+    callers receive explicit applied/fallback counts instead of silently
+    pretending temporal reconstruction succeeded.
+    """
+
+    if not 0 <= target_index < len(frames):
+        raise IndexError("target_index outside rolling window")
+    output = np.asarray(frames[target_index]).copy()
+    applied = 0
+    fallback = 0
+    for region in plan.regions:
+        result = reconstruct_region_temporally(
+            frames,
+            target_index=target_index,
+            region=region,
+            policy=policy,
+        )
+        if result.applied:
+            candidate = result.frame
+            x, y, width, height = region.to_pixels(output.shape[1], output.shape[0])
+            output[y : y + height, x : x + width] = candidate[y : y + height, x : x + width]
+            applied += 1
+        else:
+            fallback += 1
+    return output, applied, fallback
+
+
+@dataclass(frozen=True)
+class TemporalStreamReport:
+    frames_written: int
+    applied_regions: int
+    fallback_regions: int
+
+
+def stream_temporal_preview(
+    ffmpeg: str,
+    ffprobe: str,
+    source: Path,
+    output: Path,
+    plan: PreviewRestorationPlan,
+    *,
+    cancel_event: threading.Event | None = None,
+    video_codec: str = "libx264",
+    crf: int = 16,
+    preset: str = "slow",
+    policy: TemporalReconstructionPolicy = TemporalReconstructionPolicy(),
+) -> TemporalStreamReport:
+    """Run bounded rolling-window temporal reconstruction into a complete file."""
+
+    if not plan.has_overlay_work:
+        raise ValueError("temporal Preview export requires selected overlay regions")
+    if not 0 <= int(crf) <= 51:
+        raise ValueError("crf must be between 0 and 51")
+
+    geometry = probe_preview_geometry(ffprobe, source)
+    cancel = cancel_event or threading.Event()
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    decoder: subprocess.Popen | None = None
+    encoder: subprocess.Popen | None = None
+    frames_written = 0
+    applied_regions = 0
+    fallback_regions = 0
+
+    decoder_command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "error",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    encoder_command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s:v",
+        f"{geometry.width}x{geometry.height}",
+        "-r",
+        f"{geometry.fps:.8f}",
+        "-i",
+        "pipe:0",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a?",
+    ]
+    if plan.color_filter:
+        encoder_command.extend(["-vf", plan.color_filter])
+    encoder_command.extend(
+        [
+            "-c:v",
+            video_codec,
+            "-preset",
+            preset,
+            "-crf",
+            str(int(crf)),
+            "-c:a",
+            "copy",
+            "-shortest",
+            str(output),
+        ]
+    )
+
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as decoder_log, tempfile.TemporaryFile(
+        mode="w+", encoding="utf-8", errors="replace"
+    ) as encoder_log:
+        try:
+            decoder = subprocess.Popen(
+                decoder_command,
+                stdout=subprocess.PIPE,
+                stderr=decoder_log,
+                creationflags=creationflags,
+            )
+            encoder = subprocess.Popen(
+                encoder_command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=encoder_log,
+                creationflags=creationflags,
+            )
+            if decoder.stdout is None or encoder.stdin is None:
+                raise RuntimeError("Não foi possível abrir os pipes do Preview temporal.")
+
+            window: deque[tuple[int, np.ndarray]] = deque()
+            next_target = 0
+            decoded_index = -1
+            eof = False
+
+            while not eof:
+                if cancel.is_set():
+                    raise TemporalPreviewCancelled("Exportação temporal Preview cancelada.")
+                raw = _read_exact(decoder.stdout, geometry.frame_bytes)
+                if not raw:
+                    eof = True
+                elif len(raw) != geometry.frame_bytes:
+                    raise RuntimeError("FFmpeg encerrou rawvideo no meio de um frame temporal.")
+                else:
+                    decoded_index += 1
+                    frame = np.frombuffer(raw, dtype=np.uint8).reshape(geometry.height, geometry.width, 3).copy()
+                    window.append((decoded_index, frame))
+
+                while window and (eof or decoded_index >= next_target + policy.radius):
+                    first_index = window[0][0]
+                    last_index = window[-1][0]
+                    if next_target < first_index:
+                        next_target = first_index
+                    if next_target > last_index:
+                        break
+                    local_target = next_target - first_index
+                    frames = [item[1] for item in window]
+                    restored, applied, fallback = reconstruct_window_target(
+                        frames,
+                        target_index=local_target,
+                        plan=plan,
+                        policy=policy,
+                    )
+                    encoder.stdin.write(restored.tobytes(order="C"))
+                    frames_written += 1
+                    applied_regions += applied
+                    fallback_regions += fallback
+                    next_target += 1
+                    while window and window[0][0] < next_target - policy.radius:
+                        window.popleft()
+
+                if eof:
+                    break
+
+            encoder.stdin.close()
+            encoder.stdin = None
+            decoder_return = decoder.wait()
+            encoder_return = encoder.wait()
+            if cancel.is_set():
+                raise TemporalPreviewCancelled("Exportação temporal Preview cancelada.")
+            if decoder_return != 0 or encoder_return != 0:
+                decoder_log.seek(0)
+                encoder_log.seek(0)
+                tail = (decoder_log.read() + "\n" + encoder_log.read()).strip()[-2000:]
+                raise RuntimeError(f"FFmpeg falhou no Preview temporal.\n{tail}".strip())
+            if frames_written <= 0 or not output.is_file() or output.stat().st_size <= 0:
+                raise RuntimeError("Preview temporal terminou sem produzir vídeo válido.")
+            return TemporalStreamReport(
+                frames_written=frames_written,
+                applied_regions=applied_regions,
+                fallback_regions=fallback_regions,
+            )
+        finally:
+            for process in (decoder, encoder):
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=3)
