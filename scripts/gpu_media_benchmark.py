@@ -91,9 +91,9 @@ def _number(value: object) -> float | None:
 
 
 def _frames(stream: dict) -> int | None:
-    for key in ("nb_read_frames", "nb_frames"):
+    for name in ("nb_read_frames", "nb_frames"):
         try:
-            value = stream.get(key)
+            value = stream.get(name)
             if value not in (None, "N/A", ""):
                 return int(value)
         except (TypeError, ValueError):
@@ -106,7 +106,7 @@ def _duration(probe: dict) -> float | None:
     if value is not None:
         return value
     values = [_number(stream.get("duration")) for stream in probe.get("streams", [])]
-    valid = [value for value in values if value is not None]
+    valid = [item for item in values if item is not None]
     return max(valid) if valid else None
 
 
@@ -174,8 +174,6 @@ def _build_baseline(
 ) -> list[str]:
     command = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(source), "-map", "0:v:0", "-map", "0:a?"]
     if scale:
-        # zscale remains the quality reference. No tone-map or gamut conversion
-        # is allowed in this benchmark envelope.
         command += ["-vf", f"zscale=w={width}:h={height}:dither=error_diffusion,format={profile.pixel_format}"]
     else:
         command += ["-vf", f"format={profile.pixel_format}"]
@@ -197,9 +195,6 @@ def _build_candidate(
     filters: list[str] = []
     if policy.scaler:
         filters.append(policy.scale_filter(width, height))
-    # H5 phase-A benchmarks resident decode/scale, then downloads once to the
-    # same lossless reference format. A fully resident NVENC delivery candidate
-    # is a separate evidence key and is not silently inferred from this result.
     filters.append(f"hwdownload,format={profile.pixel_format}")
     command += ["-vf", ",".join(filters), "-c:v", "ffv1", "-level", "3", "-c:a", "copy"]
     command += _color_args(profile) + [str(output)]
@@ -279,7 +274,6 @@ def main() -> int:
     )
     if not candidates:
         raise SystemExit("No safe CUDA media candidate for this exact source/color contract")
-    # Prefer the scale candidate when scaling is requested, otherwise decode.
     policy = next((item for item in reversed(candidates) if bool(item.scaler) == do_scale), candidates[0])
     operation = policy.operation
     key = GpuMediaKey.from_profile(
@@ -289,6 +283,8 @@ def main() -> int:
         codec=codec,
         width=source_w,
         height=source_h,
+        target_width=width,
+        target_height=height,
         profile=profile,
         operation=operation,
     )
@@ -307,9 +303,7 @@ def main() -> int:
         )
         baseline_probe = _probe(ffprobe, baseline)
         candidate_probe = _probe(ffprobe, candidate)
-        integrity_ok, metadata_ok, frame_count_ok, audio_sync_ok = _integrity(
-            source_probe, baseline_probe, candidate_probe
-        )
+        integrity_ok, metadata_ok, frame_count_ok, audio_sync_ok = _integrity(source_probe, baseline_probe, candidate_probe)
         psnr = _metric(ffmpeg, baseline, candidate, "psnr", args.timeout)
         ssim = _metric(ffmpeg, baseline, candidate, "ssim", args.timeout)
         evidence = GpuMediaEvidence(
@@ -329,12 +323,7 @@ def main() -> int:
         "physical_acceptance": "exact-evidence-recorded-not-global-pass" if recorded else "rejected",
         "hardware": hardware.as_dict(),
         "ffmpeg_fingerprint": capabilities.fingerprint,
-        "source": {
-            "codec": codec,
-            "width": source_w,
-            "height": source_h,
-            "profile": profile.label,
-        },
+        "source": {"codec": codec, "width": source_w, "height": source_h, "profile": profile.label},
         "target": {"width": width, "height": height},
         "operation": operation,
         "policy": {"decoder": policy.decoder, "scaler": policy.scaler, "gpu_index": policy.gpu_index},
