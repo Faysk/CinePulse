@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,16 +79,25 @@ class RealEsrganTuningTests(unittest.TestCase):
         changed = RealEsrganTuningKey("RTX Test", 8192, "1000.0", "realesr-animevideov3", 1920, 1080, 2)
         self.assertIsNone(self.store.lookup(changed))
 
-    def test_invalidate_removes_failed_cached_policy(self) -> None:
+    def test_invalidate_removes_failed_cached_policy_and_records_reason(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3)
+        other_key = RealEsrganTuningKey("RTX Test", 8192, "999.1", "realesr-animevideov3", 1280, 720, 2)
+        other_policy = RealEsrganPolicy(256, 2, 2, 2)
         self.store.record_samples(
             self.key,
             (RealEsrganSample(policy, 7.0, True, output_frames=10, expected_frames=10),),
         )
-        self.assertEqual(self.store.lookup(self.key), policy)
-        self.assertTrue(self.store.invalidate(self.key))
+        self.store.record_samples(
+            other_key,
+            (RealEsrganSample(other_policy, 5.0, True, output_frames=10, expected_frames=10),),
+        )
+        self.assertTrue(self.store.invalidate(self.key, reason="simulated runtime OOM"))
         self.assertIsNone(self.store.lookup(self.key))
-        self.assertFalse(self.store.invalidate(self.key))
+        self.assertEqual(self.store.lookup(other_key), other_policy)
+        payload = json.loads(self.store.path.read_text(encoding="utf-8"))
+        tombstone = payload["invalidated"][self.key.token()]
+        self.assertIn("runtime OOM", tombstone["reason"])
+        self.assertFalse(self.store.invalidate(self.key, reason="second failure"))
 
     def test_corrupt_store_fails_closed(self) -> None:
         self.store.path.write_text("not-json", encoding="utf-8")
