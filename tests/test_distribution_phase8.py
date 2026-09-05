@@ -71,8 +71,13 @@ class DistributionPhase8Tests(unittest.TestCase):
 
     def test_installed_ui_component_repairs_preserve_nonportable_mode(self) -> None:
         studio = (ROOT / "src" / "cinepulse" / "studio.py").read_text(encoding="utf-8")
-        self.assertGreaterEqual(studio.count('installation_mode(APP_DIR) == "installed"'), 3)
+        # Two component launch/repair paths must preserve installed mode.
+        # The legacy updater used to contribute a third unrelated text match;
+        # the one-click updater now snapshots installation mode once.
+        self.assertGreaterEqual(studio.count('installation_mode(APP_DIR) == "installed"'), 2)
         self.assertGreaterEqual(studio.count('command.append("-NonPortable")'), 2)
+        self.assertIn("install_mode = installation_mode(APP_DIR)", studio)
+        self.assertIn("installation=install_mode", studio)
 
     def test_windows_mutex_uses_pointer_sized_handle_and_closes_duplicates(self) -> None:
         runtime = (ROOT / "src" / "cinepulse" / "runtime_distribution.py").read_text(encoding="utf-8")

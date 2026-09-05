@@ -602,6 +602,9 @@ class VideoOptimizerStudio:
         self._process: subprocess.Popen | None = None
         self._cancelled = False
         self._busy = False
+        self._available_update: update_manager.UpdateInfo | None = None
+        self._prepared_update: tuple[update_manager.UpdateInfo, str] | None = None
+        self._update_check_running = False
         self._started_at: float | None = None
         self._progress_value = 0.0
         self._logs: list[str] = []
@@ -688,6 +691,7 @@ class VideoOptimizerStudio:
         self._schedule(500, self._tick_clock)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._schedule(350, self._recover_interrupted_render)
+        self._schedule(1200, self._startup_update_check)
 
     # ------------------------------------------------------------------
     # Phase 8 — release UX, persistence, keyboard and responsive layout
@@ -1512,7 +1516,11 @@ class VideoOptimizerStudio:
         header_tools = ttk.Frame(header)
         header_tools.pack(side="right", padx=(16, 0), anchor="n")
         ttk.Label(header_tools, text=f"v{__version__}", style="Muted.TLabel").pack(side="left", padx=(0, 8), pady=(7, 0))
-        ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide).pack(side="left")
+        self.header_update_button = ttk.Button(
+            header_tools, text="", style="Primary.TButton", command=self._apply_available_update,
+        )
+        self.header_help_button = ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide)
+        self.header_help_button.pack(side="left")
         ttk.Checkbutton(
             header_tools,
             text="Modo escuro",
@@ -5803,53 +5811,111 @@ class VideoOptimizerStudio:
                 category="IA local", secondary=("Diagnóstico", self._create_diagnostics), technical_detail=str(exc),
             )
 
-    def _check_updates(self) -> None:
-        if installation_mode(APP_DIR) == "installed":
+    def _startup_update_check(self) -> None:
+        # Startup discovery is deliberately silent and asynchronous: network
+        # latency must never delay the editor or produce a modal error dialog.
+        self._check_updates(silent=True)
+
+    def _hide_update_cta(self) -> None:
+        self._available_update = None
+        self._prepared_update = None
+        if hasattr(self, "update_button"):
+            self.update_button.configure(text="Atualizações", command=self._check_updates, state="normal")
+        if hasattr(self, "header_update_button") and self.header_update_button.winfo_manager():
+            self.header_update_button.pack_forget()
+
+    def _show_update_cta(self, info: update_manager.UpdateInfo) -> None:
+        self._available_update = info
+        label = f"Atualizar v{info.version}"
+        if hasattr(self, "update_button"):
+            self.update_button.configure(text=label, command=self._apply_available_update, state="normal")
+        if hasattr(self, "header_update_button"):
+            self.header_update_button.configure(text=label, state="normal")
+            if not self.header_update_button.winfo_manager():
+                self.header_update_button.pack(side="left", padx=(0, 8), before=self.header_help_button)
+
+    def _check_updates(self, *, silent: bool = False) -> None:
+        if self._update_check_running:
+            return
+        self._update_check_running = True
+        if hasattr(self, "update_button"):
+            self.update_button.configure(state="disabled")
+        if not silent:
             self._set_feedback(
-                "info", "Instalação gerenciada pelo MSI",
-                "Esta cópia não sobrescreve arquivos instalados. Atualize instalando um MSI CinePulse mais recente; dados, componentes, cache e temporários permanecem dentro da pasta CinePulse escolhida na instalação.",
+                "busy", "Verificando atualizações",
+                "Consultando a última release Stable do GitHub sem alterar a instalação atual.",
                 category="Atualização",
             )
-            return
-        feed = update_manager.configured_feed()
-        if not feed:
-            self._set_feedback(
-                "info", "Canal de atualização ainda não configurado",
-                "O mecanismo de atualização está presente, mas esta instalação não possui um feed público configurado.",
-                category="Atualização",
-            )
-            return
-        self.update_button.configure(state="disabled")
-        self._set_feedback(
-            "busy", "Verificando atualizações",
-            "Consultando o canal configurado sem alterar a instalação atual.",
-            category="Atualização",
-        )
+        install_mode = installation_mode(APP_DIR)
 
         def worker() -> None:
             try:
-                info = update_manager.check(feed, __version__)
-                self._events.put(("update_checked", info))
+                info = update_manager.check_available(
+                    __version__, installation=install_mode, timeout=5,
+                )
+                self._events.put(("update_checked", info, silent))
             except Exception as exc:
-                self._events.put(("update_error", str(exc)))
+                self._events.put(("update_error", "check", str(exc), silent))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_available_update(self) -> None:
+        info = self._available_update
+        if info is None:
+            self._check_updates(silent=False)
+            return
+        if self._busy or self._queue_running or self._ai_installing:
+            self._set_feedback(
+                "warning", "Atualização aguardando",
+                "Conclua ou cancele o processamento atual; o CinePulse não fecha um render para instalar uma atualização.",
+                category="Atualização",
+            )
+            return
+        prepared = self._prepared_update
+        if prepared is not None and prepared[0].version == info.version:
+            self._launch_prepared_update(prepared[0], prepared[1])
+            return
+        if hasattr(self, "header_update_button"):
+            self.header_update_button.configure(state="disabled")
+        if hasattr(self, "update_button"):
+            self.update_button.configure(state="disabled")
+        self._stage_update(info)
 
     def _stage_update(self, info: update_manager.UpdateInfo) -> None:
+        package = "MSI" if info.package_kind == "msi" else "pacote portátil"
         self._set_feedback(
-            "busy", f"Preparando CinePulse {info.version}",
-            "Baixando o pacote e verificando sua integridade antes de qualquer substituição.",
+            "busy", f"Baixando CinePulse {info.version}",
+            f"Baixando o {package} da release oficial e verificando SHA-256 antes de fechar o programa.",
             category="Atualização",
         )
 
         def worker() -> None:
             try:
-                update_manager.stage(info)
-                self._events.put(("update_ready", info.version))
+                staged = update_manager.stage(info)
+                self._events.put(("update_ready", info, str(staged)))
             except Exception as exc:
-                self._events.put(("update_error", str(exc)))
+                self._events.put(("update_error", "stage", str(exc), False))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _launch_prepared_update(self, info: update_manager.UpdateInfo, staged: str) -> None:
+        if self._busy or self._queue_running or self._ai_installing:
+            self._prepared_update = (info, staged)
+            self._show_update_cta(info)
+            self._set_feedback(
+                "info", f"CinePulse {info.version} pronto para instalar",
+                "O pacote já foi verificado. Termine o processamento atual e clique em Atualizar para instalar sem baixar novamente.",
+                category="Atualização", primary=("Atualizar quando livre", self._apply_available_update),
+            )
+            return
+        self._prepared_update = None
+        update_manager.launch_staged(info, Path(staged), APP_DIR, os.getpid())
+        self._set_feedback(
+            "success", f"CinePulse {info.version} verificado",
+            "A atualização será aplicada assim que esta janela fechar e o CinePulse abrirá novamente automaticamente.",
+            category="Atualização",
+        )
+        self._on_close()
 
     def _recover_interrupted_render(self) -> None:
         payload = self._render_journal.read()
@@ -6042,39 +6108,47 @@ class VideoOptimizerStudio:
                         )
                 elif kind == "update_checked":
                     info = event[1]
+                    silent = bool(event[2]) if len(event) > 2 else False
+                    self._update_check_running = False
                     if info is None:
-                        self.update_button.configure(state="normal")
-                        self._set_feedback(
-                            "success", "CinePulse atualizado",
-                            "Você já está usando a versão mais recente disponível neste canal.",
-                            category="Atualização",
-                        )
-                    elif messagebox.askyesno(
-                        APP_TITLE,
-                        f"CinePulse {info.version} está disponível.\n\nBaixar e preparar a atualização agora?",
-                    ):
-                        self._stage_update(info)
+                        self._hide_update_cta()
+                        if not silent:
+                            self._set_feedback(
+                                "success", "CinePulse atualizado",
+                                "Você já está usando a versão Stable mais recente publicada no GitHub.",
+                                category="Atualização",
+                            )
                     else:
-                        self.update_button.configure(state="normal")
+                        self._show_update_cta(info)
                         self._set_feedback(
-                            "info", "Atualização adiada",
-                            "Nada foi alterado. Você pode verificar novamente quando quiser.",
-                            category="Atualização",
+                            "info", f"CinePulse {info.version} disponível",
+                            "Nova versão verificada. Clique em Atualizar; o download, a verificação e o reinício são automáticos.",
+                            category="Atualização", primary=("Atualizar agora", self._apply_available_update),
                         )
                 elif kind == "update_ready":
-                    self.update_button.configure(state="normal")
-                    self._set_feedback(
-                        "success", f"CinePulse {event[1]} preparado",
-                        "O pacote foi baixado e verificado. Feche e abra o CinePulse para concluir a atualização.",
-                        category="Atualização",
-                    )
+                    info = event[1]
+                    staged = str(event[2])
+                    try:
+                        self._launch_prepared_update(info, staged)
+                    except Exception as exc:
+                        self._events.put(("update_error", "launch", str(exc), False))
                 elif kind == "update_error":
-                    self.update_button.configure(state="normal")
-                    self._set_feedback(
-                        "error", "Não foi possível preparar a atualização",
-                        "A atualização foi interrompida com segurança; a instalação atual não foi substituída.",
-                        category="Atualização", secondary=("Ver log", self._show_log), technical_detail=str(event[1]),
-                    )
+                    phase = str(event[1]) if len(event) > 1 else "check"
+                    detail = str(event[2]) if len(event) > 2 else "Falha desconhecida."
+                    silent = bool(event[3]) if len(event) > 3 else False
+                    self._update_check_running = False
+                    if self._available_update is not None:
+                        self._show_update_cta(self._available_update)
+                    elif hasattr(self, "update_button"):
+                        self.update_button.configure(text="Atualizações", command=self._check_updates, state="normal")
+                    if silent and phase == "check":
+                        self._log("Verificação automática de atualização indisponível: " + detail)
+                    else:
+                        self._set_feedback(
+                            "error", "Não foi possível concluir a atualização",
+                            "A versão atual foi preservada; nenhuma substituição incompleta foi promovida.",
+                            category="Atualização", secondary=("Ver log", self._show_log), technical_detail=detail,
+                        )
                 elif kind == "ai_install_status":
                     line = str(event[1])
                     self.ai_install_status_text.set(line[-180:])
