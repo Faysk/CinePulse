@@ -20,13 +20,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Wire isolated Preview Composer into Studio
+      - name: Wire isolated Preview Composer and normalize exact VFR timing
         shell: python
         run: |
           from pathlib import Path
-          path = Path('src/cinepulse/studio.py')
-          text = path.read_text(encoding='utf-8')
 
+          studio = Path('src/cinepulse/studio.py')
+          text = studio.read_text(encoding='utf-8')
           old_header = '''        ttk.Label(header_tools, text=f"v{__version__}", style="Muted.TLabel").pack(side="left", padx=(0, 8), pady=(7, 0))
                   ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide).pack(side="left")
           '''
@@ -69,8 +69,26 @@ jobs:
               if old_method not in text:
                   raise SystemExit('activity-center method contract changed; refusing blind composer patch')
               text = text.replace(old_method, new_method, 1)
+          studio.write_text(text, encoding='utf-8', newline='\n')
 
-          path.write_text(text, encoding='utf-8', newline='\n')
+          media = Path('src/cinepulse/composer_media.py')
+          media_text = media.read_text(encoding='utf-8')
+          old_timing = '''    base = timestamps[0]
+              starts = [max(0.0, value - base) for value in timestamps]
+              starts[0] = 0.0
+          '''
+          new_timing = '''    base = timestamps[0]
+              # Normalize decimal FFprobe timestamps at the media-contract boundary.
+              # Binary float subtraction of values such as 3.100 - 3.000 otherwise
+              # leaks 0.10000000000000009 into deterministic VFR lookup/state.
+              starts = [max(0.0, round(value - base, 12)) for value in timestamps]
+              starts[0] = 0.0
+          '''
+          if 'round(value - base, 12)' not in media_text:
+              if old_timing not in media_text:
+                  raise SystemExit('composer VFR timing contract changed; refusing blind patch')
+              media_text = media_text.replace(old_timing, new_timing, 1)
+          media.write_text(media_text, encoding='utf-8', newline='\n')
       - name: Focused Composer gates
         run: |
           python -m pip install --disable-pip-version-check --editable .
@@ -79,6 +97,7 @@ jobs:
             tests.test_composer_studio_integration \
             tests.test_composer_view \
             tests.test_overlay_composer \
+            tests.test_composer_media_timing \
             tests.test_composer_export \
             tests.test_composer_runtime \
             tests.test_composer_preview \
@@ -89,7 +108,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm -f .github/workflows/_tmp-composer-entry.yml 2>/dev/null || true
-          git add src/cinepulse/studio.py tests/test_composer_studio_integration.py
-          git commit -m "Preview: expose isolated Overlay Composer workspace"
+          git add src/cinepulse/studio.py src/cinepulse/composer_media.py tests/test_composer_studio_integration.py
+          git commit -m "Preview: expose Composer and normalize exact VFR timing"
           git pull --rebase origin preview-restoration-lab
           git push origin preview-restoration-lab
