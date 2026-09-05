@@ -12,8 +12,10 @@ The goal is not to force every component to 100% utilization. The goal is to kee
 - Short/insufficient telemetry fails closed as `unknown` instead of inventing a performance diagnosis.
 - A Real-ESRGAN tuning record can only affect runtime when it matches the exact GPU name, VRAM envelope, driver, model, source geometry and scale and was previously recorded with integrity-approved output.
 - Proven Real-ESRGAN policies may change tile size and NCNN `load:process:save` concurrency, which is the evidence-gated overlap mechanism for keeping the GPU fed.
-- If a proven policy fails during a real render, CinePulse invalidates that exact record and retries the affected chunk once with the conservative 256 / 2:2:2 fallback. It does not keep reusing a policy that failed in production.
+- If a proven policy fails during a real render, CinePulse invalidates that exact record and retries the affected chunk once with the conservative fallback. It does not keep reusing a policy that failed in production.
 - Without a proven record, the existing Phase 2 profile-aware policy remains in place; Phase 3 does not silently invent a more aggressive GPU policy from heuristic telemetry alone.
+- RIFE now has an equivalent hardware/driver/model/resolution-specific tuning cache. UHD mode remains mandatory for UHD sources; only `-j` concurrency and GPU index are tunable.
+- A measured RIFE policy that fails, OOMs, or produces an invalid PNG sequence is invalidated and the same neural chunk is retried with the original conservative RIFE baseline.
 
 ## Why this is safer than blindly adding workers
 
@@ -23,14 +25,22 @@ The advisor is intentionally a diagnostic heuristic, not a benchmark result. It 
 
 ## Real-ESRGAN evidence loop
 
-`realesrgan_tuning.py` stores exact hardware/driver/source-specific winners. Candidate generation always includes the conservative 256 / 2:2:2 policy and can expose larger tiles or wider load/save concurrency as benchmark candidates.
+`realesrgan_tuning.py` stores exact hardware/driver/source-specific winners. Candidate generation always includes the current conservative policy and can expose larger tiles or wider load/save concurrency as benchmark candidates.
 
 The runtime contract is:
 
 1. exact integrity-approved record exists -> use it;
-2. record fails in a real render -> invalidate it and retry 256 / 2:2:2 once;
+2. record fails in a real render -> invalidate it and retry the conservative fallback once;
 3. no exact record -> keep the normal Phase 2 policy;
 4. OOM/corrupt/incomplete benchmark samples never become winners.
+
+## RIFE evidence loop
+
+`rife_tuning.py` stores winners by GPU name, VRAM envelope, driver, RIFE model and exact source resolution. UHD candidates never disable `-u`; the default UHD policy remains `-j 1:1:1`, while non-UHD keeps the existing `2:2:2` baseline.
+
+`scripts/rife_benchmark.py` benchmarks only on the actual machine. The baseline is always first and must pass before any faster candidate can be persisted. Candidate acceptance requires the exact native frame count, structurally complete PNGs with stable dimensions, and a machine-black sample guard. OOM, timeout, malformed/truncated PNGs, dimension mismatch, frame-count mismatch or black-output evidence rejects the candidate.
+
+At runtime, a matching measured policy is loaded by the crash-safe RIFE wrapper. A failure immediately invalidates that exact key and retries the same chunk once with the original baseline; if the baseline also fails, the existing render recovery path remains authoritative.
 
 ## Physical acceptance
 
