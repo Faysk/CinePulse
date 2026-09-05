@@ -157,7 +157,18 @@ def alpha_over(base: np.ndarray, overlay: np.ndarray, left: int, top: int) -> No
     base[y0:y1, x0:x1] = np.clip(np.rint(result * 255.0), 0, 255).astype(np.uint8)
 
 
-def _features(inputs: ComposerFrameInputs, binding: str) -> AudioFrameFeatures:
+def _features(inputs: ComposerFrameInputs, binding: str, *, item_id: str | None = None) -> AudioFrameFeatures:
+    """Resolve per-item visualizer data before stem/master fallback.
+
+    A project may contain a waveform and a 64-bar spectrum both bound to the
+    master mix. Those layers need different ``values`` while sharing the same
+    RMS/onset source, so callers can provide an item-id entry in ``audio``.
+    Existing binding-only input remains fully compatible.
+    """
+    if item_id:
+        item_features = inputs.audio.get(item_id)
+        if item_features is not None:
+            return item_features
     return inputs.audio.get(binding, inputs.audio.get("master", AudioFrameFeatures()))
 
 
@@ -189,7 +200,7 @@ def render_composer_frame(
 
         layer = item.visualizer
         assert layer is not None
-        features = _features(inputs, layer.binding)
+        features = _features(inputs, layer.binding, item_id=item.id)
         frame_state = evaluate_visualizer_frame(
             layer,
             time_seconds=inputs.project_time,
