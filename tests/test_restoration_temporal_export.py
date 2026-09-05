@@ -24,6 +24,34 @@ class TemporalPreviewExportTests(unittest.TestCase):
     def test_geometry_reports_rgb24_frame_bytes(self):
         geometry = PreviewVideoGeometry(width=1920, height=1080, fps=60.0)
         self.assertEqual(geometry.frame_bytes, 1920 * 1080 * 3)
+        self.assertFalse(geometry.suspected_vfr)
+
+    def test_geometry_flags_material_avg_nominal_rate_mismatch(self):
+        geometry = PreviewVideoGeometry(width=1920, height=1080, fps=24.0, nominal_fps=30.0)
+        self.assertTrue(geometry.suspected_vfr)
+
+        fractional_cfr = PreviewVideoGeometry(
+            width=1920,
+            height=1080,
+            fps=30000 / 1001,
+            nominal_fps=30000 / 1001,
+        )
+        self.assertFalse(fractional_cfr.suspected_vfr)
+
+    def test_temporal_working_set_is_bounded_by_window_plus_target_copy(self):
+        geometry = PreviewVideoGeometry(width=7680, height=4320, fps=60.0)
+        policy = TemporalReconstructionPolicy(radius=4)
+        expected_frames = (2 * policy.radius + 1) + 1
+        self.assertEqual(
+            geometry.estimated_temporal_working_set(policy),
+            geometry.frame_bytes * expected_frames,
+        )
+        self.assertLess(geometry.estimated_temporal_working_set(policy), 2 * 1024**3)
+
+    def test_12k_default_temporal_window_exceeds_two_gib_guard(self):
+        geometry = PreviewVideoGeometry(width=12288, height=6480, fps=120.0)
+        policy = TemporalReconstructionPolicy(radius=4)
+        self.assertGreater(geometry.estimated_temporal_working_set(policy), 2 * 1024**3)
 
     def test_window_reconstruction_does_not_copy_persistent_overlay(self):
         frames = []
