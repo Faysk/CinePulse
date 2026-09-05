@@ -25,10 +25,12 @@ jobs:
           python -m compileall -q src/cinepulse/composer_runtime.py src/cinepulse/composer_media.py src/cinepulse/overlay_composer.py src/cinepulse/visualizer_geometry.py src/cinepulse/visualizer_renderer.py src/cinepulse/ui/composer_view.py
           python -m unittest tests.test_composer_runtime tests.test_composer_media tests.test_overlay_composer tests.test_visualizer_geometry tests.test_visualizer_renderer tests.test_gpu_compositor
       - name: Remove temporary writer
+        if: ${{ always() }}
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --ff-only origin preview-restoration-lab
           git rm .github/workflows/_tmp-composer-runtime-test.yml
           git commit -m "chore: remove temporary composer runtime gate"
           git push origin HEAD:preview-restoration-lab
