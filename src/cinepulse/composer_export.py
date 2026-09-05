@@ -91,10 +91,11 @@ def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[st
     p = request.profile
     range_in = _range_token(p.color_range)
     # zscale explicitly defines the SDR conversion contract rather than relying
-    # on implicit libswscale guesses. RGB output is full-range by definition.
+    # on implicit libswscale guesses. zscale's stable aliases are numeric 709;
+    # RGB output is full-range by definition.
     vf = (
-        f"zscale=matrixin=bt709:primariesin=bt709:transferin=bt709:rangein={range_in}:"
-        "matrix=gbr:primaries=bt709:transfer=bt709:range=full,format=rgba"
+        f"zscale=matrixin=709:primariesin=709:transferin=709:rangein={range_in}:"
+        "matrix=gbr:primaries=709:transfer=709:range=full,format=rgba"
     )
     return [
         str(request.ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error",
@@ -213,7 +214,14 @@ def export_composer_reference(
                     raise InterruptedError("Preview Composer export cancelled")
                 raw = _read_exact(decoder.stdout, frame_bytes)
                 if len(raw) != frame_bytes:
-                    raise RuntimeError(f"base decoder produced {len(raw)}/{frame_bytes} bytes at frame {index}")
+                    decode_stderr.flush()
+                    code = decoder.poll()
+                    details = decoder_log.read_text(encoding="utf-8", errors="replace")[-4000:]
+                    suffix = f"; decoder exited with {code}" if code is not None else ""
+                    raise RuntimeError(
+                        (details.strip() + suffix) if details.strip() else
+                        f"base decoder produced {len(raw)}/{frame_bytes} bytes at frame {index}{suffix}"
+                    )
                 base = np.frombuffer(raw, dtype=np.uint8).reshape(request.profile.height, request.profile.width, 4)
                 project_time = index / request.profile.fps
                 media_frames: dict[str, np.ndarray] = {}
@@ -269,4 +277,10 @@ def export_composer_reference(
     finally:
         terminate_process_tree(decoder, logger, grace_seconds=1.5)
         terminate_process_tree(encoder, logger, grace_seconds=1.5)
+        for stream in (getattr(decoder, "stdout", None), getattr(encoder, "stdin", None)):
+            try:
+                if stream is not None and not stream.closed:
+                    stream.close()
+            except OSError:
+                pass
         shutil.rmtree(temporary_dir, ignore_errors=True)
