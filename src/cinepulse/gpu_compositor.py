@@ -4,8 +4,8 @@ from __future__ import annotations
 
 The first H6 envelope deliberately targets the part FFmpeg/CUDA can express
 reliably today: media-layer composition with ``overlay_cuda``. Procedural music
-VFX remain on the established NumPy renderer until an actual shader backend has
-its own visual-equivalence evidence.
+VFX and non-normal blend modes remain on the established NumPy renderer until
+an actual shader backend has its own visual-equivalence evidence.
 
 Capability is never permission. Runtime use requires an exact accepted record
 for GPU/driver/FFmpeg/base-profile/layer contract and otherwise fails closed to
@@ -34,7 +34,7 @@ COMPOSITOR_SSIM_FLOOR = 0.999999
 COMPOSITOR_MIN_SPEEDUP = 1.03
 
 LayerKind = Literal["png", "gif", "apng", "webp", "video-alpha"]
-BlendMode = Literal["normal"]
+BlendMode = Literal["normal", "multiply", "screen", "add", "overlay"]
 AudioBinding = Literal["none", "master", "vocals", "drums", "bass", "other"]
 
 
@@ -64,8 +64,8 @@ class OverlayLayer:
             raise ValueError("layer scale must be within 0.01..16")
         if not 0.0 <= float(self.opacity) <= 1.0:
             raise ValueError("layer opacity must be within 0..1")
-        if self.blend != "normal":
-            raise ValueError("H6 CUDA envelope currently proves normal alpha blend only")
+        if self.blend not in {"normal", "multiply", "screen", "add", "overlay"}:
+            raise ValueError("unsupported overlay blend mode")
         if not 0.0 <= float(self.pulse) <= 2.0 or not 0.0 <= float(self.beat_reaction) <= 2.0:
             raise ValueError("pulse/beat reaction must be within 0..2")
 
@@ -205,7 +205,11 @@ class GpuCompositorStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, TypeError, ValueError):
             return {"version": self.VERSION, "records": {}}
-        if not isinstance(payload, dict) or payload.get("version") != self.VERSION or not isinstance(payload.get("records"), dict):
+        if (
+            not isinstance(payload, dict)
+            or payload.get("version") != self.VERSION
+            or not isinstance(payload.get("records"), dict)
+        ):
             return {"version": self.VERSION, "records": {}}
         return payload
 
@@ -216,7 +220,10 @@ class GpuCompositorStore:
         if not isinstance(record, dict) or not record.get("accepted"):
             return False
         evidence = record.get("evidence")
-        return bool(isinstance(evidence, dict) and evidence.get("reference_id") == COMPOSITOR_REFERENCE_ID)
+        return bool(
+            isinstance(evidence, dict)
+            and evidence.get("reference_id") == COMPOSITOR_REFERENCE_ID
+        )
 
     def record(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> bool:
         if not evidence.accepted:
@@ -247,7 +254,11 @@ class GpuCompositorStore:
 
     def _atomic_write(self, payload: dict[str, object]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=self.path.name + ".",
+            suffix=".tmp",
+            dir=self.path.parent,
+        )
         temp = Path(temp_name)
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -264,6 +275,8 @@ class GpuCompositorStore:
 
 
 def _static_layer_supported(layer: OverlayLayer) -> bool:
+    # CUDA remains deliberately narrower than the CPU reference. Adding a CPU
+    # blend mode never grants GPU permission without new physical H6 evidence.
     return bool(
         layer.blend == "normal"
         and layer.scale == 1.0
@@ -277,7 +290,11 @@ def cuda_layer_eligible(layer: OverlayLayer, caps: GpuCompositorCapabilities) ->
     return caps.media_layers_supported and _static_layer_supported(layer)
 
 
-def overlay_cuda_position(layer: OverlayLayer, canvas_width: int, canvas_height: int) -> tuple[str, str]:
+def overlay_cuda_position(
+    layer: OverlayLayer,
+    canvas_width: int,
+    canvas_height: int,
+) -> tuple[str, str]:
     x = max(0.0, min(1.0, float(layer.x)))
     y = max(0.0, min(1.0, float(layer.y)))
     return (
@@ -303,7 +320,9 @@ def build_cuda_overlay_filter(
     """
     del layer_width, layer_height
     if not _static_layer_supported(layer):
-        raise ValueError("layer requires unproven transform/blend outside initial H6 CUDA envelope")
+        raise ValueError(
+            "layer requires unproven transform/blend outside initial H6 CUDA envelope"
+        )
     x_expr, y_expr = overlay_cuda_position(layer, canvas_width, canvas_height)
     base = "[0:v]format=yuv420p,hwupload_cuda[basegpu]"
     prep = ["format=yuva420p"]
@@ -313,5 +332,6 @@ def build_cuda_overlay_filter(
     layer_chain = ",".join(prep)
     return (
         f"{base};[1:v]{layer_chain}[layergpu];"
-        f"[basegpu][layergpu]overlay_cuda=x='{x_expr}':y='{y_expr}',hwdownload,format=yuv420p[vout]"
+        f"[basegpu][layergpu]overlay_cuda=x='{x_expr}':y='{y_expr}',"
+        "hwdownload,format=yuv420p[vout]"
     )
