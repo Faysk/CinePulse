@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from cinepulse.gpu_compositor import (
+    COMPOSITOR_REFERENCE_ID,
     GpuCompositorCapabilities,
     GpuCompositorEvidence,
     GpuCompositorKey,
@@ -73,13 +74,19 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertIn("0.25000000", x)
         self.assertIn("0.75000000", y)
 
-    def test_evidence_must_be_near_identical_and_faster(self) -> None:
+    def test_evidence_must_be_near_identical_faster_and_from_real_reference(self) -> None:
         good = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
         visible_change = GpuCompositorEvidence(10.0, 6.0, 50.0, 0.999, True, True, True, True)
         slower = GpuCompositorEvidence(10.0, 10.0, 90.0, 1.0, True, True, True, True)
+        wrong_reference = GpuCompositorEvidence(
+            10.0, 6.0, 90.0, 1.0, True, True, True, True,
+            reference_id="ffmpeg-overlay-v0",
+        )
+        self.assertEqual(COMPOSITOR_REFERENCE_ID, good.reference_id)
         self.assertTrue(good.accepted)
         self.assertFalse(visible_change.accepted)
         self.assertFalse(slower.accepted)
+        self.assertFalse(wrong_reference.accepted)
 
     def test_runtime_permission_is_exact_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
