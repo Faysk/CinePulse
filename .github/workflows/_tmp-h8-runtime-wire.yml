@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+      - name: Install project for focused contract tests
+        run: python -m pip install --disable-pip-version-check --editable .
       - name: Wire overnight profile into live render runtime
         shell: python
         run: |
@@ -104,8 +106,6 @@ jobs:
           text = before + method + after
           path.write_text(text, encoding='utf-8', newline='\n')
       - name: Focused H8 contract tests
-        env:
-          PYTHONPATH: src
         run: |
           python -m compileall -q src tests
           python -m unittest -v tests.test_adaptive_runtime tests.test_overnight_runtime tests.test_h8_adaptive_integration tests.test_h4_overlap_contract tests.test_h5_runtime_integration tests.test_overlay_composer tests.test_gpu_compositor tests.test_tensorrt_preview
@@ -128,7 +128,7 @@ jobs:
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "4189828+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/_tmp-h8-runtime-wire.yml
           git add src/cinepulse/studio.py
           git commit -m "Hardware H8: wire sustained overnight controller into render runtime"
