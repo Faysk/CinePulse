@@ -4545,6 +4545,7 @@ class VideoOptimizerStudio:
                     overlap_extract=realesrgan_budget.overlap_extract,
                     overlap_pack=realesrgan_budget.overlap_pack,
                     runtime_guard=h5_ai_guard,
+                    runtime_reporter=h5_ai_controller.record_throughput,
                 )
                 self._release_temp_path(consumed_before_ai, temp_paths)
                 progress_base += 20.0
@@ -4572,6 +4573,7 @@ class VideoOptimizerStudio:
                         chunk_budget_gb=rife_budget.chunk_budget_gb,
                         overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
                         runtime_guard=h5_rife_guard,
+                        runtime_reporter=h5_rife_controller.record_throughput,
                     )
                     self._release_temp_path(previous_working, temp_paths)
                     working_start = 0.0
@@ -4754,6 +4756,7 @@ class VideoOptimizerStudio:
                         chunk_budget_gb=rife_budget.chunk_budget_gb,
                         overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
                         runtime_guard=h5_rife_guard,
+                        runtime_reporter=h5_rife_controller.record_throughput,
                     )
                     self._release_temp_path(previous_visual, temp_paths)
                     visual_fps = float(target_fps)
@@ -5268,6 +5271,7 @@ class VideoOptimizerStudio:
         cache_quota_gb: float = 50.0, chunk_budget_gb: float = 4.0, overlap_extract: bool = False,
         overlap_pack: bool = False,
         runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
+        runtime_reporter: Callable[[float], None] | None = None,
     ) -> tuple[str, int, int]:
         """Run Real-ESRGAN with a bounded PNG working set (CP-012/CP-021).
 
@@ -5604,16 +5608,20 @@ class VideoOptimizerStudio:
                             f"H3 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "
                             f"pipeline={policy.pipeline} gpu={policy.gpu_index}."
                         )
+                        neural_started = time.monotonic()
                         self._run_ai(
                             command, outgoing, frames,
                             stage_base + weight * fraction_chunk * 0.18,
                             weight * fraction_chunk * 0.58,
                         )
+                        neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                         produced = len(list(outgoing.glob("frame*.png")))
                         if produced != frames:
                             raise RuntimeError(
                                 f"Real-ESRGAN produziu {produced} de {frames} quadros esperados no lote."
                             )
+                        if runtime_reporter is not None:
+                            runtime_reporter(produced / neural_elapsed)
                         active_policy = policy
                         break
                     except InterruptedError:
@@ -5874,6 +5882,7 @@ class VideoOptimizerStudio:
         chunk_budget_gb: float = 4.0,
         overlap_extract: bool = False,
         runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
+        runtime_reporter: Callable[[float], None] | None = None,
     ) -> str:
         """Interpolate with RIFE using bounded frame chunks (CP-012).
 
@@ -6022,6 +6031,7 @@ class VideoOptimizerStudio:
                 command = build_rife_command(paths, incoming, outgoing, desired, use_cpu)
                 self._log("Comando RIFE: " + subprocess.list2cmdline(command))
                 recent: deque[str] = deque(maxlen=60)
+                neural_started = time.monotonic()
                 process = subprocess.Popen(
                     command,
                     cwd=str(RIFE_EXE.parent),
@@ -6059,9 +6069,12 @@ class VideoOptimizerStudio:
                     raise InterruptedError
                 if code:
                     raise RuntimeError("RIFE falhou.\n" + "\n".join(recent))
+                neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
                 if len(frames) < max(2, desired - 1):
                     raise RuntimeError(f"RIFE produziu {len(frames)} de {desired} quadros esperados no lote.")
+                if runtime_reporter is not None:
+                    runtime_reporter(len(frames) / neural_elapsed)
 
                 self._set_stage("RIFE 3/3", f"Lote {chunk_index}: compactando lossless e liberando PNGs.")
                 first_number = int(frames[0].stem)

@@ -15,6 +15,8 @@ class H5RuntimeIntegrationTests(unittest.TestCase):
         rife = inspect.signature(VideoOptimizerStudio._interpolate_rife)
         self.assertIsNone(ai.parameters["runtime_guard"].default)
         self.assertIsNone(rife.parameters["runtime_guard"].default)
+        self.assertIsNone(ai.parameters["runtime_reporter"].default)
+        self.assertIsNone(rife.parameters["runtime_reporter"].default)
 
     def test_neural_loops_only_downshift_h4_permissions(self) -> None:
         ai = inspect.getsource(VideoOptimizerStudio._enhance_clip_ai)
