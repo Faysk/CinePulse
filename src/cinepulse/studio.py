@@ -58,7 +58,7 @@ from .hardware import detect_hardware
 from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 from .cpu_tuning import CpuTuningKey, CpuTuningStore
-from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore, downshift_policy, safe_candidates
+from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -5133,6 +5133,9 @@ class VideoOptimizerStudio:
             save_jobs=fallback_save,
             gpu_index=0,
         )
+        conservative_policy = RealEsrganPolicy(
+            tile=256, load_jobs=2, process_jobs=2, save_jobs=2, gpu_index=0
+        )
         tuning_key = RealEsrganTuningKey(
             self._hardware.gpu or "unknown-gpu",
             int(self._hardware.vram_mb or 0),
@@ -5144,24 +5147,15 @@ class VideoOptimizerStudio:
         )
         tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
         tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
-        candidate_policies = safe_candidates(
-            vram_mb=self._hardware.vram_mb,
-            cpu_threads=cpu_threads,
-            gpu_index=fallback_policy.gpu_index,
-            width=source_w,
-            height=source_h,
-        )
-        if fallback_policy not in candidate_policies:
-            candidate_policies = (fallback_policy,) + candidate_policies
         active_policy = tuned_policy or fallback_policy
         if tuned_policy is not None:
             self._log(
-                f"H2 Real-ESRGAN: política medida carregada tile={active_policy.tile} "
+                f"H3 Real-ESRGAN: política física aprovada carregada tile={active_policy.tile} "
                 f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."
             )
         else:
             self._log(
-                f"H2 Real-ESRGAN: sem evidência medida aplicável; preservando fallback atual "
+                f"H3 Real-ESRGAN: sem evidência física exata; preservando política Phase 2 "
                 f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index}."
             )
         chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))
@@ -5220,7 +5214,7 @@ class VideoOptimizerStudio:
                 ] + policy.command_args()
                 try:
                     self._log(
-                        f"H2 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "
+                        f"H3 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "
                         f"pipeline={policy.pipeline} gpu={policy.gpu_index}."
                     )
                     self._run_ai(
@@ -5245,21 +5239,20 @@ class VideoOptimizerStudio:
                     )
                     was_tuned = tuned_policy is not None and policy == tuned_policy
                     if was_tuned:
-                        if tuning_store.invalidate(tuning_key):
-                            self._log("H2 Real-ESRGAN: política medida inválida removida do cache após falha em runtime.")
+                        if tuning_store.invalidate(tuning_key, reason=str(exc)):
+                            self._log(
+                                "H3 Real-ESRGAN: política física aprovada falhou e foi invalidada para esta chave exata."
+                            )
                         tuned_policy = None
-                    lower = downshift_policy(policy, candidate_policies, fallback=fallback_policy)
-                    if lower in attempted or lower == policy:
-                        if policy != fallback_policy and fallback_policy not in attempted:
-                            lower = fallback_policy
-                        else:
-                            raise
-                    self._log(
-                        f"H2 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'instabilidade/integridade'} "
-                        f"com tile={policy.tile} pipeline={policy.pipeline}; rollback para "
-                        f"tile={lower.tile} pipeline={lower.pipeline}."
-                    )
-                    policy = lower
+                    if policy != conservative_policy and conservative_policy not in attempted:
+                        self._log(
+                            f"H3 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'falha/integridade'} "
+                            f"com tile={policy.tile} pipeline={policy.pipeline}; única repetição segura com "
+                            f"tile={conservative_policy.tile} pipeline={conservative_policy.pipeline}."
+                        )
+                        policy = conservative_policy
+                        continue
+                    raise
 
             self._set_stage("IA 3/3", f"Lote {chunk_index}: compactando o resultado lossless e liberando PNGs.")
             chunk_video = chunk_root / f"segment_{chunk_index:05d}.mkv"
