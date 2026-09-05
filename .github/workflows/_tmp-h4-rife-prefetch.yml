@@ -19,6 +19,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Fix generated RIFE error-tail escaping
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("scripts/_tmp_h4_rife_prefetch.py")
+          text = path.read_text(encoding="utf-8")
+          old = 'raise RuntimeError("RIFE falhou.\\n" + "\\n".join(recent))'
+          new = 'raise RuntimeError("RIFE falhou.\\\\n" + "\\\\n".join(recent))'
+          if old not in text:
+              raise SystemExit("RIFE error-tail escape anchor not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
       - name: Integrate bounded RIFE prefetch
         run: python scripts/_tmp_h4_rife_prefetch.py
       - name: Install project
