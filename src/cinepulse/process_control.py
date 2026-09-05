@@ -8,6 +8,11 @@ from collections.abc import Callable
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+# Keep the POSIX branch testable on Windows runners. Windows' signal module
+# does not expose SIGKILL, even though the mocked POSIX path still needs the
+# canonical POSIX signal numbers for os.killpg calls.
+SIGTERM = getattr(signal, "SIGTERM", 15)
+SIGKILL = getattr(signal, "SIGKILL", 9)
 
 
 def _wait_for_exit(process: subprocess.Popen, timeout: float) -> bool:
@@ -42,11 +47,11 @@ def terminate_process_tree(
                 logger(f"taskkill retornou {result.returncode}: {(result.stderr or result.stdout).strip()}")
         else:
             pgid = os.getpgid(pid)
-            os.killpg(pgid, signal.SIGTERM)
+            os.killpg(pgid, SIGTERM)
             if not _wait_for_exit(process, grace_seconds):
                 logger(f"Processo {pid} ignorou SIGTERM; escalando para SIGKILL.")
                 try:
-                    os.killpg(pgid, signal.SIGKILL)
+                    os.killpg(pgid, SIGKILL)
                 except ProcessLookupError:
                     return
                 try:
