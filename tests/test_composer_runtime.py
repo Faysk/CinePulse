@@ -73,6 +73,24 @@ class ComposerRuntimeTests(unittest.TestCase):
         self.assertEqual((9, 3), (left, top))
         self.assertTrue(np.array_equal(transformed[0, -1, :3], np.array((255, 0, 0), dtype=np.uint8)))
 
+    def test_resolution_scale_preserves_media_relative_size_for_bounded_preview(self) -> None:
+        source = np.zeros((40, 80, 4), dtype=np.uint8)
+        source[..., 3] = 255
+        state = ReactiveFrameState(0.5, 0.5, 1.0, 1.0, 0.0, 0.0)
+        final_overlay, _, _ = transform_overlay(source, state, 800, 400)
+        preview_overlay, left, top = transform_overlay(
+            source,
+            state,
+            200,
+            100,
+            resolution_scale=0.25,
+        )
+        self.assertEqual((40, 80), final_overlay.shape[:2])
+        self.assertEqual((10, 20), preview_overlay.shape[:2])
+        self.assertEqual((90, 45), (left, top))
+        with self.assertRaises(ValueError):
+            transform_overlay(source, state, 200, 100, resolution_scale=0.0)
+
     def test_render_respects_z_order(self) -> None:
         base = np.zeros((8, 8, 3), dtype=np.uint8)
         red = np.zeros((2, 2, 4), dtype=np.uint8); red[..., 0] = 255; red[..., 3] = 255
@@ -121,6 +139,13 @@ class ComposerRuntimeTests(unittest.TestCase):
         base = np.zeros((4, 4, 4), dtype=np.uint8)
         with self.assertRaises(ValueError):
             alpha_over(base, np.zeros((1, 1, 4), dtype=np.float32), 0, 0)
+        with self.assertRaises(ValueError):
+            render_composer_frame(
+                np.zeros((4, 4, 3), dtype=np.uint8),
+                state,
+                ComposerFrameInputs(0.0, {}, {}),
+                media_resolution_scale=float("nan"),
+            )
 
 
 if __name__ == "__main__":
