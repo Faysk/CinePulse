@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from uuid import uuid4
@@ -115,26 +116,32 @@ def export_preview_restoration(
     cancel = cancel_event or threading.Event()
     started = time.monotonic()
     process: subprocess.Popen | None = None
-    stderr_text = ""
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
     try:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-        )
-        while process.poll() is None:
-            if cancel.is_set():
-                _terminate_process(process)
-                raise PreviewExportCancelled("Exportação Preview cancelada.")
-            time.sleep(poll_interval)
+        # FFmpeg can write enough diagnostics to fill an OS pipe during a long
+        # render. A temporary file keeps cancellation polling non-blocking while
+        # still preserving a useful error tail for the UI.
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr_log:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_log,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+            )
+            while process.poll() is None:
+                if cancel.is_set():
+                    _terminate_process(process)
+                    raise PreviewExportCancelled("Exportação Preview cancelada.")
+                time.sleep(poll_interval)
 
-        _stdout, stderr_text = process.communicate()
+            stderr_log.flush()
+            stderr_log.seek(0)
+            stderr_text = stderr_log.read()
+
         if process.returncode != 0:
             tail = (stderr_text or "").strip()[-1600:]
             raise RuntimeError(f"FFmpeg falhou na exportação Preview.\n{tail}".strip())
