@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cinepulse.rife_benchmark import looks_like_oom, run_candidate
-from cinepulse.rife_tuning import RifePolicy
+from cinepulse.rife_benchmark import benchmark_and_record, looks_like_oom, run_candidate
+from cinepulse.rife_tuning import RifePolicy, RifeSample, RifeTuningKey, RifeTuningStore
 
 
 def fake_png(width: int = 64, height: int = 36) -> bytes:
@@ -31,6 +31,7 @@ class Result:
 class RifeBenchmarkTests(unittest.TestCase):
     def test_oom_detection(self) -> None:
         self.assertTrue(looks_like_oom("VK_ERROR_OUT_OF_DEVICE_MEMORY"))
+        self.assertTrue(looks_like_oom("failed to allocate device buffer"))
         self.assertFalse(looks_like_oom("completed"))
 
     def test_candidate_requires_png_integrity_and_nonblack_samples(self) -> None:
@@ -92,6 +93,117 @@ class RifeBenchmarkTests(unittest.TestCase):
                 )
             self.assertFalse(sample.accepted)
             self.assertFalse(sample.black_frame_ok)
+
+    def test_failed_baseline_stops_before_aggressive_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = RifeTuningStore(root / "rife-tuning.json")
+            key = RifeTuningKey("RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160)
+            baseline_policy = RifePolicy("1:1:1")
+            aggressive_policy = RifePolicy("1:2:1")
+            failed = RifeSample(
+                baseline_policy,
+                5.0,
+                False,
+                oom=True,
+                output_frames=0,
+                expected_frames=16,
+                black_frame_ok=False,
+            )
+            with patch("cinepulse.rife_benchmark.run_candidate", return_value=failed) as run:
+                winner, samples = benchmark_and_record(
+                    store,
+                    key,
+                    (baseline_policy, aggressive_policy),
+                    executable=Path("rife.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("input"),
+                    work_dir=root / "work",
+                    uhd=True,
+                    ffmpeg="ffmpeg",
+                )
+            self.assertIsNone(winner)
+            self.assertEqual((failed,), samples)
+            self.assertEqual(1, run.call_count)
+            self.assertIsNone(store.lookup(key))
+
+    def test_passing_baseline_allows_candidate_and_records_fastest_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = RifeTuningStore(root / "rife-tuning.json")
+            key = RifeTuningKey("RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160)
+            baseline_policy = RifePolicy("1:1:1")
+            fast_policy = RifePolicy("1:2:1")
+            baseline = RifeSample(
+                baseline_policy,
+                10.0,
+                True,
+                output_frames=16,
+                expected_frames=16,
+                black_frame_ok=True,
+            )
+            fast = RifeSample(
+                fast_policy,
+                6.0,
+                True,
+                output_frames=16,
+                expected_frames=16,
+                black_frame_ok=True,
+            )
+            with patch("cinepulse.rife_benchmark.run_candidate", side_effect=(baseline, fast)) as run:
+                winner, samples = benchmark_and_record(
+                    store,
+                    key,
+                    (baseline_policy, fast_policy),
+                    executable=Path("rife.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("input"),
+                    work_dir=root / "work",
+                    uhd=True,
+                    ffmpeg="ffmpeg",
+                )
+            self.assertEqual(fast_policy, winner)
+            self.assertEqual((baseline, fast), samples)
+            self.assertEqual(2, run.call_count)
+            self.assertEqual(fast_policy, store.lookup(key))
+
+    def test_corrupt_faster_candidate_cannot_beat_valid_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = RifeTuningStore(root / "rife-tuning.json")
+            key = RifeTuningKey("RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160)
+            baseline_policy = RifePolicy("1:1:1")
+            fast_policy = RifePolicy("1:2:1")
+            baseline = RifeSample(
+                baseline_policy,
+                10.0,
+                True,
+                output_frames=16,
+                expected_frames=16,
+                black_frame_ok=True,
+            )
+            corrupt = RifeSample(
+                fast_policy,
+                4.0,
+                True,
+                output_frames=15,
+                expected_frames=16,
+                black_frame_ok=True,
+            )
+            with patch("cinepulse.rife_benchmark.run_candidate", side_effect=(baseline, corrupt)):
+                winner, _samples = benchmark_and_record(
+                    store,
+                    key,
+                    (baseline_policy, fast_policy),
+                    executable=Path("rife.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("input"),
+                    work_dir=root / "work",
+                    uhd=True,
+                    ffmpeg="ffmpeg",
+                )
+            self.assertEqual(baseline_policy, winner)
+            self.assertEqual(baseline_policy, store.lookup(key))
 
 
 if __name__ == "__main__":
