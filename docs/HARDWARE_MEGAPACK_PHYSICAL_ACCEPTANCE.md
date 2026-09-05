@@ -31,6 +31,12 @@ Run `scripts/rife_benchmark.py` for 1080p/4K/UHD geometries used by the project.
 
 PASS requires exact frame count, complete PNGs, consistent dimensions, no machine-black output, quality parity against the baseline, no OOM, and the exact hardware/driver/model/resolution cache record. Exercise runtime invalidation/downshift once. No global 8K/120 PASS exists until the full heavy scenario succeeds end-to-end.
 
+## H4 — bounded overlap and adaptive scratch pipeline
+
+Run the two representative scenarios once with conservative sequential scheduling and once with the H4 benchmark-proven overlap envelope. Preserve the generated pipeline-budget/headroom evidence and scratch probe for each run.
+
+PASS requires bounded in-flight work (never more than the configured three-workset ceiling), no unbounded RAM/VRAM/scratch growth, exact output parity, successful cancellation/recovery, and a real end-to-end benefit. Repeat on the intended NVMe scratch volume and verify that slow/saturated scratch disables overlap instead of increasing buffering. Exercise memory/VRAM pressure once and confirm future chunks only downshift; the same render must never auto-ramp above its initial proven envelope.
+
 ## H5 — NVDEC / CUDA-resident media path
 
 First run `scripts/gpu_media_benchmark.py` for decode/scale candidates. Then run `scripts/gpu_resident_encode_benchmark.py` for the complete resident decode/scale/NVENC delivery route.
