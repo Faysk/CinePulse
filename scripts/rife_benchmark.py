@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from cinepulse.hardware import detect_hardware
-from cinepulse.rife_benchmark import benchmark_and_record
+from cinepulse.rife_benchmark import QUALITY_PSNR_FLOOR_DB, benchmark_and_record
 from cinepulse.rife_safe_runner import validate_png
 from cinepulse.rife_tuning import RifeTuningKey, RifeTuningStore, safe_candidates
 
@@ -36,7 +36,7 @@ def main() -> int:
         raise SystemExit("No NVIDIA GPU was detected; physical RIFE GPU tuning was not recorded")
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     if not ffmpeg:
-        raise SystemExit("FFmpeg is required for the RIFE black-frame integrity gate")
+        raise SystemExit("FFmpeg is required for the RIFE black-frame and quality-parity gates")
     candidates = safe_candidates(
         uhd=uhd,
         vram_mb=hardware.vram_mb,
@@ -68,6 +68,7 @@ def main() -> int:
         "resolution": [width, height],
         "uhd": uhd,
         "key": key.token(),
+        "quality_psnr_floor_db": QUALITY_PSNR_FLOOR_DB,
         "winner": {"jobs": winner.jobs, "gpu_index": winner.gpu_index} if winner else None,
         "physical_acceptance": "evidence-recorded-not-global-pass" if winner else "rejected",
         "samples": [
@@ -77,6 +78,8 @@ def main() -> int:
                 "wall_seconds": sample.wall_seconds,
                 "integrity_ok": sample.integrity_ok,
                 "black_frame_ok": sample.black_frame_ok,
+                "quality_ok": sample.quality_ok,
+                "quality_psnr_db": sample.quality_psnr_db,
                 "oom": sample.oom,
                 "output_frames": sample.output_frames,
                 "expected_frames": sample.expected_frames,
