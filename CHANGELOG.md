@@ -7,8 +7,9 @@
 - VFX terminal de Loop musical pode ser fundido à entrega final, eliminando o intermediário FFV1 full-length sem remover AtomicOutput/verificação;
 - mantém 8K/120 como carga extrema sujeita a aceitação física separada, sem converter CI hospedado em PASS de hardware.
 
-## Não lançado — Restauração Preview + Hardware H0–H8 + Overlay Composer
+## 1.2.0 — 2026-09-06
 
+- adiciona verificação assíncrona da release Stable ao abrir e botão `Atualizar vX.Y.Z`; o fluxo seleciona o pacote MSI/Portable exato, valida origem e SHA-256, espera trabalhos ativos e reinicia o CinePulse após a atualização;
 - adiciona laboratório Preview isolado para detectar/revisar textos, QR codes e overlays persistentes, reconstruir regiões temporalmente e aplicar restauração de cor limitada;
 - exportação Preview usa arquivo temporário + promoção atômica, invalida análise quando a fonte muda no mesmo caminho e mantém o render Stable separado;
 - envelope experimental permite planejar até 12K/120 com guardas de memória/scratch e aviso explícito de aceitação física pendente para 8K+/alta cadência;

@@ -6,9 +6,9 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.1.3`. O instalador Windows 1.1 é autocontido por diretório: Python, runtime, componentes, modelos, dados, caches e temporários ficam sob a pasta do CinePulse escolhida pelo usuário. A 1.1.3 corrige o planejamento/materialização de armazenamento em loops longos, interpola o clipe reutilizável com RIFE antes da expansão temporal e evita intermediário VFX lossless full-length quando a entrega pode ser fundida. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita.
+> Estado Stable: `1.2.0`. Esta versão reúne o updater de um clique auditado com os laboratórios Preview de Restauração, Hardware H0–H8 e Overlay Composer/Music Visualizer. O fluxo Stable continua conservador: caminhos acelerados sem evidência física exata permanecem bloqueados ou caem para os fallbacks CPU/NCNN validados.
 
-> O branch/PR de **Restauração Preview** é experimental e separado do Stable: inclui detecção/revisão de textos, QR codes e overlays persistentes, reconstrução temporal, controles de restauração de cor e envelope estrutural de entrega de até 12K/120. 8K+/alta cadência e 12K/120 continuam sem selo de desempenho físico até execução no hardware real.
+> Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
 ## O que já funciona no Stable
 
@@ -78,7 +78,7 @@ Não execute essa migração durante um render importante; ela movimenta vários
 
 ## Privacidade
 
-O CinePulse é local-first. Vídeos, músicas e resultados não são enviados automaticamente para servidores. O histórico de render pode registrar **telemetria local de hardware** (CPU, RAM, disco e, quando disponível, métricas NVIDIA como utilização, VRAM, potência e temperatura) para diagnóstico e ajuste conservador do pipeline; esses dados ficam no computador e não são transmitidos automaticamente. Relatórios só são compartilhados quando o usuário decide fazê-lo. Veja [PRIVACY.md](docs/PRIVACY.md).
+O CinePulse é local-first. Vídeos, músicas, projetos e resultados não são enviados automaticamente para servidores. O histórico de render pode registrar **telemetria local de hardware** para diagnóstico; esses dados ficam no computador. O 1.2.0 faz apenas uma consulta HTTPS curta ao GitHub para descobrir uma Stable nova, sem anexar mídia, caminhos locais ou inventário do projeto. Relatórios só são compartilhados quando o usuário decide fazê-lo. Veja [PRIVACY.md](docs/PRIVACY.md).
 
 ## Componentes opcionais
 
@@ -90,7 +90,7 @@ O perfil estável atual é conservador: possui teto de contrato em 8K/120 fps, m
 
 A recuperação genérica de jobs é entregue em modo Preview/shadow por padrão. O código mantém manifestos duráveis, checkpoints, lease/heartbeat, validação e mecanismos de migração, mas o Stable 1.1 não promete retomada genérica pela interface sem o aceite físico correspondente.
 
-O canal remoto de auto-update do portátil fica desativado por padrão no build estável. Quando ativado para distribuição, ele exige manifesto assinado e configuração explícita de confiança; instalações MSI continuam sendo atualizadas por um MSI mais novo.
+A partir do 1.2.0, o CinePulse consulta em background a release Stable mais recente no GitHub e mostra `Atualizar vX.Y.Z` quando houver uma versão final nova. Portable e MSI usam assets exatos da release e SHA-256; um canal de manifesto separado continua disponível apenas para implantações controladas e, quando configurado, exige assinatura.
 
 ## Desenvolvimento
 
