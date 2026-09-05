@@ -56,12 +56,6 @@ def _range_token(value: str) -> str:
 def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[str]:
     p = request.profile
     range_in = _range_token(p.color_range)
-    # The reference accepts only BT.709 SDR, so no gamut/transfer conversion is
-    # required here. What must be explicit is the YUV->RGB matrix and range.
-    # swscale's scale filter owns that conversion directly and is portable across
-    # FFmpeg 6-9; newer zscale builds can reject matrix=gbr while negotiating a
-    # YUV output family before a following format=rgba filter (zimg code 1026).
-    # Keeping w/h unchanged makes this a pure color-family/range conversion.
     vf = (
         f"scale=w=iw:h=ih:in_color_matrix=bt709:out_color_matrix=bt709:"
         f"in_range={range_in}:out_range=pc,format=rgba"
@@ -76,11 +70,6 @@ def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[st
 
 def _video_encode_command(request: ComposerExportRequest, target: Path) -> list[str]:
     p = request.profile
-    # gbrap already defines the RGB color family for the FFV1 reference. FFmpeg
-    # 9's FFV1 private `colorspace` option collides with the generic
-    # `-colorspace gbr` spelling and rejects the symbolic value on Windows.
-    # Keep primaries/transfer/range metadata explicit while letting gbrap carry
-    # the matrix/family truth instead of passing a version-fragile encoder flag.
     return [
         str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgba", "-s:v", f"{p.width}x{p.height}",
@@ -92,11 +81,6 @@ def _video_encode_command(request: ComposerExportRequest, target: Path) -> list[
 
 
 def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:
-    # Analysis bindings (master/vocals/drums/bass/other) control reactivity only.
-    # They must never replace or shorten the user's soundtrack implicitly. The
-    # original source audio is preserved unless a future caller explicitly sets
-    # output_audio. Project duration bounds a longer replacement without cutting
-    # video early when the audio stream happens to be shorter.
     audio = request.output_audio or request.source
     return [
         str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
@@ -206,7 +190,7 @@ def export_composer_reference(
                     if item.media is None:
                         continue
                     info = infos[item.id]
-                    position = playback_position(item.media, info, project_time)
+                    position = playback_position(item.media, info, project_time=project_time)
                     media_frames[item.id] = decoders.frame(item.id, position)
                 features = composer_audio_features(
                     request.state,
