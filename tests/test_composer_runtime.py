@@ -8,6 +8,7 @@ from cinepulse.composer_runtime import (
     AudioFrameFeatures,
     ComposerFrameInputs,
     alpha_over,
+    blend_over,
     render_composer_frame,
     transform_overlay,
 )
@@ -26,6 +27,41 @@ class ComposerRuntimeTests(unittest.TestCase):
         self.assertEqual(255, int(base[0, 0, 3]))
         self.assertTrue(126 <= int(base[0, 0, 0]) <= 129)
         self.assertTrue(126 <= int(base[0, 0, 2]) <= 129)
+
+    def test_opaque_blend_modes_have_expected_reference_colors(self) -> None:
+        base_rgb = np.array([[[128, 64, 32, 255]]], dtype=np.uint8)
+        source = np.array([[[64, 128, 255, 255]]], dtype=np.uint8)
+        expected = {
+            "normal": (64, 128, 255),
+            "multiply": (32, 32, 32),
+            "screen": (160, 160, 255),
+            "add": (192, 192, 255),
+            "overlay": (64, 64, 64),
+        }
+        for mode, rgb in expected.items():
+            with self.subTest(mode=mode):
+                canvas = base_rgb.copy()
+                blend_over(canvas, source, 0, 0, mode=mode)
+                actual = tuple(int(value) for value in canvas[0, 0, :3])
+                for value, target in zip(actual, rgb):
+                    self.assertLessEqual(abs(value - target), 1)
+                self.assertEqual(255, int(canvas[0, 0, 3]))
+
+    def test_partial_alpha_blend_keeps_source_destination_alpha_contract(self) -> None:
+        base = np.array([[[100, 150, 200, 128]]], dtype=np.uint8)
+        overlay = np.array([[[200, 100, 50, 128]]], dtype=np.uint8)
+        for mode in ("normal", "multiply", "screen", "add", "overlay"):
+            with self.subTest(mode=mode):
+                canvas = base.copy()
+                blend_over(canvas, overlay, 0, 0, mode=mode)
+                self.assertTrue(190 <= int(canvas[0, 0, 3]) <= 192)
+                self.assertTrue(np.all(canvas[0, 0, :3] <= 255))
+
+    def test_invalid_blend_mode_fails_closed(self) -> None:
+        base = np.zeros((1, 1, 4), dtype=np.uint8)
+        overlay = np.zeros((1, 1, 4), dtype=np.uint8)
+        with self.assertRaises(ValueError):
+            blend_over(base, overlay, 0, 0, mode="difference")
 
     def test_transform_quarter_rotation_and_center_are_deterministic(self) -> None:
         source = np.zeros((2, 4, 4), dtype=np.uint8)
@@ -52,6 +88,15 @@ class ComposerRuntimeTests(unittest.TestCase):
         )
         center = frame[4, 4]
         self.assertEqual((0, 255, 0, 255), tuple(int(v) for v in center))
+
+    def test_render_uses_media_layer_blend_mode(self) -> None:
+        base = np.full((4, 4, 3), 128, dtype=np.uint8)
+        media = np.full((1, 1, 4), 255, dtype=np.uint8)
+        state = OverlayComposerState([
+            ComposerItem("media", media=OverlayLayer("a.png", "png", blend="multiply")),
+        ])
+        rendered = render_composer_frame(base, state, ComposerFrameInputs(0.0, {"media": media}, {}))
+        self.assertTrue(np.all(rendered[2, 2, :3] == 128))
 
     def test_missing_media_frame_is_treated_as_inactive(self) -> None:
         base = np.full((6, 6, 3), 23, dtype=np.uint8)
