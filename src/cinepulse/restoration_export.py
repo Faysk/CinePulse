@@ -1,8 +1,9 @@
 """Preview-only restoration export runtime.
 
 Exports are written to a sibling temporary file and atomically promoted only
-when FFmpeg exits successfully. Cancellation and failures remove the temporary
-artifact, so an interrupted experiment never masquerades as a finished render.
+when processing exits successfully. Cancellation and failures remove the
+temporary artifact, so an interrupted experiment never masquerades as a
+finished render.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from uuid import uuid4
 
 from .restoration_execute import build_preview_ffmpeg_command
 from .restoration_preview import PreviewRestorationPlan
+from .restoration_temporal_export import TemporalPreviewCancelled, stream_temporal_preview
 
 
 class PreviewExportCancelled(RuntimeError):
@@ -30,6 +32,13 @@ class PreviewExportResult:
     output: Path
     command: tuple[str, ...]
     elapsed_seconds: float
+    temporal_frames: int = 0
+    temporal_regions_applied: int = 0
+    temporal_regions_fallback: int = 0
+
+    @property
+    def used_temporal_reconstruction(self) -> bool:
+        return self.temporal_frames > 0
 
 
 def temporary_preview_output(output: Path) -> Path:
@@ -86,13 +95,20 @@ def export_preview_restoration(
     output: Path,
     plan: PreviewRestorationPlan,
     *,
+    ffprobe: str | None = None,
     cancel_event: threading.Event | None = None,
     video_codec: str = "libx264",
     crf: int = 16,
     preset: str = "slow",
     poll_interval: float = 0.1,
 ) -> PreviewExportResult:
-    """Execute one isolated Preview export with cancellation and atomic finish."""
+    """Execute one isolated Preview export with cancellation and atomic finish.
+
+    Overlay removal is never silently advertised as temporal while using the
+    spatial ``delogo`` fallback. When selected regions exist this function
+    requires FFprobe and routes the complete video through the bounded rolling
+    temporal backend. Color-only work keeps the simpler one-process FFmpeg path.
+    """
 
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -104,6 +120,43 @@ def export_preview_restoration(
     output.parent.mkdir(parents=True, exist_ok=True)
     ensure_preview_scratch_capacity(source, output.parent)
     temporary = temporary_preview_output(output)
+    cancel = cancel_event or threading.Event()
+    started = time.monotonic()
+
+    if plan.has_overlay_work:
+        if not ffprobe:
+            raise ValueError("FFprobe é obrigatório para exportar reconstrução temporal de overlays.")
+        try:
+            report = stream_temporal_preview(
+                ffmpeg,
+                ffprobe,
+                source,
+                temporary,
+                plan,
+                cancel_event=cancel,
+                video_codec=video_codec,
+                crf=crf,
+                preset=preset,
+            )
+            if not temporary.is_file() or temporary.stat().st_size <= 0:
+                raise RuntimeError("Reconstrução temporal terminou sem arquivo Preview válido.")
+            os.replace(temporary, output)
+            return PreviewExportResult(
+                output=output,
+                command=("temporal-preview-stream", str(source), str(output)),
+                elapsed_seconds=max(0.0, time.monotonic() - started),
+                temporal_frames=report.frames_written,
+                temporal_regions_applied=report.applied_regions,
+                temporal_regions_fallback=report.fallback_regions,
+            )
+        except TemporalPreviewCancelled as exc:
+            raise PreviewExportCancelled(str(exc)) from exc
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     command = build_preview_ffmpeg_command(
         ffmpeg,
         source,
@@ -113,8 +166,6 @@ def export_preview_restoration(
         crf=crf,
         preset=preset,
     )
-    cancel = cancel_event or threading.Event()
-    started = time.monotonic()
     process: subprocess.Popen | None = None
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
