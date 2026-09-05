@@ -6,8 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cinepulse.realesrgan_benchmark import looks_like_oom, png_dimensions, run_candidate
-from cinepulse.realesrgan_tuning import RealEsrganPolicy
+from cinepulse.realesrgan_benchmark import benchmark_and_record, looks_like_oom, png_dimensions, run_candidate
+from cinepulse.realesrgan_tuning import (
+    RealEsrganPolicy,
+    RealEsrganSample,
+    RealEsrganTuningKey,
+    RealEsrganTuningStore,
+)
 
 
 def write_png_header(path: Path, width: int, height: int) -> None:
@@ -118,6 +123,37 @@ class RealEsrganBenchmarkTests(unittest.TestCase):
                 )
             self.assertTrue(sample.oom)
             self.assertFalse(sample.accepted)
+
+    def test_failed_baseline_prevents_any_candidate_from_being_promoted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            incoming = root / "in"
+            incoming.mkdir()
+            write_png_header(incoming / "frame.png", 10, 10)
+            store = RealEsrganTuningStore(root / "cache.json")
+            key = RealEsrganTuningKey("RTX Test", 8192, "999.1", "realesr-animevideov3", 10, 10, 2)
+            baseline = RealEsrganPolicy(256, 2, 2, 2, 0)
+            candidate = RealEsrganPolicy(320, 3, 2, 3, 0)
+            samples = (
+                RealEsrganSample(baseline, 10.0, False, output_frames=0, expected_frames=1),
+                RealEsrganSample(candidate, 5.0, True, output_frames=1, expected_frames=1),
+            )
+            with patch("cinepulse.realesrgan_benchmark.run_candidate", side_effect=samples):
+                winner, evidence = benchmark_and_record(
+                    store,
+                    key,
+                    (baseline, candidate),
+                    executable=root / "realesrgan.exe",
+                    model_dir=root / "models",
+                    input_dir=incoming,
+                    work_dir=root / "work",
+                    model="realesr-animevideov3",
+                    scale=2,
+                    expected_size=(10, 10),
+                )
+            self.assertIsNone(winner)
+            self.assertEqual(evidence, samples)
+            self.assertIsNone(store.lookup(key))
 
 
 if __name__ == "__main__":
