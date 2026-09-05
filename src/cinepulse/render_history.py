@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from .job_store import JobStore
 from .render_job import InvalidJobTransition, ManifestError, RenderJobManifest
+from .hardware_telemetry import HardwareTelemetrySession
 
 
 HISTORY_SCHEMA = 1
@@ -85,6 +86,7 @@ class RenderHistory:
         self.job_path = job_dir / "job.json"
         self.manifest_path = job_dir / "manifest.json"
         self.job_store = JobStore(self.manifest_path)
+        self._telemetry: HardwareTelemetrySession | None = None
 
     @classmethod
     def start(cls, root: Path, settings: Any, *, preview: bool, app_version: str, queue_id: int | None = None) -> "RenderHistory":
@@ -94,6 +96,12 @@ class RenderHistory:
         job_dir = root / job_id
         job_dir.mkdir(parents=True, exist_ok=False)
         history = cls(root, job_id, job_dir)
+        telemetry_error = ""
+        try:
+            history._telemetry = HardwareTelemetrySession(job_dir / "hardware-telemetry.json").start()
+        except Exception as exc:
+            history._telemetry = None
+            telemetry_error = f"{type(exc).__name__}: {exc}"
         now = time.time()
         _atomic_json(history.job_path, {
             "schema": HISTORY_SCHEMA,
@@ -110,6 +118,8 @@ class RenderHistory:
             "settings": _settings_payload(settings),
         })
         history.append_log(f"HISTORY job_id={job_id} schema={HISTORY_SCHEMA} preview={bool(preview)}")
+        if telemetry_error:
+            history.append_log(f"TELEMETRY WARNING start failed: {telemetry_error}")
         try:
             manifest = history.job_store.initialize(job_id, source=_source_identity(settings), begin_preflight=True)
             history.append_log(
@@ -163,6 +173,14 @@ class RenderHistory:
         self.job_dir.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(f"[{stamp}] {message}\n")
+        telemetry = self._telemetry
+        if telemetry is not None:
+            match = re.match(r"^\[([^\]]+)\]\s*(.*)$", str(message))
+            if match:
+                try:
+                    telemetry.mark_stage(match.group(1), match.group(2))
+                except Exception:
+                    pass
 
     def write_plan(self, plan: Any) -> Path:
         path = self.job_dir / "plan.json"
@@ -205,6 +223,17 @@ class RenderHistory:
         return path
 
     def finish(self, status: str, *, output: str | Path | None = None, report: str | Path | None = None, error: str = "") -> None:
+        hardware_summary: dict[str, Any] = {}
+        telemetry = self._telemetry
+        if telemetry is not None:
+            try:
+                telemetry_payload = telemetry.stop(status=status)
+                if isinstance(telemetry_payload, dict) and isinstance(telemetry_payload.get("summary"), dict):
+                    hardware_summary = telemetry_payload["summary"]
+            except Exception as exc:
+                self.append_log(f"TELEMETRY WARNING stop failed: {type(exc).__name__}: {exc}")
+            finally:
+                self._telemetry = None
         payload = self._job()
         payload.update({
             "schema": HISTORY_SCHEMA,
@@ -214,6 +243,8 @@ class RenderHistory:
             "output": str(output or payload.get("output") or ""),
             "report": str(report or ""),
             "error": str(error or ""),
+            "hardware_telemetry": "hardware-telemetry.json" if (self.job_dir / "hardware-telemetry.json").is_file() else "",
+            "hardware_summary": hardware_summary,
         })
         _atomic_json(self.job_path, payload)
 
