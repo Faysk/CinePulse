@@ -36,7 +36,7 @@ def main() -> None:
     ])
     run([
         FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=0.8",
+        "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=2.4",
         "-c:a", "pcm_s24le", str(music),
     ])
     cfg = RenderSettings(
@@ -61,6 +61,14 @@ def main() -> None:
             raise RuntimeError("Preflight não utilizou o scratch configurado.")
         if "storage_estimate" not in report or "scratch_probe" not in report:
             raise RuntimeError("Contrato de armazenamento ausente do preflight.")
+        estimate = report["storage_estimate"]
+        if not (0.70 <= float(estimate["clip_duration_seconds"]) <= 1.0):
+            raise RuntimeError(f"Preflight perdeu a duração real do clipe: {estimate['clip_duration_seconds']}")
+        if not (2.2 <= float(estimate["project_duration_seconds"]) <= 2.6):
+            raise RuntimeError(f"Preflight perdeu a duração da música: {estimate['project_duration_seconds']}")
+        master = next((stage for stage in estimate["stages"] if stage["key"] == "master"), None)
+        if master is None or float(master["duration_seconds"]) > 1.0:
+            raise RuntimeError(f"Master do loop foi estimado com a duração do projeto: {master}")
         app._cancelled = False
         app._worker(cfg, preview=False)
         events = []

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import hashlib
@@ -3537,7 +3537,8 @@ class VideoOptimizerStudio:
         cache_current_gb = cache_usage_bytes(PATHS.cache) / (1024 ** 3)
         storage_estimate = estimate_storage(
             render_plan,
-            duration=project_duration,
+            clip_duration=source_duration,
+            project_duration=project_duration,
             output_gb=output_gb,
             cache_current_gb=cache_current_gb,
             cache_quota_gb=settings.cache_quota_gb,
@@ -3591,6 +3592,8 @@ class VideoOptimizerStudio:
             f"Entrega: {delivery_plan.label} • perfil {delivery_plan.profile}",
             f"Saída estimada: {output_gb:.2f} GB",
             f"Pico scratch estimado: {temp_gb:.2f} GB",
+            f"Duração materializada do clipe: {format_time(storage_estimate.clip_duration_seconds)}",
+            f"Duração do projeto final: {format_time(storage_estimate.project_duration_seconds)}",
             f"Scratch: {scratch_path}",
             f"Volume scratch: {scratch_probe.volume} • {scratch_probe.free_gb:.1f}/{scratch_probe.total_gb:.1f} GB livres"
             + (f" • escrita ~{scratch_probe.write_mbps:.0f} MB/s (amostra rápida)" if scratch_probe.write_mbps is not None else " • velocidade não medida"),
@@ -4361,7 +4364,8 @@ class VideoOptimizerStudio:
             estimated_bitrate = self._estimated_bitrate_mbps(target_w, target_h, target_fps)
             estimated_output_gb = estimated_bitrate * project_duration / 8 / 1024 * 1.08
             storage_contract = estimate_storage(
-                render_plan, duration=project_duration, output_gb=estimated_output_gb,
+                render_plan, clip_duration=video_duration, project_duration=project_duration,
+                output_gb=estimated_output_gb,
                 cache_current_gb=cache_usage_bytes(PATHS.cache) / (1024 ** 3),
                 cache_quota_gb=settings.cache_quota_gb,
             )
