@@ -50,11 +50,22 @@ class GpuEncodeTests(unittest.TestCase):
         args = contract().ffmpeg_args()
         joined = " ".join(args)
         for value in (
-            "hevc_nvenc", "p7", "-tune hq", "-rc vbr", "-cq 14", "30000k",
+            "hevc_nvenc", "p7", "-tune hq", "-rc vbr", "-cq 14",
+            "-b:v 30M", "-maxrate 60M", "-bufsize 120M",
             "-spatial-aq 1", "-temporal-aq 1", "-aq-strength 8",
             "-multipass fullres", "-b_ref_mode middle", "-g 30", "-bf 2",
         ):
             self.assertIn(value, joined)
+
+    def test_non_whole_megabit_rates_remain_exact_kilobits(self) -> None:
+        value = NvencContract(
+            "hevc_nvenc", "p7", "vbr", "yuv420p",
+            bitrate_kbps=30500, maxrate_kbps=61500, bufsize_kbps=122500,
+        )
+        joined = " ".join(value.ffmpeg_args())
+        self.assertIn("-b:v 30500k", joined)
+        self.assertIn("-maxrate 61500k", joined)
+        self.assertIn("-bufsize 122500k", joined)
 
     def test_invalid_aq_strength_without_aq_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
