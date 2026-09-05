@@ -227,7 +227,10 @@ def export_composer_reference(
                 raise InterruptedError("composer export cancelled")
             if not visual.is_file() or visual.stat().st_size <= 0:
                 raise RuntimeError("composer reference visual master was not produced")
-            with AtomicOutput(output) as atomic:
+
+            atomic = AtomicOutput.for_path(output)
+            atomic.prepare()
+            try:
                 mux = subprocess.run(
                     _mux_command(request, visual, atomic.partial),
                     stdout=subprocess.PIPE,
@@ -241,6 +244,8 @@ def export_composer_reference(
                 if cancel():
                     raise InterruptedError("composer export cancelled")
                 atomic.commit()
+            finally:
+                atomic.discard()
         finally:
             decoders.close()
             for process in (base, encoder):
