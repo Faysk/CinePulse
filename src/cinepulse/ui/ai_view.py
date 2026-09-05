@@ -5,6 +5,7 @@ from __future__ import annotations
 from tkinter import ttk
 
 from .polish_view import register_responsive_split
+from .restoration_export_view import build_restoration_export_panel
 from .restoration_view import build_restoration_panel
 
 
@@ -200,4 +201,5 @@ def build_ai_tab(studio, parent) -> None:
     ttk.Button(detail_actions, text="Abrir documentação", command=studio._open_ai_docs).pack(side="right")
 
     build_restoration_panel(studio, parent)
+    build_restoration_export_panel(studio, parent)
     studio._refresh_ai_tree()
