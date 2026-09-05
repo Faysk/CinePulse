@@ -1,0 +1,44 @@
+name: Temporary H6 Timing Signature Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h6-timing-signature.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Bind H6 evidence to output timing metadata
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('scripts/gpu_compositor_benchmark.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    return tuple(stream.get(name) for name in (\n        "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries"\n    ))\n'''
+          new = '''    return tuple(stream.get(name) for name in (\n        "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries",\n        "avg_frame_rate", "r_frame_rate",\n    ))\n'''
+          if text.count(old) != 1:
+              raise SystemExit('expected H6 metadata signature not found exactly once')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+      - name: Compile H6 benchmark
+        run: python -m compileall -q scripts/gpu_compositor_benchmark.py
+      - name: Commit timing gate and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/_tmp-h6-timing-signature.yml
+          git add scripts/gpu_compositor_benchmark.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: bind H6 compositor evidence to frame timing"
+          git push origin HEAD:preview-restoration-lab
