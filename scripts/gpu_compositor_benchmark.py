@@ -102,7 +102,8 @@ def duration(payload: dict) -> float | None:
 
 def signature(stream: dict) -> tuple[object, ...]:
     return tuple(stream.get(name) for name in (
-        "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries"
+        "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries",
+        "avg_frame_rate", "r_frame_rate",
     ))
 
 
