@@ -43,11 +43,20 @@ class GpuCompositorTests(unittest.TestCase):
         layer = OverlayLayer(
             "logo.png", "png", x=0.25, y=0.75, opacity=0.8, z_order=2,
             rotation_degrees=0.0, loop=True, spin_rpm=0.0, pulse=0.0,
-            beat_reaction=0.0, audio_binding="vocals",
+            beat_reaction=0.0, audio_binding="vocals", blend="screen",
         )
         self.assertEqual("vocals", layer.audio_binding)
+        self.assertEqual("screen", layer.blend)
         self.assertEqual(2, layer.z_order)
         self.assertTrue(layer.contract_token())
+
+    def test_cpu_blends_are_valid_but_cuda_envelope_stays_normal_only(self) -> None:
+        for mode in ("normal", "multiply", "screen", "add", "overlay"):
+            layer = OverlayLayer("a.png", "png", blend=mode)  # type: ignore[arg-type]
+            self.assertEqual(mode, layer.blend)
+            self.assertEqual(mode == "normal", cuda_layer_eligible(layer, caps()))
+        with self.assertRaises(ValueError):
+            OverlayLayer("a.png", "png", blend="difference")  # type: ignore[arg-type]
 
     def test_initial_cuda_envelope_rejects_unproven_scale_rotation_and_reactivity(self) -> None:
         self.assertTrue(cuda_layer_eligible(OverlayLayer("a.png", "png"), caps()))
@@ -68,6 +77,14 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertIn("overlay_cuda", graph)
         self.assertIn("hwdownload,format=yuv420p", graph)
         self.assertIn("colorchannelmixer=aa=0.50000000", graph)
+        with self.assertRaises(ValueError):
+            build_cuda_overlay_filter(
+                OverlayLayer("a.png", "png", blend="multiply"),
+                canvas_width=1920,
+                canvas_height=1080,
+                layer_width=256,
+                layer_height=256,
+            )
 
     def test_position_is_normalized_center_space(self) -> None:
         x, y = overlay_cuda_position(OverlayLayer("a.png", "png", x=0.25, y=0.75), 1920, 1080)
