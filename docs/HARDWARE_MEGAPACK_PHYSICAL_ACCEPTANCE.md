@@ -65,9 +65,9 @@ PASS requires at least the script's quality/integrity/temporal thresholds and sp
 
 Run `scripts/overnight_acceptance.py` against telemetry from a sustained representative render; use the script's default minimum duration unless investigating a failure. For the final heavy-scenario acceptance, prefer a run long enough to expose steady-state laptop thermals and NVMe behavior rather than a short burst.
 
-Verify that the adaptive runtime reacts to sustained GPU temperature/power/clock pressure, RAM pressure and disk saturation by reducing CPU budget, chunk size and overlap depth. Confirm no Realtime process priority, `powercfg`, GPU power-limit mutation, NVIDIA global-setting mutation or other silent system-wide change occurred.
+The adaptive runtime must not reduce load merely because a temperature is high or hardware thermal throttling is reported. Downshift CPU budget, chunk size or overlap only when sustained telemetry shows that thermal/power/clock pressure is actually reducing end-to-end throughput or increasing error/instability risk. Record temperature, power and clocks as evidence, but optimize for sustained completed work at fixed quality rather than for a low temperature number. Confirm no Realtime process priority, `powercfg`, GPU power-limit mutation, NVIDIA global-setting mutation or other silent system-wide change occurred.
 
-PASS requires stable completion, adequate telemetry coverage, output quality/integrity PASS, safe sustained temperatures, no unbounded scratch/RAM growth, no repeated OOM/fallback loop and no throughput collapse after thermal steady state.
+PASS requires stable completion, adequate telemetry coverage, output quality/integrity PASS, no unbounded scratch/RAM growth, no repeated OOM/fallback loop and no sustained throughput collapse. Temperatures may remain high and hardware-managed throttling may occur as long as the render stays stable and the chosen policy still delivers the best sustained end-to-end throughput among the tested candidates.
 
 ## Final end-to-end gate
 
