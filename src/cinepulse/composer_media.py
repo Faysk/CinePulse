@@ -173,7 +173,10 @@ def _exact_frame_timeline(
         frame_rows.append(row)
 
     base = timestamps[0]
-    starts = [max(0.0, value - base) for value in timestamps]
+    # Normalize decimal FFprobe timestamps to stable binary floats.  This keeps
+    # VFR timing authoritative without leaking subtraction noise such as
+    # 0.10000000000000009 into persisted/equality-sensitive contracts.
+    starts = [max(0.0, round(value - base, 12)) for value in timestamps]
     starts[0] = 0.0
     for previous, current in zip(starts, starts[1:]):
         if current <= previous:

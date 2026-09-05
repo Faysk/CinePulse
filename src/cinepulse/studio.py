@@ -792,6 +792,11 @@ class VideoOptimizerStudio:
             record=False,
         )
 
+    def _show_overlay_composer(self) -> None:
+        # Preview-only lazy import keeps Stable startup and RenderSettings isolated.
+        from .ui.composer_view import show_overlay_composer
+        show_overlay_composer(self)
+
     def _show_quick_guide(self) -> None:
         show_quick_guide(self)
 
@@ -1528,6 +1533,7 @@ class VideoOptimizerStudio:
         header_tools = ttk.Frame(header)
         header_tools.pack(side="right", padx=(16, 0), anchor="n")
         ttk.Label(header_tools, text=f"v{__version__}", style="Muted.TLabel").pack(side="left", padx=(0, 8), pady=(7, 0))
+        ttk.Button(header_tools, text="Overlay Composer • Preview", command=self._show_overlay_composer).pack(side="left", padx=(0, 8))
         ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide).pack(side="left")
         ttk.Checkbutton(
             header_tools,
