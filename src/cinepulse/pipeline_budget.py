@@ -55,9 +55,10 @@ def derive_pipeline_budget(
     base = min(stage_cap, ram_usable * 0.30, scratch_usable * 0.20)
     if vram_gb > 0:
         base = min(base, max(1.0, vram_gb * (0.75 if stage == "realesrgan" else 0.55)))
-    # Never expand solely because telemetry is absent; legacy 4 GiB remains
-    # the upper fallback until resource evidence exists.
-    if ram <= 0 or scratch <= 0:
+    # Never expand solely because one critical resource signal is absent.
+    # Legacy 4 GiB remains the upper fallback until RAM, scratch and VRAM
+    # headroom are all known. Throughput controls overlap separately below.
+    if ram <= 0 or scratch <= 0 or vram_gb <= 0:
         base = min(base, 4.0)
     chunk_budget = max(0.5, min(stage_cap, base))
 
