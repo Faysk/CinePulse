@@ -6,9 +6,11 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.1.2`. O instalador Windows 1.1 é autocontido por diretório: Python, runtime, componentes, modelos, dados, caches e temporários ficam sob a pasta do CinePulse escolhida pelo usuário. A 1.1.2 fecha a auditoria pós-1.1.1 com hardening de persistência, locks/leases, cancelamento, updater e publicação versionada. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
+> Estado Stable: `1.1.3`. O instalador Windows 1.1 é autocontido por diretório: Python, runtime, componentes, modelos, dados, caches e temporários ficam sob a pasta do CinePulse escolhida pelo usuário. A 1.1.3 corrige o planejamento/materialização de armazenamento em loops longos, interpola o clipe reutilizável com RIFE antes da expansão temporal e evita intermediário VFX lossless full-length quando a entrega pode ser fundida. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita.
 
-## O que já funciona
+> O branch/PR de **Restauração Preview** é experimental e separado do Stable: inclui detecção/revisão de textos, QR codes e overlays persistentes, reconstrução temporal, controles de restauração de cor e envelope estrutural de entrega de até 12K/120. 8K+/alta cadência e 12K/120 continuam sem selo de desempenho físico até execução no hardware real.
+
+## O que já funciona no Stable
 
 - loop de vídeo durante toda a música, removendo o áudio original do clipe;
 - vídeo original ou formatos 16:9, 9:16, IMAX digital e Cinema Wide;
@@ -29,6 +31,12 @@ CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora ví
 - gerenciador de IA local com capacidades integradas separadas de arquivos experimentais, seleção segura, licenças e instalação verificada;
 - dependências core e neurais fixadas em locks com hashes no pacote distribuído;
 - instalador Windows com diretório selecionável e ciclo install/repair/uninstall validado em pasta não padrão.
+
+## Restauração Preview
+
+No branch experimental, a área **Restauração Preview** permanece isolada de `RenderSettings` e do botão de render Stable. O usuário analisa a fonte, revisa as regiões candidatas antes da remoção e exporta para um arquivo separado por promoção atômica. A análise de overlays é vinculada à identidade do arquivo (caminho resolvido, tamanho e `mtime_ns`); se a fonte for substituída no mesmo caminho, o resultado antigo é invalidado e uma nova análise é exigida.
+
+O export temporal usa janela RGB limitada e fail-closed para fontes com forte indício de VFR, memória temporal acima do limite ou FFprobe indisponível. Cancelamento encerra decoder/encoder em árvore e remove o temporário, sem substituir uma saída anterior válida.
 
 ## Início rápido no Windows
 
@@ -70,7 +78,7 @@ Não execute essa migração durante um render importante; ela movimenta vários
 
 ## Privacidade
 
-O CinePulse não envia vídeos, músicas, nomes de arquivos ou diagnóstico para servidores. Não há telemetria. Downloads opcionais de componentes acessam apenas as fontes mostradas ao usuário. Veja [PRIVACY.md](docs/PRIVACY.md).
+O CinePulse é local-first. Vídeos, músicas e resultados não são enviados automaticamente para servidores. O histórico de render pode registrar **telemetria local de hardware** (CPU, RAM, disco e, quando disponível, métricas NVIDIA como utilização, VRAM, potência e temperatura) para diagnóstico e ajuste conservador do pipeline; esses dados ficam no computador e não são transmitidos automaticamente. Relatórios só são compartilhados quando o usuário decide fazê-lo. Veja [PRIVACY.md](docs/PRIVACY.md).
 
 ## Componentes opcionais
 
