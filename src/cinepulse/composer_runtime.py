@@ -65,10 +65,22 @@ def transform_overlay(
     state: ReactiveFrameState,
     canvas_width: int,
     canvas_height: int,
+    *,
+    resolution_scale: float = 1.0,
 ) -> tuple[np.ndarray, int, int]:
+    """Transform one media layer for a reference canvas.
+
+    ``resolution_scale`` exists only so a bounded editor preview can preserve
+    the same relative media size as a 4K/8K/12K final canvas without allocating
+    that final canvas. Final export always uses the default 1.0 contract.
+    """
     overlay = _validate_overlay(source)
-    target_w = max(1, int(round(overlay.shape[1] * max(0.01, float(state.scale)))))
-    target_h = max(1, int(round(overlay.shape[0] * max(0.01, float(state.scale)))))
+    preview_scale = float(resolution_scale)
+    if not np.isfinite(preview_scale) or preview_scale <= 0.0:
+        raise ValueError("composer media resolution scale must be finite and positive")
+    effective_scale = max(1e-6, float(state.scale) * preview_scale)
+    target_w = max(1, int(round(overlay.shape[1] * effective_scale)))
+    target_h = max(1, int(round(overlay.shape[0] * effective_scale)))
     overlay = resize_bilinear_rgba(overlay, target_w, target_h)
     overlay = rotate_bilinear_rgba(overlay, state.rotation_degrees)
     if state.opacity < 1.0:
@@ -191,7 +203,17 @@ def render_composer_frame(
     inputs: ComposerFrameInputs,
     *,
     visualizer_color: VisualizerColor = VisualizerColor(),
+    media_resolution_scale: float = 1.0,
 ) -> np.ndarray:
+    """Render one deterministic Composer frame.
+
+    ``media_resolution_scale`` defaults to 1.0 and therefore does not alter the
+    final/export reference contract. Bounded editor previews can pass the canvas
+    downscale ratio so pixel-sized media layers retain their final relative size.
+    """
+    preview_scale = float(media_resolution_scale)
+    if not np.isfinite(preview_scale) or preview_scale <= 0.0:
+        raise ValueError("composer media resolution scale must be finite and positive")
     canvas = _validate_base(base_frame)
     height, width = canvas.shape[:2]
     for item in state.ordered():
@@ -212,6 +234,7 @@ def render_composer_frame(
                 frame_state,
                 width,
                 height,
+                resolution_scale=preview_scale,
             )
             blend_over(
                 canvas,
@@ -245,7 +268,7 @@ def render_composer_frame(
             height=height,
             color=visualizer_color,
         )
-        # Reference visualizer renderer already applies x/y/scale; only normal
-        # alpha-over remains until visualizers receive their own blend contract.
+        # Visualizer geometry is normalized against the current canvas and does
+        # not require the media-only resolution adjustment.
         alpha_over(canvas, overlay, 0, 0)
     return canvas
