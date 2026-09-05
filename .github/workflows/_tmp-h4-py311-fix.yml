@@ -1,0 +1,51 @@
+name: Temporary H4 Python 3.11 Compatibility Fix
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h4-py311-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Fix f-string compatibility
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/cinepulse/studio.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'else "n/a"'
+          count = text.count(old)
+          if count < 1:
+              raise SystemExit('expected H4 n/a f-string expressions not found')
+          text = text.replace(old, "else 'n/a'")
+          path.write_text(text, encoding='utf-8', newline='\n')
+          print(f'updated {count} expression(s)')
+          PY
+      - name: Python 3.11 compatibility gate
+        run: |
+          python -m pip install --disable-pip-version-check --editable .
+          python -m compileall -q src/cinepulse
+          python -m unittest discover -s tests -p 'test_pipeline_runtime.py'
+          python -m unittest discover -s tests -p 'test_pipeline_budget.py'
+      - name: Commit fix and remove temporary writer
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/_tmp-h4-py311-fix.yml
+          git add src/cinepulse/studio.py
+          git commit -m "Hardware H4: keep Studio compatible with Python 3.11"
+          git push origin HEAD:preview-restoration-lab
