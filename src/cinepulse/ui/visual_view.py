@@ -10,6 +10,7 @@ from __future__ import annotations
 from tkinter import DoubleVar, PhotoImage, StringVar, ttk
 
 from .preview import effect_thumbnail, to_ppm_bytes
+from .composer_view import show_overlay_composer
 from .polish_view import register_responsive_split
 from .visual_lab import (
     DIRECTION_BUTTONS,
@@ -246,6 +247,7 @@ def build_visual_tab(studio, parent, *, effect_names, audio_focus_options, trans
     studio.visual_preview_source_text = StringVar(value="Demonstração interna • selecione um vídeo para usar um frame real")
     ttk.Label(source_row, textvariable=studio.visual_preview_source_text, style="CardMuted.TLabel").pack(side="left")
     ttk.Button(source_row, text="Gerar preview real", command=lambda: studio._start(True)).pack(side="right")
+    ttk.Button(source_row, text="Overlay Composer…", command=lambda: show_overlay_composer(studio)).pack(side="right", padx=(0, 6))
 
     # --- Quick comparisons --------------------------------------------
     variants = ttk.Frame(right, style="Card.TFrame", padding=12)
