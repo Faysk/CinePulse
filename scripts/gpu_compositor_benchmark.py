@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Physical H6 overlay_cuda parity benchmark against the real Composer reference.
 
-Permission is granted only for one exact GPU/driver/FFmpeg/base/layer contract.
-The baseline is ``export_composer_reference`` (NumPy RGBA), not FFmpeg's own CPU
-overlay filter. This matters: proving CUDA against a different implementation
-would not prove that replacing CinePulse's actual reference preserves pixels.
+Permission is granted only for one exact GPU/driver/FFmpeg/base/compositor
+contract. The baseline is ``export_composer_reference`` (NumPy RGBA), not
+FFmpeg's own CPU overlay filter. A multi-layer stack is benchmarked and cached
+as one unit because repeated alpha rounding/order can differ from individually
+approved layers.
 """
 
 import argparse
@@ -19,14 +20,17 @@ from pathlib import Path
 
 from cinepulse.composer_export import ComposerBaseProfile, ComposerExportRequest, export_composer_reference
 from cinepulse.gpu_compositor import (
+    COMPOSITOR_MAX_STACK_LAYERS,
     COMPOSITOR_REFERENCE_ID,
     GpuCompositorEvidence,
     GpuCompositorKey,
     GpuCompositorStore,
     OverlayLayer,
-    build_cuda_overlay_filter,
-    cuda_layer_eligible,
+    build_cuda_overlay_stack_filter,
+    canonical_overlay_stack,
+    cuda_stack_eligible,
     detect_gpu_compositor_capabilities,
+    overlay_stack_contract_token,
 )
 from cinepulse.hardware import detect_hardware
 from cinepulse.media_profile import ColorProfile
@@ -123,11 +127,51 @@ def layer_input_args(layer: OverlayLayer) -> list[str]:
     return args + ["-i", layer.source]
 
 
+def _manifest_layers(path: Path) -> tuple[OverlayLayer, ...]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid H6 stack manifest: {exc}") from exc
+    rows = payload.get("layers") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or not rows:
+        raise SystemExit("H6 stack manifest must contain a non-empty layers array")
+    if len(rows) > COMPOSITOR_MAX_STACK_LAYERS:
+        raise SystemExit(f"H6 stack manifest exceeds {COMPOSITOR_MAX_STACK_LAYERS} layers")
+    layers: list[OverlayLayer] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise SystemExit(f"H6 stack layer {index} must be an object")
+        source = Path(str(row.get("source") or ""))
+        if not source.is_absolute():
+            source = path.parent / source
+        try:
+            layers.append(OverlayLayer(
+                source=str(source),
+                kind=str(row.get("kind") or "png"),  # type: ignore[arg-type]
+                x=float(row.get("x", 0.5)),
+                y=float(row.get("y", 0.5)),
+                scale=float(row.get("scale", 1.0)),
+                opacity=float(row.get("opacity", 1.0)),
+                z_order=int(row.get("z_order", index)),
+                blend=str(row.get("blend", "normal")),  # type: ignore[arg-type]
+                rotation_degrees=float(row.get("rotation_degrees", 0.0)),
+                loop=bool(row.get("loop", True)),
+                spin_rpm=float(row.get("spin_rpm", 0.0)),
+                pulse=float(row.get("pulse", 0.0)),
+                beat_reaction=float(row.get("beat_reaction", 0.0)),
+                audio_binding=str(row.get("audio_binding", "none")),  # type: ignore[arg-type]
+            ))
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"invalid H6 stack layer {index}: {exc}") from exc
+    return canonical_overlay_stack(layers)
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Physical CinePulse H6 CUDA compositor benchmark")
     result.add_argument("--base", type=Path, required=True)
-    result.add_argument("--layer", type=Path, required=True)
-    result.add_argument("--kind", choices=("png", "gif", "apng", "webp", "video-alpha"), required=True)
+    result.add_argument("--layer", type=Path)
+    result.add_argument("--kind", choices=("png", "gif", "apng", "webp", "video-alpha"))
+    result.add_argument("--stack-manifest", type=Path, help="JSON array/object describing 1..4 exact ordered media layers")
     result.add_argument("--cache", type=Path, required=True)
     result.add_argument("--ffmpeg", default="ffmpeg")
     result.add_argument("--ffprobe", default="ffprobe")
@@ -141,6 +185,15 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
+    if args.stack_manifest:
+        if args.layer or args.kind:
+            raise SystemExit("use either --stack-manifest or legacy --layer/--kind, not both")
+        layers = _manifest_layers(args.stack_manifest)
+    else:
+        if not args.layer or not args.kind:
+            raise SystemExit("legacy H6 benchmark requires both --layer and --kind")
+        layers = (OverlayLayer(str(args.layer), args.kind, x=args.x, y=args.y, opacity=args.opacity),)
+
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     ffprobe = shutil.which(args.ffprobe) or (str(args.ffprobe) if Path(args.ffprobe).is_file() else "")
     if not ffmpeg or not ffprobe:
@@ -171,14 +224,14 @@ def main() -> int:
     if width <= 0 or height <= 0 or fps <= 0 or benchmark_duration <= 0:
         raise SystemExit("valid base geometry/fps/duration required")
 
-    layer = OverlayLayer(str(args.layer), args.kind, x=args.x, y=args.y, opacity=args.opacity)
     caps = detect_gpu_compositor_capabilities(ffmpeg)
-    if not cuda_layer_eligible(layer, caps):
-        raise SystemExit("layer is outside the initial proven CUDA envelope")
+    if not cuda_stack_eligible(layers, caps):
+        raise SystemExit("layer stack is outside the bounded H6 CUDA envelope")
     hardware = detect_hardware()
     if not hardware.gpu:
         raise SystemExit("NVIDIA GPU required; no H6 physical evidence recorded")
 
+    stack_contract = overlay_stack_contract_token(layers)
     key = GpuCompositorKey(
         gpu_name=hardware.gpu,
         driver=hardware.driver or "unknown-driver",
@@ -191,7 +244,7 @@ def main() -> int:
         transfer=profile.transfer,
         space=profile.space,
         color_range=profile.range,
-        layer_contract=layer.contract_token(),
+        layer_contract=stack_contract,
     )
 
     with tempfile.TemporaryDirectory(prefix="cinepulse-h6-") as temporary:
@@ -199,7 +252,10 @@ def main() -> int:
         baseline = root / "baseline.mkv"
         candidate = root / "candidate.mkv"
 
-        state = OverlayComposerState([ComposerItem("physical-h6-layer", media=layer)])
+        state = OverlayComposerState([
+            ComposerItem(f"physical-h6-layer-{index:02d}", media=layer)
+            for index, layer in enumerate(layers, start=1)
+        ])
         request = ComposerExportRequest(
             source=args.base,
             output=baseline,
@@ -217,23 +273,21 @@ def main() -> int:
             state=state,
             ffmpeg=ffmpeg,
             ffprobe=ffprobe,
-            # The compositor benchmark is visual-only. Production audio is muxed
-            # after visual composition by the same reference path, so H6 never
-            # gets permission to alter or re-time audio.
             audio_sources={},
         )
         started = time.perf_counter()
         export_composer_reference(request)
         baseline_seconds = max(0.000001, time.perf_counter() - started)
 
-        cuda_graph = build_cuda_overlay_filter(
-            layer,
+        cuda_graph = build_cuda_overlay_stack_filter(
+            layers,
             canvas_width=width,
             canvas_height=height,
-            layer_width=0,
-            layer_height=0,
         ) + ";[vout]format=rgba[vfinal]"
-        candidate_cmd = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(args.base)] + layer_input_args(layer) + [
+        candidate_cmd = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(args.base)]
+        for layer in layers:
+            candidate_cmd += layer_input_args(layer)
+        candidate_cmd += [
             "-filter_complex", cuda_graph,
             "-map", "[vfinal]", "-an",
             "-t", f"{benchmark_duration:.6f}",
@@ -249,8 +303,6 @@ def main() -> int:
         frame_count_ok = frames(bv) is not None and frames(bv) == frames(cv)
         metadata_ok = signature(bv) == signature(cv)
         duration_base, duration_candidate = duration(baseline_probe), duration(candidate_probe)
-        # Both benchmark outputs intentionally contain no audio; the production
-        # mux stage is unchanged and therefore outside the optimized boundary.
         audio_sync_ok = (
             duration_base is not None and duration_candidate is not None
             and abs(duration_base - duration_candidate) <= 0.020
@@ -277,7 +329,9 @@ def main() -> int:
         "hardware": hardware.as_dict(),
         "ffmpeg_fingerprint": caps.fingerprint,
         "base": {"width": width, "height": height, "fps": fps, "profile": profile.label},
-        "layer_contract": layer.contract_token(),
+        "layer_count": len(layers),
+        "layer_contracts": [layer.contract_token() for layer in layers],
+        "stack_contract": stack_contract,
         "baseline_seconds": evidence.baseline_seconds,
         "candidate_seconds": evidence.candidate_seconds,
         "speedup": evidence.speedup,
