@@ -122,7 +122,10 @@ def detect_gpu_compositor_capabilities(ffmpeg: str) -> GpuCompositorCapabilities
         cuda="cuda" in hwaccels,
         overlay_cuda="overlay_cuda" in filters,
         scale_cuda="scale_cuda" in filters or "scale_npp" in filters,
-        hwupload_cuda="hwupload_cuda" in filters or "hwupload" in filters,
+        # The generated graph names hwupload_cuda explicitly. Generic hwupload
+        # cannot satisfy that graph and therefore must not be treated as an
+        # equivalent capability.
+        hwupload_cuda="hwupload_cuda" in filters,
     )
 
 
@@ -255,25 +258,21 @@ class GpuCompositorStore:
                 pass
 
 
-def cuda_layer_eligible(layer: OverlayLayer, caps: GpuCompositorCapabilities) -> bool:
-    """Return benchmark eligibility, not runtime permission.
+def _static_layer_supported(layer: OverlayLayer) -> bool:
+    return bool(
+        layer.blend == "normal"
+        and layer.scale == 1.0
+        and not layer.requires_rotation
+        and not layer.requires_dynamic_transform
+    )
 
-    Initial H6 is intentionally narrower than the UI contract. FFmpeg's CUDA
-    overlay accepts YUV420/NV12 main frames and YUV420/NV12/YUVA420 overlay
-    frames, while rotation/audio-driven geometry need a real shader backend.
-    Scaling alpha layers also remains unproven, so ``scale != 1`` fails closed.
-    """
-    if not caps.media_layers_supported or layer.blend != "normal":
-        return False
-    if layer.scale != 1.0:
-        return False
-    if layer.requires_rotation or layer.requires_dynamic_transform:
-        return False
-    return True
+
+def cuda_layer_eligible(layer: OverlayLayer, caps: GpuCompositorCapabilities) -> bool:
+    """Return benchmark eligibility, not runtime permission."""
+    return caps.media_layers_supported and _static_layer_supported(layer)
 
 
 def overlay_cuda_position(layer: OverlayLayer, canvas_width: int, canvas_height: int) -> tuple[str, str]:
-    """Translate normalized center position to overlay_cuda expressions."""
     x = max(0.0, min(1.0, float(layer.x)))
     y = max(0.0, min(1.0, float(layer.y)))
     return (
@@ -297,11 +296,8 @@ def build_cuda_overlay_filter(
     expensive full-frame software alpha blend while retaining a byte-comparable
     CPU baseline. A later benchmark may prove a resident decoder/scaler path.
     """
-    del layer_width, layer_height  # geometry is exact in the first envelope
-    if not cuda_layer_eligible(
-        layer,
-        GpuCompositorCapabilities("", "", True, True, False, True),
-    ):
+    del layer_width, layer_height
+    if not _static_layer_supported(layer):
         raise ValueError("layer requires unproven transform/blend outside initial H6 CUDA envelope")
     x_expr, y_expr = overlay_cuda_position(layer, canvas_width, canvas_height)
     base = "[0:v]format=yuv420p,hwupload_cuda[basegpu]"
