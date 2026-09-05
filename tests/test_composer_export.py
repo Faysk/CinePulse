@@ -54,7 +54,9 @@ class ComposerExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             command = _base_decode_command(self.request(Path(temporary)), 4)
         joined = " ".join(command)
-        self.assertIn("zscale=matrixin=bt709", joined)
+        self.assertIn("zscale=matrixin=709", joined)
+        self.assertIn("primariesin=709", joined)
+        self.assertIn("transferin=709", joined)
         self.assertIn("matrix=gbr", joined)
         self.assertIn("-fps_mode passthrough", joined)
         self.assertNotIn(" -r ", joined)
