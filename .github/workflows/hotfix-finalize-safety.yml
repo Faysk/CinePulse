@@ -1,0 +1,60 @@
+name: Harden fused VFX finalization path
+
+on:
+  push:
+    branches:
+      - hotfix-1.1.3-storage-duration
+    paths:
+      - .github/workflows/hotfix-finalize-safety.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fix finalization state and validate syntax
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          studio = Path('src/cinepulse/studio.py')
+          text = studio.read_text(encoding='utf-8-sig')
+          old = '''            needs_master = render_plan.needs_master\n            visual_source = working_video\n            # Hotfix 1.1.3 keeps RIFE one-shot: music loops process the reusable\n'''
+          new = '''            needs_master = render_plan.needs_master\n            visual_source = working_video\n            # This flag must exist for every project shape, including the\n            # original-video fast path where no master/VFX stage runs.\n            finalized_in_vfx = False\n            # Hotfix 1.1.3 keeps RIFE one-shot: music loops process the reusable\n'''
+          if text.count(old) != 1:
+              raise SystemExit('studio initialization marker mismatch')
+          text = text.replace(old, new, 1)
+          nested = '''                finalized_in_vfx = False\n                if effects_active:\n'''
+          if text.count(nested) != 1:
+              raise SystemExit('studio nested flag marker mismatch')
+          text = text.replace(nested, '''                if effects_active:\n''', 1)
+          studio.write_text(text, encoding='utf-8')
+
+          # Avoid emitting the same output color metadata twice in fused mode:
+          # render_vfx_intermediate already owns those container/stream tags.
+          text = studio.read_text(encoding='utf-8')
+          duplicate = '''                        final_video_args = delivery_plan.video_args(\n                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,\n                            bitrate_mbps=estimated_bitrate, fps=target_fps,\n                        ) + color_plan.metadata_args(output=True)\n'''
+          clean = '''                        final_video_args = delivery_plan.video_args(\n                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,\n                            bitrate_mbps=estimated_bitrate, fps=target_fps,\n                        )\n'''
+          if text.count(duplicate) != 1:
+              raise SystemExit('studio duplicate metadata marker mismatch')
+          studio.write_text(text.replace(duplicate, clean, 1), encoding='utf-8')
+          PY
+          python -m compileall -q src tests scripts
+      - name: Remove temporary writer workflow and commit
+        shell: bash
+        run: |
+          git rm .github/workflows/hotfix-finalize-safety.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cinepulse/studio.py
+          git commit -m "fix: harden fused VFX finalization state"
+          git push origin HEAD:hotfix-1.1.3-storage-duration
