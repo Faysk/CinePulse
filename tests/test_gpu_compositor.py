@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from cinepulse.gpu_compositor import (
+    COMPOSITOR_MAX_STACK_LAYERS,
     COMPOSITOR_REFERENCE_ID,
     GpuCompositorCapabilities,
     GpuCompositorEvidence,
@@ -12,8 +13,12 @@ from cinepulse.gpu_compositor import (
     GpuCompositorStore,
     OverlayLayer,
     build_cuda_overlay_filter,
+    build_cuda_overlay_stack_filter,
+    canonical_overlay_stack,
     cuda_layer_eligible,
+    cuda_stack_eligible,
     overlay_cuda_position,
+    overlay_stack_contract_token,
 )
 
 
@@ -85,6 +90,36 @@ class GpuCompositorTests(unittest.TestCase):
                 layer_width=256,
                 layer_height=256,
             )
+
+    def test_stack_is_z_ordered_and_downloads_only_after_last_overlay(self) -> None:
+        top = OverlayLayer("top.png", "png", z_order=20, x=0.8)
+        bottom = OverlayLayer("bottom.png", "png", z_order=10, opacity=0.75, x=0.2)
+        ordered = canonical_overlay_stack((top, bottom))
+        self.assertEqual((bottom, top), ordered)
+        self.assertTrue(cuda_stack_eligible((top, bottom), caps()))
+        graph = build_cuda_overlay_stack_filter((top, bottom), canvas_width=1920, canvas_height=1080)
+        self.assertEqual(2, graph.count("overlay_cuda="))
+        self.assertEqual(1, graph.count("hwdownload"))
+        self.assertLess(graph.index("[1:v]"), graph.index("[2:v]"))
+        self.assertIn("0.20000000", graph)
+        self.assertIn("0.80000000", graph)
+
+    def test_stack_contract_binds_order_and_every_layer(self) -> None:
+        first = OverlayLayer("a.png", "png", z_order=0)
+        second = OverlayLayer("b.png", "png", z_order=1)
+        base = overlay_stack_contract_token((first, second))
+        self.assertEqual(base, overlay_stack_contract_token((second, first)))
+        self.assertNotEqual(base, overlay_stack_contract_token((first, OverlayLayer("b.png", "png", z_order=1, opacity=0.9))))
+
+    def test_stack_is_hard_bounded_and_rejects_any_unproven_member(self) -> None:
+        valid = tuple(OverlayLayer(f"{index}.png", "png", z_order=index) for index in range(COMPOSITOR_MAX_STACK_LAYERS))
+        self.assertTrue(cuda_stack_eligible(valid, caps()))
+        too_many = valid + (OverlayLayer("extra.png", "png", z_order=99),)
+        self.assertFalse(cuda_stack_eligible(too_many, caps()))
+        with self.assertRaises(ValueError):
+            build_cuda_overlay_stack_filter(too_many, canvas_width=1920, canvas_height=1080)
+        mixed = valid[:-1] + (OverlayLayer("bad.png", "png", z_order=3, rotation_degrees=5),)
+        self.assertFalse(cuda_stack_eligible(mixed, caps()))
 
     def test_position_is_normalized_center_space(self) -> None:
         x, y = overlay_cuda_position(OverlayLayer("a.png", "png", x=0.25, y=0.75), 1920, 1080)
