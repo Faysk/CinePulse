@@ -5,6 +5,7 @@ import unittest
 from dataclasses import fields
 from unittest.mock import patch
 
+import cinepulse.studio as studio_module
 from cinepulse.studio import RenderSettings, VideoOptimizerStudio
 
 
@@ -26,9 +27,11 @@ class ComposerStudioIntegrationTests(unittest.TestCase):
         show.assert_called_once_with(dummy)
 
     def test_composer_import_is_lazy_not_stable_startup_dependency(self) -> None:
-        source = inspect.getsource(VideoOptimizerStudio._show_overlay_composer)
-        self.assertIn("from .ui.composer_view import show_overlay_composer", source)
-        self.assertNotIn("RenderSettings", source)
+        method_source = inspect.getsource(VideoOptimizerStudio._show_overlay_composer)
+        self.assertIn("from .ui.composer_view import show_overlay_composer", method_source)
+        module_source = inspect.getsource(studio_module)
+        top_level = module_source.split("class VideoOptimizerStudio", 1)[0]
+        self.assertNotIn("composer_view", top_level)
 
 
 if __name__ == "__main__":
