@@ -15,6 +15,7 @@ from typing import Any, Callable
 from .job_store import JobStore
 from .render_job import InvalidJobTransition, ManifestError, RenderJobManifest
 from .hardware_telemetry import HardwareTelemetrySession
+from .hardware_advisor import analyze_hardware_summary
 
 
 HISTORY_SCHEMA = 1
@@ -159,7 +160,7 @@ class RenderHistory:
             }:
                 return current
             updated = self.job_store.transition(target, reason=reason)
-            self.append_log(f"MANIFEST transition {current.state}->{target} revision={updated.revision}")
+            self.append_log(f"MANIFEST {label} revision={updated.revision} state={updated.state}")
             return updated
         except InvalidJobTransition as exc:
             self.append_log(f"MANIFEST WARNING transition {target}: {exc}")
@@ -224,6 +225,7 @@ class RenderHistory:
 
     def finish(self, status: str, *, output: str | Path | None = None, report: str | Path | None = None, error: str = "") -> None:
         hardware_summary: dict[str, Any] = {}
+        hardware_advice_name = ""
         telemetry = self._telemetry
         if telemetry is not None:
             try:
@@ -234,6 +236,22 @@ class RenderHistory:
                 self.append_log(f"TELEMETRY WARNING stop failed: {type(exc).__name__}: {exc}")
             finally:
                 self._telemetry = None
+        if hardware_summary:
+            try:
+                advice = analyze_hardware_summary(hardware_summary)
+                advice_path = self.job_dir / "hardware-advice.json"
+                _atomic_json(advice_path, {
+                    "schema": 1,
+                    "job_id": self.job_id,
+                    "advice": advice.to_dict(),
+                })
+                hardware_advice_name = advice_path.name
+                self.append_log(
+                    "HARDWARE ADVICE "
+                    f"attention={advice.needs_attention} physical_acceptance={advice.physical_acceptance}"
+                )
+            except Exception as exc:
+                self.append_log(f"HARDWARE ADVICE WARNING: {type(exc).__name__}: {exc}")
         payload = self._job()
         payload.update({
             "schema": HISTORY_SCHEMA,
@@ -245,6 +263,7 @@ class RenderHistory:
             "error": str(error or ""),
             "hardware_telemetry": "hardware-telemetry.json" if (self.job_dir / "hardware-telemetry.json").is_file() else "",
             "hardware_summary": hardware_summary,
+            "hardware_advice": hardware_advice_name,
         })
         _atomic_json(self.job_path, payload)
 
