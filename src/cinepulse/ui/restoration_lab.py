@@ -1,12 +1,13 @@
 """Pure UI helpers for the Preview-only restoration lab.
 
 The desktop shell can consume this module without pulling detector/FFmpeg work
-onto Tk's event thread.  Stable render planning is intentionally untouched.
+onto Tk's event thread. Stable render planning is intentionally untouched.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -21,6 +22,37 @@ RESTORATION_PRESETS: tuple[tuple[RestorationPreset, str, str], ...] = (
     ("warm", "Mais quente", "Aquece discretamente sem mudar o contrato de cor"),
     ("cool", "Mais frio", "Esfria discretamente sem mudar o contrato de cor"),
 )
+
+
+@dataclass(frozen=True)
+class RestorationSourceIdentity:
+    path: str
+    size: int
+    mtime_ns: int
+
+
+def source_identity(value: str | Path) -> RestorationSourceIdentity | None:
+    """Return the minimum identity required to prove Preview analysis freshness.
+
+    Overlay regions are coordinates derived from specific source bytes. A path
+    string alone is insufficient because a file can be replaced in place while
+    the desktop remains open. Size + nanosecond mtime fail closed for that common
+    case without hashing an entire multi-gigabyte video on the UI thread.
+    """
+
+    path = Path(value)
+    try:
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+    except OSError:
+        return None
+    if not resolved.is_file():
+        return None
+    return RestorationSourceIdentity(
+        path=str(resolved),
+        size=int(stat.st_size),
+        mtime_ns=int(stat.st_mtime_ns),
+    )
 
 
 @dataclass(frozen=True)
