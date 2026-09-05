@@ -482,7 +482,7 @@ def _handoff_script(info: UpdateInfo, staged: Path, app_root: Path, current_pid:
             f"$Launcher = {_ps_literal(launcher)}",
             f"$Log = {_ps_literal(log_path)}",
             "$Msiexec = Join-Path $env:SystemRoot 'System32\\msiexec.exe'",
-            "& $Msiexec /i $Msi /passive /norestart /L*v $Log",
+            "& $Msiexec /i $Msi /passive /norestart CINEPULSE_SKIP_BOOTSTRAP=1 /L*v $Log",
             "$Code = $LASTEXITCODE",
             "if ($Code -notin @(0, 3010)) {",
             "  if (Test-Path -LiteralPath $Launcher) { Start-Process -FilePath $Launcher -WorkingDirectory $AppRoot }",
