@@ -1,0 +1,91 @@
+name: Temporary H2 Real-ESRGAN Runtime Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h2-realesrgan-runtime.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Wire H2 Real-ESRGAN runtime policy and rollback
+        shell: python
+        run: |
+          from pathlib import Path
+
+          tuning = Path('src/cinepulse/realesrgan_tuning.py')
+          text = tuning.read_text(encoding='utf-8')
+          lookup_anchor = '    def record_samples(\n'
+          invalidate = '''    def invalidate(self, key: RealEsrganTuningKey) -> bool:\n        payload = self._load()\n        records = payload.get("records", {})\n        if not isinstance(records, dict) or key.token() not in records:\n            return False\n        del records[key.token()]\n        payload["version"] = self.VERSION\n        self._atomic_write(payload)\n        return True\n\n'''
+          if '    def invalidate(self, key: RealEsrganTuningKey)' not in text:
+              if lookup_anchor not in text:
+                  raise SystemExit('tuning invalidate anchor missing')
+              text = text.replace(lookup_anchor, invalidate + lookup_anchor, 1)
+          tuning.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_realesrgan_tuning.py')
+          text = tests.read_text(encoding='utf-8')
+          marker = '    def test_corrupt_store_fails_closed(self) -> None:\n'
+          extra = '''    def test_invalidate_removes_failed_cached_policy(self) -> None:\n        policy = RealEsrganPolicy(320, 3, 2, 3)\n        self.store.record_samples(\n            self.key,\n            (RealEsrganSample(policy, 7.0, True, output_frames=10, expected_frames=10),),\n        )\n        self.assertEqual(self.store.lookup(self.key), policy)\n        self.assertTrue(self.store.invalidate(self.key))\n        self.assertIsNone(self.store.lookup(self.key))\n        self.assertFalse(self.store.invalidate(self.key))\n\n'''
+          if 'test_invalidate_removes_failed_cached_policy' not in text:
+              if marker not in text:
+                  raise SystemExit('test invalidate anchor missing')
+              text = text.replace(marker, extra + marker, 1)
+          tests.write_text(text, encoding='utf-8')
+
+          studio = Path('src/cinepulse/studio.py')
+          text = studio.read_text(encoding='utf-8')
+          import_anchor = 'from .cpu_tuning import CpuTuningKey, CpuTuningStore\n'
+          tuning_import = 'from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore, downshift_policy, safe_candidates\n'
+          if tuning_import not in text:
+              if import_anchor not in text:
+                  raise SystemExit('studio cpu tuning import anchor missing')
+              text = text.replace(import_anchor, import_anchor + tuning_import, 1)
+
+          chunk_anchor = '''        chunk_frames = choose_chunk_frames(\n            FrameSpec(source_w, source_h, source_fps, "RGBA/PNG"),\n            FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG"),\n        )\n'''
+          policy_setup = chunk_anchor + '''        pipeline_parts = realesrgan_pipeline_threads(\n            cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb\n        ).split(":")\n        try:\n            fallback_load, fallback_proc, fallback_save = (max(1, int(value)) for value in pipeline_parts)\n        except (TypeError, ValueError):\n            fallback_load, fallback_proc, fallback_save = 2, 2, 2\n        fallback_policy = RealEsrganPolicy(\n            tile=256,\n            load_jobs=fallback_load,\n            process_jobs=fallback_proc,\n            save_jobs=fallback_save,\n            gpu_index=0,\n        )\n        tuning_key = RealEsrganTuningKey(\n            self._hardware.gpu or "unknown-gpu",\n            int(self._hardware.vram_mb or 0),\n            self._hardware.driver or "unknown-driver",\n            "realesr-animevideov3",\n            source_w,\n            source_h,\n            2,\n        )\n        tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")\n        tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)\n        candidate_policies = safe_candidates(\n            vram_mb=self._hardware.vram_mb,\n            cpu_threads=cpu_threads,\n            gpu_index=fallback_policy.gpu_index,\n            width=source_w,\n            height=source_h,\n        )\n        if fallback_policy not in candidate_policies:\n            candidate_policies = (fallback_policy,) + candidate_policies\n        active_policy = tuned_policy or fallback_policy\n        if tuned_policy is not None:\n            self._log(\n                f"H2 Real-ESRGAN: política medida carregada tile={active_policy.tile} "\n                f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."\n            )\n        else:\n            self._log(\n                f"H2 Real-ESRGAN: sem evidência medida aplicável; preservando fallback atual "\n                f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index}."\n            )\n'''
+          if 'tuning_store = RealEsrganTuningStore(' not in text:
+              if chunk_anchor not in text:
+                  raise SystemExit('studio H2 policy setup anchor missing')
+              text = text.replace(chunk_anchor, policy_setup, 1)
+
+          old_block = '''            self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")\n            command = [\n                str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),\n                "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", realesrgan_pipeline_threads(cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb),\n            ]\n            self._run_ai(\n                command, outgoing, frames,\n                stage_base + weight * fraction_chunk * 0.18,\n                weight * fraction_chunk * 0.58,\n            )\n'''
+          new_block = '''            self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")\n            attempted: set[RealEsrganPolicy] = set()\n            policy = active_policy\n            while True:\n                attempted.add(policy)\n                safe_rmtree(outgoing)\n                outgoing.mkdir(parents=True, exist_ok=True)\n                command = [\n                    str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),\n                    "-n", "realesr-animevideov3", "-s", "2", "-f", "png",\n                ] + policy.command_args()\n                try:\n                    self._log(\n                        f"H2 Real-ESRGAN lote {chunk_index}: tile={policy.tile} "\n                        f"pipeline={policy.pipeline} gpu={policy.gpu_index}."\n                    )\n                    self._run_ai(\n                        command, outgoing, frames,\n                        stage_base + weight * fraction_chunk * 0.18,\n                        weight * fraction_chunk * 0.58,\n                    )\n                    produced = len(list(outgoing.glob("frame*.png")))\n                    if produced != frames:\n                        raise RuntimeError(\n                            f"Real-ESRGAN produziu {produced} de {frames} quadros esperados no lote."\n                        )\n                    active_policy = policy\n                    break\n                except InterruptedError:\n                    raise\n                except RuntimeError as exc:\n                    failure_text = str(exc).lower()\n                    oom_like = any(\n                        token in failure_text\n                        for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")\n                    )\n                    was_tuned = tuned_policy is not None and policy == tuned_policy\n                    if was_tuned:\n                        if tuning_store.invalidate(tuning_key):\n                            self._log("H2 Real-ESRGAN: política medida inválida removida do cache após falha em runtime.")\n                        tuned_policy = None\n                    lower = downshift_policy(policy, candidate_policies, fallback=fallback_policy)\n                    if lower in attempted or lower == policy:\n                        if policy != fallback_policy and fallback_policy not in attempted:\n                            lower = fallback_policy\n                        else:\n                            raise\n                    self._log(\n                        f"H2 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'instabilidade/integridade'} "\n                        f"com tile={policy.tile} pipeline={policy.pipeline}; rollback para "\n                        f"tile={lower.tile} pipeline={lower.pipeline}."\n                    )\n                    policy = lower\n'''
+          if 'attempted: set[RealEsrganPolicy]' not in text:
+              if old_block not in text:
+                  raise SystemExit('studio Real-ESRGAN execution anchor missing')
+              text = text.replace(old_block, new_block, 1)
+          studio.write_text(text, encoding='utf-8')
+
+          docs = Path('docs/HARDWARE_UTILIZATION_PHASE2.md')
+          text = docs.read_text(encoding='utf-8')
+          section = '''\n## H2 Real-ESRGAN runtime policy\n\nThe Real-ESRGAN render path now consumes only hardware/driver/resolution-specific policies that were previously recorded from integrity-approved physical benchmark evidence. Without matching evidence, runtime preserves the existing Phase 2 behavior: tile 256 plus the current hardware-aware load/process/save pipeline. A measured policy is never discovered by trial during a normal user render.\n\nIf a cached measured policy fails, produces the wrong frame count, or reports an OOM-like error, it is invalidated immediately and the same chunk is retried with a lower-pressure candidate, ultimately returning to the known runtime fallback. Failed policies are not persisted as winners. Model, scale, source frame count and lossless intermediate contracts remain unchanged.\n'''
+          if '## H2 Real-ESRGAN runtime policy' not in text:
+              text = text.rstrip() + '\n' + section
+          docs.write_text(text, encoding='utf-8')
+      - name: Focused H2 gates
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m unittest tests.test_realesrgan_tuning tests.test_performance_policy tests.test_resource_scheduler tests.test_cpu_tuning
+          python -m compileall -q src/cinepulse
+      - name: Commit source integration
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/cinepulse/realesrgan_tuning.py src/cinepulse/studio.py tests/test_realesrgan_tuning.py docs/HARDWARE_UTILIZATION_PHASE2.md
+          git commit -m "Hardware H2: wire measured Real-ESRGAN policy with rollback"
+          git push origin HEAD:preview-restoration-lab
