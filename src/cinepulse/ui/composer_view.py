@@ -13,7 +13,8 @@ from tkinter import BooleanVar, DoubleVar, IntVar, PhotoImage, StringVar, Toplev
 import uuid
 
 from ..composer_base_probe import probe_composer_base
-from ..composer_export import ComposerExportRequest, export_composer_reference
+from ..composer_auto_export import export_composer_auto
+from ..composer_export import ComposerExportRequest
 from ..composer_media import probe_composer_media, validate_layer_media
 from ..composer_preview import ComposerPreviewResult, render_composer_preview
 from ..gpu_compositor import OverlayLayer
@@ -818,14 +819,14 @@ def show_overlay_composer(studio) -> None:
                         f"Exportando Composer lossless… {done}/{total} frame(s) • {percent:.1f}%",
                     )
 
-                result = export_composer_reference(
+                result = export_composer_auto(
                     request,
                     cancelled=export_cancel.is_set,
                     progress=update_progress,
                 )
                 post(
                     finish_export,
-                    f"Composer exportado: {result.output.name} • {result.frames} frame(s) • CPU reference lossless",
+                    f"Composer exportado: {result.output.name} • {result.frames} frame(s) • {result.backend}",
                 )
             except InterruptedError:
                 post(finish_export, "", cancelled=True)
