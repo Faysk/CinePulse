@@ -18,7 +18,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
-from typing import Literal
+from typing import Iterable, Literal
 
 from .gpu_compositor import (
     GpuCompositorCapabilities,
@@ -27,6 +27,7 @@ from .gpu_compositor import (
     OverlayLayer,
     cuda_layer_eligible,
 )
+from .visualizer_geometry import geometry_for
 
 
 COMPOSER_SCHEMA = 1
@@ -246,6 +247,25 @@ def evaluate_visualizer_frame(
         opacity=float(layer.opacity),
         rotation_degrees=_rotation(layer.rotation_degrees, layer.spin_rpm, time_seconds),
         reaction=reaction,
+    )
+
+
+def visualizer_geometry(
+    layer: VisualizerLayer,
+    values: Iterable[float],
+    frame_state: ReactiveFrameState,
+) -> object:
+    """Return the backend-neutral primitive set for one visualizer frame.
+
+    The per-frame transform and geometry are intentionally separate: a renderer
+    applies x/y/scale/opacity after generating normalized local primitives. A
+    future GPU shader therefore has no excuse to reinterpret the visual design.
+    """
+    return geometry_for(
+        layer.kind,
+        values,
+        reaction=max(0.0, min(2.0, float(layer.reaction))),
+        rotation_degrees=frame_state.rotation_degrees,
     )
 
 
