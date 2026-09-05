@@ -12,8 +12,6 @@ permissions:
 jobs:
   integrate:
     runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: src
     steps:
       - uses: actions/checkout@v6
         with:
@@ -21,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
       - name: Apply evidence-gated CUDA decode integration
         run: python scripts/_tmp_h5_studio_integrate.py
       - name: Validate focused H5 contracts
