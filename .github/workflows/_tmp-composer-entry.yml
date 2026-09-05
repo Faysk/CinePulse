@@ -1,0 +1,95 @@
+name: Temporary Preview Composer Entry Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-composer-entry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Wire isolated Preview Composer into Studio
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/cinepulse/studio.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_header = '''        ttk.Label(header_tools, text=f"v{__version__}", style="Muted.TLabel").pack(side="left", padx=(0, 8), pady=(7, 0))
+                  ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide).pack(side="left")
+          '''
+          new_header = '''        ttk.Label(header_tools, text=f"v{__version__}", style="Muted.TLabel").pack(side="left", padx=(0, 8), pady=(7, 0))
+                  ttk.Button(
+                      header_tools,
+                      text="Overlay Composer • Preview",
+                      style="Ghost.TButton",
+                      command=self._show_overlay_composer,
+                  ).pack(side="left", padx=(0, 8))
+                  ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide).pack(side="left")
+          '''
+          if 'Overlay Composer • Preview' not in text:
+              if old_header not in text:
+                  raise SystemExit('header contract changed; refusing blind composer patch')
+              text = text.replace(old_header, new_header, 1)
+
+          old_method = '''    def _show_activity_center(self) -> None:
+                  show_activity_center(self)
+
+              def _open_tab(self, index: int) -> None:
+          '''
+          new_method = '''    def _show_activity_center(self) -> None:
+                  show_activity_center(self)
+
+              def _show_overlay_composer(self) -> None:
+                  """Open the isolated Overlay Composer Preview workspace.
+
+                  The import stays lazy so Stable startup/RenderSettings do not depend on
+                  experimental media/compositor code. The composer owns separate state,
+                  preview/export workers and GPU evidence gates.
+                  """
+                  from .ui.composer_view import show_overlay_composer
+
+                  show_overlay_composer(self)
+
+              def _open_tab(self, index: int) -> None:
+          '''
+          if 'def _show_overlay_composer(self)' not in text:
+              if old_method not in text:
+                  raise SystemExit('activity-center method contract changed; refusing blind composer patch')
+              text = text.replace(old_method, new_method, 1)
+
+          path.write_text(text, encoding='utf-8', newline='\n')
+      - name: Focused Composer gates
+        run: |
+          python -m pip install --disable-pip-version-check --editable .
+          python -m compileall -q src/cinepulse
+          python -m unittest \
+            tests.test_composer_studio_integration \
+            tests.test_composer_view \
+            tests.test_overlay_composer \
+            tests.test_composer_export \
+            tests.test_composer_runtime \
+            tests.test_composer_preview \
+            tests.test_gpu_compositor
+      - name: Persist integration and remove temporary writer
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/_tmp-composer-entry.yml 2>/dev/null || true
+          git add src/cinepulse/studio.py tests/test_composer_studio_integration.py
+          git commit -m "Preview: expose isolated Overlay Composer workspace"
+          git pull --rebase origin preview-restoration-lab
+          git push origin preview-restoration-lab
