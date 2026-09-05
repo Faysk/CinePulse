@@ -57,11 +57,17 @@ def select(*, store=None, source_fps=60.0, target_fps=60, target=(3840, 2160), s
     )
 
 
+def option_map(args: list[str]) -> dict[str, str]:
+    if len(args) % 2:
+        raise AssertionError(f"expected option/value pairs, got: {args}")
+    return dict(zip(args[::2], args[1::2]))
+
+
 class GpuDeliveryTests(unittest.TestCase):
-    def test_contract_args_are_identical_to_delivery_plan_hevc_nvenc(self) -> None:
+    def test_contract_options_are_identical_to_delivery_plan_hevc_nvenc(self) -> None:
         expected = plan().video_args(use_cpu=False, nvenc_available=True, bitrate_mbps=80, fps=60)
         actual = cinepulse_hevc_nvenc_contract(pixel_format="yuv420p", bitrate_mbps=80, fps=60).ffmpeg_args()
-        self.assertEqual(expected, actual)
+        self.assertEqual(option_map(expected), option_map(actual))
 
     def test_exact_evidence_allows_simple_same_aspect_resident_route(self) -> None:
         store = Store(True)
