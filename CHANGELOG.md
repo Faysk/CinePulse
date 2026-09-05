@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.2 — 2026-09-05
+
+- fecha a auditoria pós-1.1.1 com correções de preflight, saída atômica, locks/leases, cancelamento, persistência e updater;
+- fila e presets recuperam estado corrompido a partir de backup validado sem fazer downgrade silencioso de schema futuro;
+- JobLease e single-instance lock ganham identidade de processo/nonce e proteção contra races, PID reuse e ownership stale;
+- cancelamento POSIX espera encerramento e escala para SIGKILL; worker persiste somente transições válidas da máquina de estados;
+- updater aplica limites de recursos e rejeita ZIP traversal, symlinks, entradas criptografadas, duplicatas case-insensitive e payload expandido excessivo;
+- remove workflow temporário com permissão de escrita e restaura `publish-release.yml` como único writer permanente;
+- sincroniza metadados de versão em pacote, portátil, MSI e RC;
+- publisher passa a derivar release notes da versão, validar o documento correspondente e publicar a partir da alteração de metadados de release na `main`;
+- mantém GPU física/8K e aceitação perceptiva extrema como gates separados, sem PASS sintético.
+
 ## Não lançado — recuperação RIFE pós-interrupção
 
 - adiciona recuperador reiniciável por segmento para o layout RIFE em chunks, com checkpoint atômico e preservação de cache, segmentos, masters e parciais;
