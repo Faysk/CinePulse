@@ -13,12 +13,9 @@ GPU = HardwareProfile("cpu", 28, "RTX Test", 8192, "999.1")
 CAPS = GpuMediaCapabilities(
     ffmpeg="ffmpeg",
     fingerprint="ffmpeg-test",
-    cuda=True,
-    cuvid=True,
-    nvenc=True,
-    scale_cuda=True,
-    scale_npp=False,
+    hwaccels=frozenset({"cuda"}),
     decoders=frozenset({"h264_cuvid"}),
+    filters=frozenset({"scale_cuda"}),
     encoders=frozenset({"hevc_nvenc"}),
 )
 
