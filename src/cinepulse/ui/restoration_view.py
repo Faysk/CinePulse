@@ -1,7 +1,7 @@
 """Desktop surface for the Preview-only restoration lab.
 
 The panel intentionally lives under the experimental/local-AI workspace and
-keeps all state outside ``RenderSettings``.  Stable render/export ownership is
+keeps all state outside ``RenderSettings``. Stable render/export ownership is
 therefore unchanged while Preview restoration can be reviewed interactively.
 """
 
@@ -14,7 +14,14 @@ from tkinter import BooleanVar, DoubleVar, PhotoImage, StringVar, TclError, ttk
 from ..loop_engine import FFMPEG, first_video_size, probe_media
 from ..restoration_preview import PreviewRestorationPlan, inspect_and_plan_preview_restoration
 from .preview import demo_background, extract_video_frame, to_ppm_bytes
-from .restoration_lab import RESTORATION_PRESETS, RestorationUiState, analysis_summary, color_preview, overlay_boxes_preview
+from .restoration_lab import (
+    RESTORATION_PRESETS,
+    RestorationUiState,
+    analysis_summary,
+    color_preview,
+    overlay_boxes_preview,
+    source_identity,
+)
 
 
 _PRESET_LABELS = {key: label for key, label, _description in RESTORATION_PRESETS}
@@ -40,7 +47,7 @@ def _safe_size(path: str) -> tuple[int, int] | None:
 def build_restoration_panel(studio, parent) -> None:
     """Attach the Preview restoration controls to the desktop workspace.
 
-    The function owns only UI state and Preview analysis.  It deliberately does
+    The function owns only UI state and Preview analysis. It deliberately does
     not mutate Studio's production render settings or final-render callbacks.
     """
 
@@ -58,6 +65,7 @@ def build_restoration_panel(studio, parent) -> None:
     )
     studio._restoration_plan: PreviewRestorationPlan | None = None
     studio._restoration_plan_source = ""
+    studio._restoration_plan_identity = None
     studio._restoration_analysis_token = 0
     studio._restoration_preview_photo = None
 
@@ -191,6 +199,12 @@ def _state(studio) -> RestorationUiState:
     )
 
 
+def _clear_analysis(studio) -> None:
+    studio._restoration_plan = None
+    studio._restoration_plan_source = ""
+    studio._restoration_plan_identity = None
+
+
 def _reset(studio) -> None:
     studio.restoration_remove_overlays.set(False)
     studio.restoration_preset.set(_PRESET_LABELS["neutral"])
@@ -200,10 +214,20 @@ def _reset(studio) -> None:
     studio.restoration_gamma.set(1.0)
     studio.restoration_temperature.set(0.0)
     studio.restoration_tint.set(0.0)
-    studio._restoration_plan = None
-    studio._restoration_plan_source = ""
+    _clear_analysis(studio)
     studio.restoration_analysis_text.set(analysis_summary(None))
     _refresh_preview(studio)
+
+
+def _fresh_plan_for_source(studio, source: str) -> PreviewRestorationPlan | None:
+    plan = getattr(studio, "_restoration_plan", None)
+    expected = getattr(studio, "_restoration_plan_identity", None)
+    if plan is None or expected is None:
+        return None
+    current = source_identity(source)
+    if current != expected:
+        return None
+    return plan
 
 
 def _refresh_preview(studio) -> None:
@@ -222,8 +246,12 @@ def _refresh_preview(studio) -> None:
         )
     try:
         frame = color_preview(frame, _state(studio).controls())
-        plan = studio._restoration_plan if studio._restoration_plan_source == source else None
+        plan = _fresh_plan_for_source(studio, source)
         if studio.restoration_remove_overlays.get():
+            if getattr(studio, "_restoration_plan", None) is not None and plan is None:
+                studio.restoration_preview_note.set(
+                    "A fonte mudou desde a análise; as regiões antigas foram ocultadas. Analise novamente antes de remover overlays."
+                )
             frame = overlay_boxes_preview(frame, plan)
         photo = PhotoImage(data=to_ppm_bytes(frame), format="PPM")
         studio._restoration_preview_photo = photo
@@ -236,6 +264,10 @@ def _start_analysis(studio) -> None:
     source = str(studio.video.get()).strip()
     if not source or not Path(source).is_file():
         studio.restoration_analysis_text.set("Selecione um vídeo válido antes de analisar overlays.")
+        return
+    identity = source_identity(source)
+    if identity is None:
+        studio.restoration_analysis_text.set("Não foi possível identificar a fonte com segurança.")
         return
     size = _safe_size(source)
     if size is None:
@@ -268,13 +300,21 @@ def _start_analysis(studio) -> None:
         def finish() -> None:
             if token != getattr(studio, "_restoration_analysis_token", -1):
                 return
-            if error is None and plan is not None:
+            current_source = str(studio.video.get()).strip()
+            current_identity = source_identity(current_source) if current_source else None
+            source_unchanged = current_source == source and current_identity == identity
+            if error is None and plan is not None and source_unchanged:
                 studio._restoration_plan = plan
                 studio._restoration_plan_source = source
+                studio._restoration_plan_identity = identity
+                message = analysis_summary(plan)
             else:
-                studio._restoration_plan = None
-                studio._restoration_plan_source = ""
-            studio.restoration_analysis_text.set(analysis_summary(plan, error=error))
+                _clear_analysis(studio)
+                if error is None and not source_unchanged:
+                    message = "A fonte mudou durante a análise. O resultado foi descartado; analise novamente."
+                else:
+                    message = analysis_summary(plan, error=error)
+            studio.restoration_analysis_text.set(message)
             try:
                 studio.restoration_analyze_button.configure(state="normal")
             except TclError:
