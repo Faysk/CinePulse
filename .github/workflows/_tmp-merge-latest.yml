@@ -8,29 +8,121 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect-merge:
+  merge-latest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Inspect merge with latest main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Merge latest main and resolve audited conflicts
         shell: bash
         run: |
-          set +e
-          git config user.name 'CinePulse Merge Audit'
+          set -euo pipefail
+          git config user.name 'CinePulse Automation'
           git config user.email 'actions@users.noreply.github.com'
           git fetch origin main
+          set +e
           git merge --no-commit --no-ff origin/main
-          code=$?
-          echo "MERGE_EXIT=$code"
-          echo '--- STATUS ---'
+          merge_code=$?
+          set -e
+          if [ "$merge_code" -ne 0 ]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            printf 'Conflicts: %s\n' "${conflicts[*]}"
+            expected='docs/PRIVACY.md scripts/final_audit.py src/cinepulse/studio.py'
+            actual="$(printf '%s\n' "${conflicts[@]}" | sort | tr '\n' ' ' | sed 's/ $//')"
+            expected_sorted="$(printf '%s\n' $expected | sort | tr '\n' ' ' | sed 's/ $//')"
+            if [ "$actual" != "$expected_sorted" ]; then
+              echo "Unexpected merge conflict set: $actual"
+              exit 2
+            fi
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          privacy = Path('docs/PRIVACY.md')
+          privacy.write_text('''# Privacidade
+
+CinePulse é local-first:
+
+- mídia, projetos, frames, áudio e resultados de IA permanecem no computador;
+- não existe envio automático de telemetria, inventário de mídia ou dados de projeto para servidores do CinePulse;
+- o histórico técnico de cada render pode registrar **telemetria local de hardware** — por exemplo CPU, RAM, disco e, quando disponível, utilização, VRAM, potência, temperatura, clocks e P-state da GPU NVIDIA — para diagnóstico, auditoria e decisões conservadoras de buffering durante o processamento;
+- essa telemetria fica nos arquivos locais do histórico de render e não contém frames do vídeo nem áudio da mídia;
+- diagnósticos locais podem registrar versões, hardware, espaço, estado dos componentes e caminhos locais necessários ao suporte; bundles de suporte usam a rotina de redação de caminhos antes da exportação;
+- relatórios e bundles de suporte só são compartilhados quando o usuário decide fazê-lo;
+- logo após abrir, o aplicativo faz uma verificação HTTPS curta da release Stable mais recente no GitHub para descobrir atualizações;
+- essa verificação envia apenas metadados normais da conexão HTTP, incluindo o endereço IP visto pelo GitHub e o `User-Agent` `CinePulse/<versão>`; nenhum caminho local, mídia, projeto, hardware detalhado ou identificador criado pelo CinePulse é anexado ao pedido;
+- falha ou bloqueio de rede nessa verificação não impede o uso local do programa;
+- downloads de atualização ou componentes só ocorrem quando necessários e usam as origens documentadas.
+
+A Restauração Preview, os benchmarks de hardware e os mecanismos H0–H8 também funcionam localmente. A medição de throughput do scratch grava apenas um arquivo temporário pequeno no volume selecionado, faz `fsync` e remove o arquivo imediatamente; ela não envia o conteúdo para fora da máquina.
+
+A checagem automática de versão existe para o botão de atualização no aplicativo e não é usada como analytics. Recursos remotos futuros devem declarar claramente quais dados saem da máquina e permanecer separados do processamento local de mídia.
+''', encoding='utf-8')
+
+          studio = Path('src/cinepulse/studio.py')
+          text = studio.read_text(encoding='utf-8')
+          block = re.compile(r'<<<<<<< HEAD\n.*?=======\n.*?>>>>>>> origin/main\n', re.S)
+          matches = list(block.finditer(text))
+          if len(matches) != 1:
+              raise SystemExit(f'Expected exactly one studio conflict block, found {len(matches)}')
+          replacement = '''        ttk.Button(header_tools, text="Overlay Composer • Preview", command=self._show_overlay_composer).pack(side="left", padx=(0, 8))
+          self.header_update_button = ttk.Button(
+              header_tools, text="", style="Primary.TButton", command=self._apply_available_update,
+          )
+          self.header_help_button = ttk.Button(header_tools, text="Ajuda  F1", command=self._show_quick_guide)
+          self.header_help_button.pack(side="left")
+'''
+          text = block.sub(replacement, text, count=1)
+          studio.write_text(text, encoding='utf-8')
+
+          audit = Path('scripts/final_audit.py')
+          text = audit.read_text(encoding='utf-8')
+          matches = list(block.finditer(text))
+          if len(matches) != 1:
+              raise SystemExit(f'Expected exactly one final_audit conflict block, found {len(matches)}')
+          replacement = '''        "update_policy_trusted_source": update_policy_safe,
+              "github_release_update_contract_safe": github_release_update_contract_safe,
+              "runtime_lock_hashed": bool(runtime_locked) and "--hash=sha256:" in runtime_lock_text,
+'''
+          text = block.sub(replacement, text, count=1)
+          audit.write_text(text, encoding='utf-8')
+          PY
+          git add docs/PRIVACY.md scripts/final_audit.py src/cinepulse/studio.py
+          rm -f .github/workflows/_tmp-merge-latest.yml
+          git add -A
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- .; then
+            echo 'Conflict markers remain in tracked files.'
+            exit 3
+          fi
+      - name: Install focused test runtime
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pip install --disable-pip-version-check --editable .
+      - name: Focused updater plus Preview integration tests
+        shell: bash
+        run: |
+          python -m compileall -q src scripts
+          python -m pytest -q \
+            tests/test_update_manager.py \
+            tests/test_update_ux.py \
+            tests/test_update_release_contract.py \
+            tests/test_distribution_phase8.py \
+            tests/test_hardware_megapack_final_contract.py \
+            tests/test_composer_studio_integration.py
+          python scripts/release_gate.py
+          python scripts/final_audit.py --output /tmp/final-audit.json
+      - name: Commit merged latest version and remove temporary writer
+        shell: bash
+        run: |
           git status --short
-          echo '--- UNMERGED FILES ---'
-          git diff --name-only --diff-filter=U
-          echo '--- CONFLICT DIFF ---'
-          git diff --cc
-          exit 0
+          git commit -m 'Integrate Stable updater into Preview latest'
+          git push origin HEAD:preview-restoration-lab
