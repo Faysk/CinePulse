@@ -4509,10 +4509,27 @@ class VideoOptimizerStudio:
                     if visual_source != previous_visual:
                         self._release_temp_path(previous_visual, temp_paths)
                     progress_base += 7
+                finalized_in_vfx = False
                 if effects_active:
-                    vfx_output = self._temp_file(job_dir, "studio_vfx_", temp_paths, suffix=master_suffix)
-                    self._set_stage("VFX dinâmicos", "Reutilizando o envelope musical completo e desenhando VFX target-aware.")
-                    remaining_for_vfx = 35 if settings.mode == MODE_MUSIC else 45
+                    # Music VFX is the only project-long visual stage after the
+                    # loop-aware RIFE hotfix. Fuse it with delivery so 8K/120
+                    # never writes a full-length lossless VFX intermediate.
+                    fuse_vfx_delivery = (
+                        settings.mode == MODE_MUSIC
+                        and not render_plan.step("rife_final").attempts
+                    )
+                    vfx_output = (
+                        partial_output
+                        if fuse_vfx_delivery
+                        else self._temp_file(job_dir, "studio_vfx_", temp_paths, suffix=master_suffix)
+                    )
+                    self._set_stage(
+                        "VFX dinâmicos",
+                        "Compondo VFX e codificando diretamente a saída final."
+                        if fuse_vfx_delivery
+                        else "Reutilizando o envelope musical completo e desenhando VFX target-aware.",
+                    )
+                    remaining_for_vfx = max(1.0, 95.0 - progress_base) if fuse_vfx_delivery else (35 if settings.mode == MODE_MUSIC else 45)
                     reactive_audio = audio_source
                     if settings.use_stems:
                         try:
@@ -4523,6 +4540,34 @@ class VideoOptimizerStudio:
                             raise
                         except Exception as exc:
                             self._log(f"Demucs indisponível; VFX seguirá a mistura original: {exc}")
+
+                    final_audio_filter = ""
+                    final_video_args = None
+                    final_audio_args = None
+                    final_muxer_args = None
+                    final_audio_source = None
+                    if fuse_vfx_delivery:
+                        measurements = None
+                        if settings.audio_mode != "Preservar dinâmica original":
+                            self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
+                            try:
+                                measurements = analyze_loudness(FFMPEG, audio_source, project_duration, settings.audio_mode)
+                                self._log(f"Medição de loudness: {measurements}")
+                            except Exception as exc:
+                                self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
+                        final_audio_filter = build_audio_filter(settings.audio_mode, measurements)
+                        final_video_args = delivery_plan.video_args(
+                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
+                            bitrate_mbps=estimated_bitrate, fps=target_fps,
+                        ) + color_plan.metadata_args(output=True)
+                        final_audio_source = settings.audio
+                        final_audio_args = delivery_plan.audio_args()
+                        final_muxer_args = delivery_plan.muxer_args()
+                        self._log(
+                            "STORAGE Hotfix 1.1.3: VFX full-length será entregue por streaming; "
+                            "nenhum FFV1 full-length será materializado no scratch."
+                        )
+
                     previous_visual = visual_source
                     try:
                         vfx.render_vfx_intermediate(
@@ -4543,14 +4588,20 @@ class VideoOptimizerStudio:
                             output_transfer=color_plan.working.transfer,
                             output_space=color_plan.working.space,
                             output_range=color_plan.working.range,
-                            lossless_intermediate=color_plan.needs_lossless_intermediate,
+                            lossless_intermediate=color_plan.needs_lossless_intermediate and not fuse_vfx_delivery,
+                            final_video_args=final_video_args,
+                            final_audio_source=final_audio_source,
+                            final_audio_filter=final_audio_filter,
+                            final_audio_args=final_audio_args,
+                            final_muxer_args=final_muxer_args,
                         )
                     except vfx.RenderCancelled as exc:
                         raise InterruptedError from exc
-                    visual_source = str(vfx_output)
                     self._release_temp_path(previous_visual, temp_paths)
+                    visual_source = str(vfx_output)
                     progress_base += remaining_for_vfx
                     color_already_converted = True
+                    finalized_in_vfx = fuse_vfx_delivery
 
             visual_fps = (
                 float(render_plan.step("master").output_spec.fps)
@@ -4577,56 +4628,60 @@ class VideoOptimizerStudio:
                 except Exception as exc:
                     effective_interpolation = "Movimento suave — FFmpeg"
                     self._log(f"RIFE final falhou; fallback FFmpeg ativado: {exc}")
-            self._set_stage("Finalizando", f"Codificando em {target_w}×{target_h} a {target_fps} fps com áudio correto.")
-            final_input_spec = render_plan.step("finalize").input_spec
-            final_source_size = (
-                (final_input_spec.width, final_input_spec.height)
-                if final_input_spec is not None
-                else (working_w, working_h)
-            )
-            final_filter = self._scale_filter(
-                target_w, target_h, target_fps, settings.fit_mode, visual_fps, effective_interpolation,
-                spatial_mode=self._normalized_enhancement_mode(settings.enhancement),
-                source_size=final_source_size,
-                color_plan=color_plan,
-                color_already_converted=color_already_converted,
-            )
-            command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
-            if settings.mode == MODE_MUSIC and not effects_active:
-                command += ["-stream_loop", "-1"]
-            command += ["-i", visual_source]
-            if settings.mode == MODE_MUSIC:
-                command += ["-i", settings.audio, "-map", "0:v:0", "-map", "1:a:0"]
-            elif settings.preserve_audio and source_has_audio:
-                command += ["-i", settings.video, "-map", "0:v:0", "-map", "1:a:0"]
+            if not finalized_in_vfx:
+                self._set_stage("Finalizando", f"Codificando em {target_w}×{target_h} a {target_fps} fps com áudio correto.")
+                final_input_spec = render_plan.step("finalize").input_spec
+                final_source_size = (
+                    (final_input_spec.width, final_input_spec.height)
+                    if final_input_spec is not None
+                    else (working_w, working_h)
+                )
+                final_filter = self._scale_filter(
+                    target_w, target_h, target_fps, settings.fit_mode, visual_fps, effective_interpolation,
+                    spatial_mode=self._normalized_enhancement_mode(settings.enhancement),
+                    source_size=final_source_size,
+                    color_plan=color_plan,
+                    color_already_converted=color_already_converted,
+                )
+                command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
+                if settings.mode == MODE_MUSIC and not effects_active:
+                    command += ["-stream_loop", "-1"]
+                command += ["-i", visual_source]
+                if settings.mode == MODE_MUSIC:
+                    command += ["-i", settings.audio, "-map", "0:v:0", "-map", "1:a:0"]
+                elif settings.preserve_audio and source_has_audio:
+                    command += ["-i", settings.video, "-map", "0:v:0", "-map", "1:a:0"]
+                else:
+                    command += ["-map", "0:v:0", "-an"]
+                command += ["-vf", final_filter]
+                bitrate_mbps = estimated_bitrate
+                command += delivery_plan.video_args(
+                    use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
+                    bitrate_mbps=bitrate_mbps, fps=target_fps,
+                )
+                command += color_plan.metadata_args(output=True)
+                if settings.mode == MODE_MUSIC or (settings.preserve_audio and source_has_audio):
+                    measurements = None
+                    if settings.audio_mode != "Preservar dinâmica original":
+                        self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
+                        try:
+                            measurements = analyze_loudness(FFMPEG, audio_source, project_duration, settings.audio_mode)
+                            self._log(f"Medição de loudness: {measurements}")
+                        except Exception as exc:
+                            self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
+                    self._set_stage("Áudio 2/2", "Aplicando masterização e proteção de pico durante a codificação final.")
+                    audio_filter = build_audio_filter(settings.audio_mode, measurements)
+                    if audio_filter:
+                        command += ["-af", audio_filter]
+                    command += delivery_plan.audio_args()
+                command += ["-threads", str(settings.cpu_threads), "-t", f"{project_duration:.6f}"]
+                command += delivery_plan.muxer_args()
+                command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
+                self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
+                self._release_temp_path(visual_source, temp_paths)
             else:
-                command += ["-map", "0:v:0", "-an"]
-            command += ["-vf", final_filter]
-            bitrate_mbps = estimated_bitrate
-            command += delivery_plan.video_args(
-                use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
-                bitrate_mbps=bitrate_mbps, fps=target_fps,
-            )
-            command += color_plan.metadata_args(output=True)
-            if settings.mode == MODE_MUSIC or (settings.preserve_audio and source_has_audio):
-                measurements = None
-                if settings.audio_mode != "Preservar dinâmica original":
-                    self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
-                    try:
-                        measurements = analyze_loudness(FFMPEG, audio_source, project_duration, settings.audio_mode)
-                        self._log(f"Medição de loudness: {measurements}")
-                    except Exception as exc:
-                        self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
-                self._set_stage("Áudio 2/2", "Aplicando masterização e proteção de pico durante a codificação final.")
-                audio_filter = build_audio_filter(settings.audio_mode, measurements)
-                if audio_filter:
-                    command += ["-af", audio_filter]
-                command += delivery_plan.audio_args()
-            command += ["-threads", str(settings.cpu_threads), "-t", f"{project_duration:.6f}"]
-            command += delivery_plan.muxer_args()
-            command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
-            self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
-            self._release_temp_path(visual_source, temp_paths)
+                self._set_stage("Finalizando", "VFX e entrega já foram codificados no mesmo passe; iniciando verificação final.")
+                self._push_progress(98.0)
             verification = self._verify_output(
                 str(partial_output), project_duration, target_w, target_h, target_fps,
                 delivery_plan=delivery_plan, expected_audio=expected_audio,

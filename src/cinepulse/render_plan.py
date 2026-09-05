@@ -472,9 +472,13 @@ def build_render_plan(data: PlanInput) -> RenderPlan:
             f"{color_plan.working.pixel_format} • {color_plan.working.primaries}/{color_plan.working.transfer}",
         )
         temporal_note = (
-            "mantém a cadência efetiva da fonte para uma única interpolação RIFE posterior"
-            if data.interpolation_mode == "rife" and target.fps > source.fps + 0.01
-            else "usa diretamente a cadência solicitada; fontes mais rápidas só são reduzidas quando o destino pede menos FPS"
+            "recebe a cadência alvo do RIFE aplicado uma única vez ao clipe reutilizável"
+            if data.project_mode == "music" and rife_base_runs
+            else (
+                "mantém a cadência efetiva da fonte para uma única interpolação RIFE posterior"
+                if data.interpolation_mode == "rife" and target.fps > source.fps + 0.01
+                else "usa diretamente a cadência solicitada; fontes mais rápidas só são reduzidas quando o destino pede menos FPS"
+            )
         )
         steps.append(
             RenderStep(
@@ -706,6 +710,7 @@ def build_render_plan(data: PlanInput) -> RenderPlan:
         "spatial_upscale_required": requires_upscale,
         "rife_calls_planned": int(rife_base_runs) + (1 if final_rife_runs and data.rife_available else 0),
         "rife_loop_optimized": bool(rife_base_runs),
+        "vfx_delivery_fused": bool(data.project_mode == "music" and data.effects_active and not final_rife_runs),
         "current_pipeline_compatible": True,
         "color_intent": color_plan.intent,
         "color_label": color_plan.label,

@@ -343,7 +343,7 @@ def estimate_storage(
         current_persistent = interpolated
         peak = max(peak, stage_peak)
 
-    for key in ("master", "transition", "vfx"):
+    for key in ("master", "transition"):
         step = plan.step(key)
         if not step.runs or step.output_spec is None:
             continue
@@ -358,6 +358,34 @@ def estimate_storage(
         ))
         current_persistent = produced
         peak = max(peak, stage_peak)
+
+    vfx = plan.step("vfx")
+    fused_vfx_delivery = bool(
+        plan.project_mode == "music" and vfx.runs and not rife.attempts
+    )
+    if vfx.runs and vfx.output_spec is not None:
+        seconds = stage_duration("vfx")
+        if fused_vfx_delivery:
+            # The lossless reusable clip/master remains scratch while FFmpeg
+            # consumes it, but the project-long composed video is encoded
+            # directly into AtomicOutput on the output volume. No giant FFV1
+            # VFX master is materialized on scratch.
+            stage_peak = current_persistent
+            stages.append(StorageStageEstimate(
+                "vfx", "VFX reativos + entrega final", 0.0, 0.0, stage_peak, seconds,
+                "VFX do projeto inteiro são compostos e codificados por streaming direto na saída final; nenhum master VFX full-length é gravado no scratch.",
+            ))
+            peak = max(peak, stage_peak)
+            current_persistent = 0.0
+        else:
+            produced = _compressed_gb(vfx.output_spec, seconds, lossless=not vfx.lossy_intermediate)
+            stage_peak = current_persistent + produced
+            stages.append(StorageStageEstimate(
+                "vfx", vfx.title, produced, produced, stage_peak, seconds,
+                "intermediário VFX é necessário porque ainda existe uma etapa visual posterior.",
+            ))
+            current_persistent = produced
+            peak = max(peak, stage_peak)
 
     if rife.attempts and rife.input_spec and rife.output_spec and rife.materializes_frames:
         seconds = stage_duration("rife_final")

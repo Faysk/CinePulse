@@ -134,6 +134,15 @@ class RenderPlanTests(unittest.TestCase):
         self.assertFalse(plan.step("rife_final").attempts)
         self.assertEqual(plan.metadata["rife_calls_planned"], 1)
         self.assertTrue(plan.metadata["rife_loop_optimized"])
+        self.assertFalse(plan.metadata["vfx_delivery_fused"])
+
+    def test_music_vfx_delivery_is_fused_after_loop_rife(self):
+        plan = self._plan(
+            source_fps=24.0, target_fps=120.0, effects_active=True, interpolation_mode="rife",
+        )
+        self.assertTrue(plan.step("rife_base").runs)
+        self.assertFalse(plan.step("rife_final").attempts)
+        self.assertTrue(plan.metadata["vfx_delivery_fused"])
 
     def test_original_project_keeps_one_shot_final_rife(self):
         plan = self._plan(

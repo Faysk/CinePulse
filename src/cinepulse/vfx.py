@@ -281,6 +281,11 @@ def render_vfx_intermediate(
     output_space: str = "bt709",
     output_range: str = "tv",
     lossless_intermediate: bool = False,
+    final_video_args: list[str] | None = None,
+    final_audio_source: str | None = None,
+    final_audio_filter: str = "",
+    final_audio_args: list[str] | None = None,
+    final_muxer_args: list[str] | None = None,
 ) -> None:
     """Render music-reactive VFX using the full-track envelope.
 
@@ -320,6 +325,7 @@ def render_vfx_intermediate(
         log(f"Seção musical {section_start:06.1f}s–{section_end:06.1f}s: {label}")
     progress(0.02)
 
+    final_delivery = final_video_args is not None
     command = [
         ffmpeg,
         "-y",
@@ -340,6 +346,10 @@ def render_vfx_intermediate(
         f"{spec.fps:.8f}",
         "-i",
         "pipe:0",
+    ]
+    if final_delivery and final_audio_source:
+        command += ["-i", final_audio_source]
+    command += [
         "-filter_complex",
         build_vfx_filter_graph(
             output_width,
@@ -354,13 +364,17 @@ def render_vfx_intermediate(
         ),
         "-map",
         "[vout]",
-        "-an",
-        "-t",
-        f"{duration:.6f}",
-        "-r",
-        f"{output_fps:.8f}",
     ]
-    if lossless_intermediate:
+    if final_delivery and final_audio_source:
+        # Inputs are: 0=loop master, 1=raw VFX pipe, 2=delivery audio.
+        command += ["-map", "2:a:0"]
+    else:
+        command += ["-an"]
+    command += ["-t", f"{duration:.6f}", "-r", f"{output_fps:.8f}"]
+
+    if final_delivery:
+        command += list(final_video_args or ())
+    elif lossless_intermediate:
         command += [
             "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1",
             "-g", "1", "-slicecrc", "1", "-pix_fmt", output_pixel_format,
@@ -404,7 +418,13 @@ def render_vfx_intermediate(
         "-threads",
         str(max(1, cpu_threads)),
     ]
-    if not lossless_intermediate:
+    if final_delivery:
+        if final_audio_source:
+            if final_audio_filter:
+                command += ["-af", final_audio_filter]
+            command += list(final_audio_args or ())
+        command += list(final_muxer_args or ())
+    elif not lossless_intermediate:
         command += ["-movflags", "+faststart"]
     command += [output_path]
     log("Comando VFX: " + subprocess.list2cmdline(command))
