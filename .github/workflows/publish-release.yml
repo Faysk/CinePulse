@@ -6,10 +6,18 @@ on:
     paths:
       - '.github/workflows/publish-release.yml'
       - 'tests/test_publish_release_contract.py'
+      - 'pyproject.toml'
+      - 'src/cinepulse/__init__.py'
+      - 'docs/RELEASE_*.md'
+      - 'scripts/Build-Portable.ps1'
+      - 'scripts/Build-Msi.ps1'
+      - 'scripts/Invoke-RcAcceptance.ps1'
   push:
     branches: [main]
     paths:
       - '.github/workflows/publish-release.yml'
+      - 'pyproject.toml'
+      - 'src/cinepulse/__init__.py'
   workflow_dispatch:
     inputs:
       version:
@@ -54,8 +62,11 @@ jobs:
             throw "Requested version $env:REQUESTED_VERSION does not match repository version $ProjectVersion"
           }
           if ($ProjectVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Stable publisher requires x.y.z SemVer, got $ProjectVersion" }
+          $NotesFile = "docs/RELEASE_$($ProjectVersion.Replace('.', '_')).md"
+          if (-not (Test-Path -LiteralPath $NotesFile)) { throw "Release notes missing: $NotesFile" }
           "RELEASE_VERSION=$ProjectVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "CINEPULSE_RELEASE_VERSION_OK $ProjectVersion"
+          "RELEASE_NOTES_FILE=$NotesFile" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "CINEPULSE_RELEASE_VERSION_OK $ProjectVersion notes=$NotesFile"
 
       - name: Install FFmpeg
         shell: pwsh
@@ -160,8 +171,8 @@ jobs:
           )
           $Args = @('release', 'create', $Tag) + $Assets + @(
             '--repo', $env:GITHUB_REPOSITORY,
-            '--title', "CinePulse $env:RELEASE_VERSION — Reliability Hardening",
-            '--notes-file', 'docs/RELEASE_1_1_1.md'
+            '--title', "CinePulse $env:RELEASE_VERSION",
+            '--notes-file', $env:RELEASE_NOTES_FILE
           )
           if ($RemoteTag) {
             git fetch origin "refs/tags/$Tag:refs/tags/$Tag"

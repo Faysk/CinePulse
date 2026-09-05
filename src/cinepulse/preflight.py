@@ -60,15 +60,24 @@ class StoragePlan:
         return tuple(reasons)
 
 
-def nearest_existing_parent(path: Path) -> Path:
+def nearest_existing_parent(path: Path, *, path_is_file: bool = False) -> Path:
+    """Return the nearest existing directory without guessing from a suffix.
+
+    A directory may legitimately contain dots (for example ``scratch.v2``), so
+    suffix-based file detection is unsafe.  Callers that are resolving a file
+    path must say so explicitly; existing paths are inspected by type.
+    """
+
     candidate = path.expanduser().resolve(strict=False)
-    if candidate.suffix:
+    if candidate.exists():
+        return candidate if candidate.is_dir() else candidate.parent
+    if path_is_file:
         candidate = candidate.parent
     while not candidate.exists() and candidate != candidate.parent:
         candidate = candidate.parent
     if not candidate.exists():
         raise OSError(f"Nenhuma pasta existente foi encontrada para {path}.")
-    return candidate
+    return candidate if candidate.is_dir() else candidate.parent
 
 
 def volume_identity(path: Path) -> str:
@@ -92,7 +101,7 @@ def build_storage_plan(
     cache: Path | None = None,
     cache_growth_gb: float = 0.0,
 ) -> StoragePlan:
-    output_parent = nearest_existing_parent(output)
+    output_parent = nearest_existing_parent(output, path_is_file=True)
     temporary_parent = nearest_existing_parent(temporary)
     output_volume = volume_identity(output_parent)
     temporary_volume = volume_identity(temporary_parent)
@@ -125,8 +134,8 @@ def validate_output_path(output: Path, inputs: tuple[Path, ...]) -> tuple[str, .
     return tuple(errors)
 
 
-def check_directory_writable(path: Path) -> None:
-    parent = nearest_existing_parent(path)
+def check_directory_writable(path: Path, *, path_is_file: bool = True) -> None:
+    parent = nearest_existing_parent(path, path_is_file=path_is_file)
     handle, probe = tempfile.mkstemp(prefix=".cinepulse-write-", dir=parent)
     os.close(handle)
     Path(probe).unlink(missing_ok=True)

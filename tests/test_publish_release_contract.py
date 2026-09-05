@@ -61,3 +61,12 @@ def test_publisher_release_is_gated_by_repository_version() -> None:
     assert "Version mismatch: pyproject=" in text
     assert "Requested version" in text
     assert "Stable publisher requires x.y.z SemVer" in text
+
+
+def test_publisher_binds_release_notes_and_push_trigger_to_version_metadata() -> None:
+    text = _workflow()
+    assert "'pyproject.toml'" in text
+    assert "'src/cinepulse/__init__.py'" in text
+    assert "RELEASE_$($ProjectVersion.Replace('.', '_')).md" in text
+    assert "RELEASE_NOTES_FILE=$NotesFile" in text
+    assert "'--notes-file', $env:RELEASE_NOTES_FILE" in text

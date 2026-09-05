@@ -29,17 +29,13 @@ class AtomicOutput:
     def commit(self) -> Path:
         if not self.partial.is_file() or self.partial.stat().st_size == 0:
             raise RuntimeError("A saída temporária não existe ou está vazia.")
+        # final and partial intentionally live in the same directory/filesystem.
+        # os.replace(partial, final) therefore provides the atomic hand-off we
+        # need while leaving an existing final untouched until the last step.
+        # The old two-step final->backup, partial->final sequence had a crash
+        # window in which the user's valid output disappeared from final.
         self.backup.unlink(missing_ok=True)
-        had_previous = self.final.exists()
-        if had_previous:
-            os.replace(self.final, self.backup)
-        try:
-            os.replace(self.partial, self.final)
-        except Exception:
-            if had_previous and self.backup.exists() and not self.final.exists():
-                os.replace(self.backup, self.final)
-            raise
-        self.backup.unlink(missing_ok=True)
+        os.replace(self.partial, self.final)
         return self.final
 
     def discard(self) -> None:
@@ -82,6 +78,9 @@ def process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except (OSError, PermissionError):
+    except PermissionError:
+        # EPERM means the process exists but belongs to a security context the
+        # current process cannot signal. Treating it as dead can steal locks.
+        return True
+    except OSError:
         return False
-

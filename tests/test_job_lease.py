@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
-from cinepulse.job_lease import JobLease, LeaseBusy
+from cinepulse.job_lease import JobLease, LeaseBusy, LeaseOwnershipLost, _windows_process_api
 
 
 class Clock:
@@ -111,6 +114,58 @@ class JobLeaseTests(unittest.TestCase):
             second = lease.heartbeat(phase="rife", unit="segment-2", progress=True)
             self.assertEqual(first.progress_counter + 1, second.progress_counter)
             lease.release()
+
+    def test_mutation_guard_serializes_competing_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lease.json"
+            owner = JobLease(
+                path, "job-1", pid=100, mutation_timeout=1.0,
+                process_token=lambda pid: f"start-{pid}", alive=lambda _pid: True,
+            )
+            challenger = JobLease(
+                path, "job-1", pid=200, mutation_timeout=1.0,
+                process_token=lambda pid: f"start-{pid}", alive=lambda _pid: True,
+            )
+            entered = threading.Event()
+            finished = threading.Event()
+            errors: list[BaseException] = []
+
+            def contender() -> None:
+                entered.set()
+                try:
+                    with challenger._mutation_guard():
+                        pass
+                except BaseException as exc:  # pragma: no cover - diagnostic path
+                    errors.append(exc)
+                finally:
+                    finished.set()
+
+            with owner._mutation_guard():
+                thread = threading.Thread(target=contender)
+                thread.start()
+                self.assertTrue(entered.wait(0.5))
+                time.sleep(0.05)
+                self.assertFalse(finished.is_set(), "challenger entered while owner still held mutation guard")
+            self.assertTrue(finished.wait(1.0))
+            thread.join(timeout=1.0)
+            self.assertFalse(errors)
+
+    def test_heartbeat_refuses_foreign_nonce(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lease.json"
+            lease = JobLease(path, "job-1")
+            lease.acquire()
+            payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+            payload["nonce"] = "foreign-owner"
+            path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+            with self.assertRaises(LeaseOwnershipLost):
+                lease.heartbeat(progress=True)
+
+    def test_windows_api_declares_pointer_sized_handle_contract(self) -> None:
+        source = inspect.getsource(_windows_process_api)
+        self.assertIn("wintypes.HANDLE", source)
+        self.assertIn("OpenProcess.restype", source)
+        self.assertIn("CloseHandle.argtypes", source)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado: `1.1.1`. O instalador Windows 1.1 é autocontido por diretório: Python, runtime, componentes, modelos, dados, caches e temporários ficam sob a pasta do CinePulse escolhida pelo usuário. A 1.1.1 adiciona hardening transacional do updater, autorreparo do runtime privado e gates de release mais estritos. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
+> Estado: `1.1.2`. O instalador Windows 1.1 é autocontido por diretório: Python, runtime, componentes, modelos, dados, caches e temporários ficam sob a pasta do CinePulse escolhida pelo usuário. A 1.1.2 fecha a auditoria pós-1.1.1 com hardening de persistência, locks/leases, cancelamento, updater e publicação versionada. Real-ESRGAN, RIFE, Demucs e VMAF integram o pipeline principal. A recuperação genérica de renders permanece em **Preview/shadow por padrão** até completar os gates físicos específicos; o fluxo estável não anuncia retomada genérica como capacidade aceita. A tela **IA local** também pode baixar componentes experimentais mediante aceite explícito das licenças e riscos; esses arquivos não são anunciados como funções prontas do render.
 
 ## O que já funciona
 
