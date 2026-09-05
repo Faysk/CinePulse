@@ -27,102 +27,86 @@ jobs:
           path = Path('src/cinepulse/studio.py')
           text = path.read_text(encoding='utf-8')
 
-          old_import = 'from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads\n'
-          new_import = 'from .performance_policy import (\n    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads, realesrgan_pipeline_threads,\n)\n'
-          if old_import not in text:
-              raise SystemExit('H8 expected performance_policy import not found')
-          text = text.replace(old_import, new_import, 1)
+          def replace_once(value: str, old: str, new: str, label: str) -> str:
+              if old not in value:
+                  raise SystemExit(f'H8 expected {label} not found')
+              return value.replace(old, new, 1)
 
-          old_mode = '''            dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
-              machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
-              cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
-          '''
-          new_mode = '''            dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
-              machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
-              machine_profile = profile_for_threads(settings.cpu_threads, cpu_topology.logical_cpus)
-              overnight_mode = machine_profile == PROFILE_OVERNIGHT
-              cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
-              if overnight_mode:
-                  self._log("H8 Overnight: controlador sustentado ativo; somente downshift de recursos é permitido.")
-          '''
-          if old_mode not in text:
-              raise SystemExit('H8 expected machine-mode block not found')
-          text = text.replace(old_mode, new_mode, 1)
+          text = replace_once(
+              text,
+              'from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads\n',
+              'from .performance_policy import (\n    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads, realesrgan_pipeline_threads,\n)\n',
+              'performance_policy import',
+          )
 
-          old_ai = '''            h5_ai_controller = AdaptiveRuntimeController(
-                  gpu_index=0,
-                  allow_extract_overlap=realesrgan_budget.overlap_extract,
-                  allow_pack_overlap=realesrgan_budget.overlap_pack,
-              )
-          '''
-          new_ai = '''            h5_ai_controller = AdaptiveRuntimeController(
-                  gpu_index=0,
-                  allow_extract_overlap=realesrgan_budget.overlap_extract,
-                  allow_pack_overlap=realesrgan_budget.overlap_pack,
-                  overnight=overnight_mode,
-                  scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
-              )
-          '''
-          if old_ai not in text:
-              raise SystemExit('H8 expected AI controller block not found')
-          text = text.replace(old_ai, new_ai, 1)
+          mode_line = '            machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"\n'
+          text = replace_once(
+              text,
+              mode_line,
+              mode_line
+              + '            machine_profile = profile_for_threads(settings.cpu_threads, cpu_topology.logical_cpus)\n'
+              + '            overnight_mode = machine_profile == PROFILE_OVERNIGHT\n'
+              + '            if overnight_mode:\n'
+              + '                self._log("H8 Overnight: controlador sustentado ativo; somente downshift de recursos é permitido.")\n',
+              'machine-mode line',
+          )
 
-          old_rife = '''            h5_rife_controller = AdaptiveRuntimeController(
-                  gpu_index=0,
-                  allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
-                  allow_pack_overlap=False,
-              )
-          '''
-          new_rife = '''            h5_rife_controller = AdaptiveRuntimeController(
-                  gpu_index=0,
-                  allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
-                  allow_pack_overlap=False,
-                  overnight=overnight_mode,
-                  scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
-              )
-          '''
-          if old_rife not in text:
-              raise SystemExit('H8 expected RIFE controller block not found')
-          text = text.replace(old_rife, new_rife, 1)
+          text = replace_once(
+              text,
+              '                allow_pack_overlap=realesrgan_budget.overlap_pack,\n            )',
+              '                allow_pack_overlap=realesrgan_budget.overlap_pack,\n'
+              '                overnight=overnight_mode,\n'
+              '                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,\n'
+              '            )',
+              'Real-ESRGAN adaptive controller',
+          )
+          text = replace_once(
+              text,
+              '                allow_pack_overlap=False,\n            )',
+              '                allow_pack_overlap=False,\n'
+              '                overnight=overnight_mode,\n'
+              '                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,\n'
+              '            )',
+              'RIFE adaptive controller',
+          )
 
-          old_log = '''                            f"chunk={decision.chunk_scale:.2f}x, extract_overlap={decision.allow_extract_overlap}, "
-                              f"pack_overlap={decision.allow_pack_overlap}. Qualidade/modelo/FPS permanecem inalterados."
-          '''
-          new_log = '''                            f"chunk={decision.chunk_scale:.2f}x, cpu={decision.cpu_scale:.2f}x, "
-                              f"extract_overlap={decision.allow_extract_overlap}, pack_overlap={decision.allow_pack_overlap}, "
-                              f"cooldown_hint={decision.cooldown_hint_seconds:.0f}s. Qualidade/modelo/FPS permanecem inalterados."
-          '''
-          if old_log not in text:
-              raise SystemExit('H8 expected downshift log block not found')
-          text = text.replace(old_log, new_log, 1)
+          text = replace_once(
+              text,
+              '                            f"chunk={decision.chunk_scale:.2f}x, extract_overlap={decision.allow_extract_overlap}, "\n'
+              '                            f"pack_overlap={decision.allow_pack_overlap}. Qualidade/modelo/FPS permanecem inalterados."\n',
+              '                            f"chunk={decision.chunk_scale:.2f}x, cpu={decision.cpu_scale:.2f}x, "\n'
+              '                            f"extract_overlap={decision.allow_extract_overlap}, pack_overlap={decision.allow_pack_overlap}, "\n'
+              '                            f"cooldown_hint={decision.cooldown_hint_seconds:.0f}s. Qualidade/modelo/FPS permanecem inalterados."\n',
+              'downshift log',
+          )
 
-          old_decision = '''                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
-                  else:
-                      active_chunk_frames = chunk_frames
-                  count = min(active_chunk_frames, total_frames - processed)
-          '''
-          new_decision = '''                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
-                      active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
-                  else:
-                      active_chunk_frames = chunk_frames
-                      active_cpu_threads = cpu_threads
-                  count = min(active_chunk_frames, total_frames - processed)
-          '''
-          if old_decision not in text:
-              raise SystemExit('H8 expected Real-ESRGAN runtime decision block not found')
-          text = text.replace(old_decision, new_decision, 1)
-
-          old_pack_threads = '                    "-pix_fmt", "yuv420p", "-threads", str(cpu_threads),\n'
-          new_pack_threads = '                    "-pix_fmt", "yuv420p", "-threads", str(active_cpu_threads),\n'
-          if old_pack_threads not in text:
-              raise SystemExit('H8 expected Real-ESRGAN pack thread argument not found')
-          text = text.replace(old_pack_threads, new_pack_threads, 1)
-
+          method_start = text.index('    def _enhance_clip_ai(')
+          method_end = text.index('    def _interpolate_rife(', method_start)
+          before, method, after = text[:method_start], text[method_start:method_end], text[method_end:]
+          method = replace_once(
+              method,
+              '                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames)\n'
+              '                else:\n'
+              '                    active_chunk_frames = chunk_frames\n',
+              '                    active_chunk_frames = decision.limit_chunk_frames(chunk_frames)\n'
+              '                    active_cpu_threads = decision.limit_cpu_threads(cpu_threads)\n'
+              '                else:\n'
+              '                    active_chunk_frames = chunk_frames\n'
+              '                    active_cpu_threads = cpu_threads\n',
+              'Real-ESRGAN runtime decision',
+          )
+          method = replace_once(
+              method,
+              '                    "-pix_fmt", "yuv420p", "-threads", str(cpu_threads),\n',
+              '                    "-pix_fmt", "yuv420p", "-threads", str(active_cpu_threads),\n',
+              'Real-ESRGAN pack threads',
+          )
+          text = before + method + after
           path.write_text(text, encoding='utf-8', newline='\n')
       - name: Focused H8 contract tests
         run: |
           python -m compileall -q src tests
-          python -m unittest -v tests.test_adaptive_runtime tests.test_overnight_runtime tests.test_h8_adaptive_integration tests.test_h4_overlap_contract tests.test_h5_runtime_integration
+          python -m unittest -v tests.test_adaptive_runtime tests.test_overnight_runtime tests.test_h8_adaptive_integration tests.test_h4_overlap_contract tests.test_h5_runtime_integration tests.test_overlay_composer tests.test_gpu_compositor tests.test_tensorrt_preview
       - name: Assert live H8 wiring
         shell: python
         run: |
