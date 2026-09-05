@@ -4415,10 +4415,10 @@ class VideoOptimizerStudio:
             rife_budget = derive_pipeline_budget("rife", **h4_common)
             self._log(
                 "H4 HEADROOM: "
-                f"RAM={neural_headroom.ram_available_gb if neural_headroom.ram_available_gb is not None else "n/a"} GiB • "
-                f"VRAM livre={neural_headroom.vram_free_mb if neural_headroom.vram_free_mb is not None else "n/a"} MiB • "
+                f"RAM={neural_headroom.ram_available_gb if neural_headroom.ram_available_gb is not None else 'n/a'} GiB • "
+                f"VRAM livre={neural_headroom.vram_free_mb if neural_headroom.vram_free_mb is not None else 'n/a'} MiB • "
                 f"scratch livre={neural_headroom.scratch_free_gb:.2f} GiB • "
-                f"write={neural_headroom.scratch_write_mbps if neural_headroom.scratch_write_mbps is not None else "n/a"} MB/s • "
+                f"write={neural_headroom.scratch_write_mbps if neural_headroom.scratch_write_mbps is not None else 'n/a'} MB/s • "
                 f"probe={neural_headroom.probe_bytes / (1024 ** 2):.0f} MiB"
             )
             self._log(f"H4 Real-ESRGAN budget: {realesrgan_budget.reason}")
