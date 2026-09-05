@@ -9,15 +9,17 @@ Unproven GPU routes retain the deterministic CPU-reference renderer.
 from pathlib import Path
 import queue
 import threading
-from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Toplevel, filedialog, messagebox, ttk
+from tkinter import BooleanVar, DoubleVar, IntVar, PhotoImage, StringVar, Toplevel, filedialog, messagebox, ttk
 import uuid
 
 from ..composer_base_probe import probe_composer_base
 from ..composer_export import ComposerExportRequest, export_composer_reference
 from ..composer_media import probe_composer_media, validate_layer_media
+from ..composer_preview import ComposerPreviewResult, render_composer_preview
 from ..gpu_compositor import OverlayLayer
 from ..loop_engine import FFMPEG, FFPROBE
 from ..overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer, media_layer_from_path
+from .preview import to_ppm_bytes
 
 
 MEDIA_LABELS = {
@@ -63,7 +65,7 @@ def _default_export_path(source: Path) -> Path:
 
 
 def _snapshot_state(state: OverlayComposerState) -> OverlayComposerState:
-    """Detach a running export from subsequent editor mutations."""
+    """Detach a running preview/export from subsequent editor mutations."""
     return OverlayComposerState.from_dict(state.as_dict())
 
 
@@ -82,8 +84,8 @@ def show_overlay_composer(studio) -> None:
     window = Toplevel(studio.root if hasattr(studio, "root") else studio)
     studio._overlay_composer_window = window
     window.title("CinePulse Preview — Overlay Composer")
-    window.geometry("980x710")
-    window.minsize(800, 580)
+    window.geometry("1000x730")
+    window.minsize(820, 600)
 
     # Worker threads never call Tk directly. They enqueue UI work and this pump
     # executes it on Tk's owning thread.
@@ -165,8 +167,10 @@ def show_overlay_composer(studio) -> None:
     bars = IntVar(value=64)
     selected_id = StringVar(value="")
     export_progress = DoubleVar(value=0.0)
+    preview_time = DoubleVar(value=0.0)
     export_cancel = threading.Event()
     export_state = {"running": False, "close_requested": False}
+    preview_state = {"running": False, "close_requested": False}
 
     def field(
         row: int,
@@ -238,7 +242,7 @@ def show_overlay_composer(studio) -> None:
         if select and tree.exists(select):
             tree.selection_set(select)
             tree.focus(select)
-        if not export_state["running"]:
+        if not export_state["running"] and not preview_state["running"]:
             status.set(
                 f"{len(state.items)} camada(s), {len(state.ordered())} ativa(s) • "
                 "Preview isolado • CUDA só com evidência aprovada"
@@ -414,7 +418,7 @@ def show_overlay_composer(studio) -> None:
 
     footer = ttk.Frame(shell)
     footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-    footer.columnconfigure(3, weight=1)
+    footer.columnconfigure(4, weight=1)
 
     def save_state() -> None:
         default = _default_project_path(studio)
@@ -434,10 +438,10 @@ def show_overlay_composer(studio) -> None:
             messagebox.showerror("Overlay Composer", str(exc), parent=window)
 
     def load_state() -> None:
-        if export_state["running"]:
+        if export_state["running"] or preview_state["running"]:
             messagebox.showinfo(
                 "Overlay Composer",
-                "Cancele o export atual antes de abrir outro projeto.",
+                "Aguarde o preview ou cancele o export antes de abrir outro projeto.",
                 parent=window,
             )
             return
@@ -459,18 +463,160 @@ def show_overlay_composer(studio) -> None:
 
     ttk.Button(footer, text="Abrir…", command=load_state).grid(row=0, column=0, sticky="w")
     ttk.Button(footer, text="Salvar…", command=save_state).grid(
-        row=0, column=1, sticky="w", padx=(6, 0)
+        row=0, column=1, sticky="w", padx=(6, 10)
     )
+    ttk.Label(footer, text="Preview s").grid(row=0, column=2, sticky="e")
+    ttk.Spinbox(
+        footer,
+        textvariable=preview_time,
+        from_=0.0,
+        to=86400.0,
+        increment=0.1,
+        width=8,
+    ).grid(row=0, column=3, sticky="w", padx=(5, 8))
+
+    preview_button: ttk.Button
+    export_button: ttk.Button
+    cancel_button: ttk.Button
+
+    def show_preview_result(result: ComposerPreviewResult) -> None:
+        preview_state["running"] = False
+        preview_button.configure(state="normal")
+        if not export_state["running"]:
+            export_button.configure(state="normal")
+        if preview_state["close_requested"] or export_state["close_requested"]:
+            studio._overlay_composer_window = None
+            try:
+                existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
+                if existing_preview is not None and existing_preview.winfo_exists():
+                    existing_preview.destroy()
+            except Exception:
+                pass
+            window.destroy()
+            return
+
+        existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
+        try:
+            if existing_preview is not None and existing_preview.winfo_exists():
+                existing_preview.destroy()
+        except Exception:
+            pass
+        preview_window = Toplevel(window)
+        studio._overlay_composer_preview_window = preview_window
+        preview_window.title("CinePulse Preview — Composer frame")
+        frame = ttk.Frame(preview_window, padding=8)
+        frame.pack(fill="both", expand=True)
+        photo = PhotoImage(
+            data=to_ppm_bytes(result.rgba[..., :3]),
+            format="PPM",
+        )
+        image = ttk.Label(frame, image=photo, anchor="center")
+        image.image = photo  # type: ignore[attr-defined]
+        image.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text=(
+                f"{result.canvas_width}×{result.canvas_height} • frame {result.frame_index} • "
+                f"t={result.project_time:.3f}s • CPU reference"
+            ),
+        ).pack(anchor="e", pady=(5, 0))
+        preview_window.resizable(False, False)
+        status.set(
+            f"Preview fiel pronto • {result.canvas_width}×{result.canvas_height} • "
+            f"{result.media_layers} mídia(s) • {result.visualizers} visualizer(s)"
+        )
+
+    def finish_preview_error(message: str) -> None:
+        preview_state["running"] = False
+        preview_button.configure(state="normal")
+        if not export_state["running"]:
+            export_button.configure(state="normal")
+        if preview_state["close_requested"] or export_state["close_requested"]:
+            studio._overlay_composer_window = None
+            window.destroy()
+            return
+        status.set("Falha ao gerar preview do Composer")
+        messagebox.showerror("Overlay Composer", message, parent=window)
+
+    def start_preview() -> None:
+        if preview_state["running"] or export_state["running"]:
+            return
+        source = _studio_source_path(studio)
+        if source is None or not source.is_file():
+            messagebox.showerror(
+                "Overlay Composer",
+                "Selecione um vídeo fonte válido no CinePulse.",
+                parent=window,
+            )
+            return
+        if not FFMPEG or not FFPROBE:
+            messagebox.showerror(
+                "Overlay Composer",
+                "FFmpeg/FFprobe não estão disponíveis.",
+                parent=window,
+            )
+            return
+        snapshot = _snapshot_state(state)
+        if not snapshot.ordered():
+            messagebox.showerror(
+                "Overlay Composer",
+                "Ative pelo menos uma camada antes de gerar o preview.",
+                parent=window,
+            )
+            return
+        try:
+            requested_time = max(0.0, float(preview_time.get()))
+        except (TypeError, ValueError):
+            messagebox.showerror("Overlay Composer", "Tempo de preview inválido.", parent=window)
+            return
+
+        preview_state["running"] = True
+        preview_state["close_requested"] = False
+        preview_button.configure(state="disabled")
+        export_button.configure(state="disabled")
+        status.set("Gerando preview fiel • canvas limitado a 960×540…")
+
+        def worker() -> None:
+            try:
+                profile = probe_composer_base(str(FFPROBE), source)
+                result = render_composer_preview(
+                    source=source,
+                    profile=profile,
+                    state=snapshot,
+                    ffmpeg=str(FFMPEG),
+                    ffprobe=str(FFPROBE),
+                    project_time=requested_time,
+                    audio_sources={"master": source},
+                    max_width=960,
+                    max_height=540,
+                )
+                post(show_preview_result, result)
+            except Exception as exc:
+                post(finish_preview_error, str(exc))
+
+        threading.Thread(
+            target=worker,
+            name="cinepulse-composer-preview",
+            daemon=True,
+        ).start()
+
+    preview_button = ttk.Button(
+        footer,
+        text="Prévia fiel do frame",
+        command=start_preview,
+    )
+    preview_button.grid(row=0, column=4, sticky="w")
+
+    export_buttons = ttk.Frame(footer)
+    export_buttons.grid(row=0, column=5, sticky="e", padx=(10, 0))
+
     ttk.Progressbar(
         footer,
         variable=export_progress,
         maximum=100.0,
         mode="determinate",
-        length=180,
-    ).grid(row=0, column=2, sticky="e", padx=(14, 8))
-
-    export_buttons = ttk.Frame(footer)
-    export_buttons.grid(row=0, column=4, sticky="e")
+        length=260,
+    ).grid(row=1, column=2, columnspan=4, sticky="ew", pady=(7, 0))
 
     def finish_export(
         message: str,
@@ -481,8 +627,16 @@ def show_overlay_composer(studio) -> None:
         export_state["running"] = False
         export_button.configure(state="normal")
         cancel_button.configure(state="disabled")
+        if not preview_state["running"]:
+            preview_button.configure(state="normal")
         if export_state["close_requested"]:
             studio._overlay_composer_window = None
+            try:
+                existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
+                if existing_preview is not None and existing_preview.winfo_exists():
+                    existing_preview.destroy()
+            except Exception:
+                pass
             window.destroy()
             return
         if cancelled:
@@ -504,7 +658,7 @@ def show_overlay_composer(studio) -> None:
         status.set("Cancelando export do Composer…")
 
     def start_export() -> None:
-        if export_state["running"]:
+        if export_state["running"] or preview_state["running"]:
             return
         source = _studio_source_path(studio)
         if source is None or not source.is_file():
@@ -563,6 +717,7 @@ def show_overlay_composer(studio) -> None:
         export_state["running"] = True
         export_state["close_requested"] = False
         export_button.configure(state="disabled")
+        preview_button.configure(state="disabled")
         cancel_button.configure(state="normal")
         status.set("Preparando export lossless • analisando timing exato das camadas…")
 
@@ -624,8 +779,8 @@ def show_overlay_composer(studio) -> None:
     ttk.Label(
         shell,
         text=(
-            "Export CPU de referência: FFV1 RGB lossless + áudio master copiado. "
-            "Blend avançado cai no CPU; Stable permanece intacto."
+            "Prévia fiel limitada a 960×540; export CPU: FFV1 RGB lossless + áudio master. "
+            "Blend avançado cai no CPU; Stable intacto."
         ),
     ).grid(row=3, column=0, columnspan=2, sticky="e", pady=(5, 0))
 
@@ -635,7 +790,17 @@ def show_overlay_composer(studio) -> None:
             request_cancel()
             status.set("Fechando após cancelar e limpar o export em andamento…")
             return
+        if preview_state["running"]:
+            preview_state["close_requested"] = True
+            status.set("Fechando após concluir o preview em andamento…")
+            return
         studio._overlay_composer_window = None
+        try:
+            existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
+            if existing_preview is not None and existing_preview.winfo_exists():
+                existing_preview.destroy()
+        except Exception:
+            pass
         window.destroy()
 
     window.protocol("WM_DELETE_WINDOW", close_window)
