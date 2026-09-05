@@ -1,0 +1,104 @@
+name: Temporary Hardware Phase 2 Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab-phase2]
+    paths:
+      - .github/workflows/_tmp-hardware-phase2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab-phase2
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Patch Phase 2 integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          studio = Path('src/cinepulse/studio.py')
+          text = studio.read_text(encoding='utf-8')
+          old_import = 'from .hardware import detect_hardware\n'
+          new_import = old_import + 'from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads\n'
+          if 'from .performance_policy import clamp_cpu_threads' not in text:
+              if old_import not in text:
+                  raise SystemExit('studio hardware import anchor missing')
+              text = text.replace(old_import, new_import, 1)
+
+          legacy_default = 'max(1, min(8, os.cpu_count() or 4))'
+          if legacy_default not in text:
+              raise SystemExit('legacy 8-thread default anchor missing')
+          text = text.replace(legacy_default, 'default_cpu_threads(os.cpu_count() or 4)')
+
+          old_setting = '"cpu_threads": int(self.cpu_threads.get()),'
+          new_setting = '"cpu_threads": clamp_cpu_threads(int(self.cpu_threads.get()), self._hardware.cpu_threads),'
+          if old_setting not in text:
+              raise SystemExit('cpu_threads settings anchor missing')
+          text = text.replace(old_setting, new_setting, 1)
+
+          old_realesrgan = '"-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", "2:2:2",'
+          new_realesrgan = '"-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", realesrgan_pipeline_threads(cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb),'
+          if old_realesrgan not in text:
+              raise SystemExit('Real-ESRGAN -j anchor missing')
+          text = text.replace(old_realesrgan, new_realesrgan, 1)
+          if legacy_default in text or '"-j", "2:2:2"' in text:
+              raise SystemExit('legacy Phase 2 anchors remain in studio.py')
+          studio.write_text(text, encoding='utf-8')
+
+          view = Path('src/cinepulse/ui/quality_view.py')
+          text = view.read_text(encoding='utf-8')
+          if 'from tkinter import ttk\n' in text:
+              text = text.replace('from tkinter import ttk\n', 'from tkinter import StringVar, ttk\n', 1)
+          if 'from ..performance_policy import MACHINE_PROFILES' not in text:
+              anchor = 'from .polish_view import register_responsive_split\n'
+              if anchor not in text:
+                  raise SystemExit('quality_view import anchor missing')
+              text = text.replace(
+                  anchor,
+                  'from ..performance_policy import MACHINE_PROFILES, machine_budget, profile_for_threads\n' + anchor,
+                  1,
+              )
+
+          helper_anchor = '    ttk.Label(machine, text="Threads CPU", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=5)\n'
+          if 'def _apply_machine_profile' not in text:
+              if helper_anchor not in text:
+                  raise SystemExit('quality_view threads anchor missing')
+              helper = '''    logical_threads = max(1, int(studio._hardware.cpu_threads))\n    profile_value = StringVar(value=profile_for_threads(studio.cpu_threads.get(), logical_threads))\n    profile_detail = StringVar(value="")\n\n    def _refresh_machine_profile_detail() -> None:\n        selected = profile_for_threads(studio.cpu_threads.get(), logical_threads)\n        profile_value.set(selected)\n        if selected in MACHINE_PROFILES:\n            budget = machine_budget(selected, logical_threads, studio._hardware.vram_mb)\n            profile_detail.set(\n                f"{budget.cpu_threads}/{budget.logical_threads} threads • reserva {budget.reserved_threads} • Real-ESRGAN {budget.realesrgan_pipeline}"\n            )\n        else:\n            profile_detail.set(f"Manual • {studio.cpu_threads.get()}/{logical_threads} threads lógicas")\n\n    def _sync_machine_profile() -> None:\n        _refresh_machine_profile_detail()\n        studio._quality_setting_changed()\n\n    def _apply_machine_profile(profile: str) -> None:\n        budget = machine_budget(profile, logical_threads, studio._hardware.vram_mb)\n        studio.cpu_threads.set(budget.cpu_threads)\n        _refresh_machine_profile_detail()\n        studio._quality_setting_changed()\n\n    _refresh_machine_profile_detail()\n\n'''
+              text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
+          old_spin = '    threads = ttk.Spinbox(machine, from_=1, to=64, textvariable=studio.cpu_threads, width=8, command=studio._quality_setting_changed)\n'
+          new_spin = '    threads = ttk.Spinbox(machine, from_=1, to=logical_threads, textvariable=studio.cpu_threads, width=8, command=_sync_machine_profile)\n'
+          if old_spin not in text:
+              raise SystemExit('quality_view thread spinbox anchor missing')
+          text = text.replace(old_spin, new_spin, 1)
+          old_bind = '    threads.bind("<FocusOut>", lambda _event: studio._quality_setting_changed())\n'
+          new_bind = '    threads.bind("<FocusOut>", lambda _event: _sync_machine_profile())\n'
+          if old_bind not in text:
+              raise SystemExit('quality_view thread bind anchor missing')
+          text = text.replace(old_bind, new_bind, 1)
+
+          profile_anchor = '    ttk.Label(machine, text="GB • limpeza LRU automática", style="CardMuted.TLabel").grid(row=6, column=2, sticky="w", padx=(7, 0))\n'
+          if 'text="Perfil de utilização"' not in text:
+              if profile_anchor not in text:
+                  raise SystemExit('quality_view cache/profile anchor missing')
+              profile_ui = '''\n\n    ttk.Label(machine, text="Perfil de utilização", style="Card.TLabel").grid(row=7, column=0, sticky="w", pady=(10, 5))\n    profiles = ttk.Frame(machine, style="Card.TFrame")\n    profiles.grid(row=7, column=1, columnspan=2, sticky="ew", pady=(10, 5))\n    for profile in MACHINE_PROFILES:\n        ttk.Button(\n            profiles, text=profile, style="Ghost.TButton",\n            command=lambda value=profile: _apply_machine_profile(value),\n        ).pack(side="left", fill="x", expand=True, padx=(0, 5))\n    ttk.Label(\n        machine, textvariable=profile_detail, style="CardMuted.TLabel", wraplength=395, justify="left"\n    ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(0, 2))\n'''
+              text = text.replace(profile_anchor, profile_anchor + profile_ui, 1)
+          view.write_text(text, encoding='utf-8')
+      - name: Commit integration and remove temporary writer
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/_tmp-hardware-phase2.yml
+          git add src/cinepulse/studio.py src/cinepulse/ui/quality_view.py
+          git commit -m "Hardware Phase 2: integrate utilization scheduler"
+          git push origin HEAD:preview-restoration-lab-phase2
