@@ -11,7 +11,9 @@ from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Toplevel, filedialog, messagebox, ttk
 import uuid
 
+from ..composer_media import probe_composer_media, validate_layer_media
 from ..gpu_compositor import OverlayLayer
+from ..loop_engine import FFPROBE
 from ..overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer, media_layer_from_path
 
 
@@ -220,9 +222,19 @@ def show_overlay_composer(studio) -> None:
             return
         try:
             layer = media_layer_from_path(path)
+            info = probe_composer_media(str(FFPROBE), path)
+            problems = validate_layer_media(layer, info)
+            if problems:
+                raise ValueError("; ".join(problems))
             item = ComposerItem("media-" + uuid.uuid4().hex[:8], media=layer)
-            state.add(item); refresh(item.id)
-        except ValueError as exc:
+            state.add(item)
+            refresh(item.id)
+            alpha = " • alpha" if info.has_alpha else ""
+            status.set(
+                f"{Path(path).name}: {info.width}x{info.height} • {info.fps:g} fps • "
+                f"{info.duration:.2f}s{alpha}"
+            )
+        except (ValueError, RuntimeError) as exc:
             messagebox.showerror("Overlay Composer", str(exc), parent=window)
 
     def add_visualizer(kind: str) -> None:
