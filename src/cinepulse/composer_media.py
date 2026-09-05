@@ -7,9 +7,14 @@ render path must not guess timing or transparency from a filename. This module
 turns FFprobe metadata into a small backend-neutral contract that preview, CPU
 rendering and any future evidence-gated GPU compositor can share.
 
+For variable-frame-rate media the CPU reference also records decoded frame
+start timestamps. Playback therefore follows GIF/APNG/WebP delays and VFR alpha
+video timing instead of approximating every asset as constant-rate media.
+
 It is intentionally isolated from Stable RenderSettings.
 """
 
+from bisect import bisect_right
 from dataclasses import dataclass
 import json
 import math
@@ -21,6 +26,7 @@ from typing import Iterable
 from .gpu_compositor import OverlayLayer
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+MAX_TIMELINE_FRAMES = 1_000_000
 
 _ALPHA_PREFIXES = (
     "rgba",
@@ -45,6 +51,8 @@ class ComposerMediaInfo:
     codec: str
     has_alpha: bool
     animated: bool
+    frame_starts: tuple[float, ...] = ()
+    timing_exact: bool = False
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0:
@@ -55,6 +63,23 @@ class ComposerMediaInfo:
             raise ValueError("composer media duration must be positive")
         if self.frame_count <= 0:
             raise ValueError("composer media frame count must be positive")
+        if len(self.frame_starts) > MAX_TIMELINE_FRAMES:
+            raise ValueError("composer media timeline exceeds safe frame bound")
+        if self.frame_starts:
+            if len(self.frame_starts) != self.frame_count:
+                raise ValueError("composer media exact timeline must match frame count")
+            previous = -1.0
+            for index, value in enumerate(self.frame_starts):
+                current = float(value)
+                if not math.isfinite(current) or current < 0:
+                    raise ValueError("composer media frame timestamps must be finite and non-negative")
+                if index == 0 and abs(current) > 1e-6:
+                    raise ValueError("composer media exact timeline must be normalized to zero")
+                if index and current <= previous:
+                    raise ValueError("composer media exact timeline must be strictly increasing")
+                previous = current
+        if self.timing_exact and len(self.frame_starts) != self.frame_count:
+            raise ValueError("exact composer timing requires one timestamp per frame")
 
 
 @dataclass(frozen=True)
@@ -93,6 +118,17 @@ def _parse_float(*values: object) -> float:
     return 0.0
 
 
+def _parse_number(*values: object) -> float | None:
+    for value in values:
+        try:
+            parsed = float(str(value))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed):
+            return parsed
+    return None
+
+
 def _parse_int(*values: object) -> int:
     for value in values:
         try:
@@ -104,6 +140,60 @@ def _parse_int(*values: object) -> int:
     return 0
 
 
+def _exact_frame_timeline(
+    payload: object,
+    *,
+    fallback_duration: float,
+    fallback_fps: float,
+) -> tuple[tuple[float, ...], float]:
+    """Return normalized decoded-frame starts plus exact effective duration.
+
+    FFprobe's best-effort timestamps are preferred because they represent the
+    decoded display order consumed by the sequential reference decoder. Any
+    missing/non-monotonic timestamp makes the exact timeline unavailable and the
+    caller falls back to the conservative CFR inference contract.
+    """
+    if not isinstance(payload, dict):
+        return (), 0.0
+    raw_frames = payload.get("frames")
+    if not isinstance(raw_frames, list) or not raw_frames:
+        return (), 0.0
+    if len(raw_frames) > MAX_TIMELINE_FRAMES:
+        raise ValueError("composer media timeline exceeds safe frame bound")
+
+    timestamps: list[float] = []
+    frame_rows: list[dict] = []
+    for row in raw_frames:
+        if not isinstance(row, dict):
+            return (), 0.0
+        timestamp = _parse_number(row.get("best_effort_timestamp_time"), row.get("pts_time"))
+        if timestamp is None:
+            return (), 0.0
+        timestamps.append(timestamp)
+        frame_rows.append(row)
+
+    base = timestamps[0]
+    starts = [max(0.0, value - base) for value in timestamps]
+    starts[0] = 0.0
+    for previous, current in zip(starts, starts[1:]):
+        if current <= previous:
+            return (), 0.0
+
+    last_duration = _parse_float(frame_rows[-1].get("pkt_duration_time"))
+    if last_duration > 0:
+        effective_duration = starts[-1] + last_duration
+    elif fallback_duration > starts[-1]:
+        effective_duration = fallback_duration
+    elif fallback_fps > 0:
+        effective_duration = starts[-1] + (1.0 / fallback_fps)
+    else:
+        return (), 0.0
+
+    if not math.isfinite(effective_duration) or effective_duration <= starts[-1]:
+        return (), 0.0
+    return tuple(float(value) for value in starts), float(effective_duration)
+
+
 def pixel_format_has_alpha(pixel_format: str) -> bool:
     value = str(pixel_format or "").strip().lower()
     return any(value.startswith(prefix) for prefix in _ALPHA_PREFIXES)
@@ -112,12 +202,10 @@ def pixel_format_has_alpha(pixel_format: str) -> bool:
 def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaInfo:
     """Build a conservative media contract from FFprobe JSON output.
 
-    Some animated-image demuxers omit ``nb_frames`` even when duration and a
-    reliable frame rate are present. Treating those files as one-frame assets
-    makes every playback timestamp resolve to frame zero, so derive the frame
-    count from timing when the explicit count is unavailable. Static images do
-    not normally expose a positive duration and therefore keep the one-frame
-    hold contract.
+    When decoded frame timestamps are available they become the authoritative
+    playback timeline. If FFprobe cannot provide a complete monotonic timeline,
+    the older duration/rate inference remains as a fail-safe rather than
+    inventing partial VFR timing.
     """
     if not isinstance(payload, dict):
         raise ValueError("FFprobe payload must be an object")
@@ -138,6 +226,16 @@ def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaI
     fps = _parse_rate(stream.get("avg_frame_rate")) or _parse_rate(stream.get("r_frame_rate"))
     duration = _parse_float(stream.get("duration"), fmt.get("duration"))
     frames = _parse_int(stream.get("nb_frames"))
+
+    frame_starts, exact_duration = _exact_frame_timeline(
+        payload,
+        fallback_duration=duration,
+        fallback_fps=fps,
+    )
+    timing_exact = bool(frame_starts)
+    if timing_exact:
+        frames = len(frame_starts)
+        duration = exact_duration
 
     if fps <= 0 and frames > 1 and duration > 0:
         fps = frames / duration
@@ -172,11 +270,17 @@ def media_info_from_probe(source: str | Path, payload: object) -> ComposerMediaI
         codec=codec,
         has_alpha=pixel_format_has_alpha(pixel_format),
         animated=animated,
+        frame_starts=frame_starts,
+        timing_exact=timing_exact,
     )
 
 
-def probe_composer_media(ffprobe: str, source: str | Path, *, timeout: float = 15.0) -> ComposerMediaInfo:
+def probe_composer_media(ffprobe: str, source: str | Path, *, timeout: float = 60.0) -> ComposerMediaInfo:
     path = Path(source)
+    # show_frames is intentionally part of the CPU-reference probe. It lets the
+    # compositor honor real per-frame delays for animated images and VFR alpha
+    # video. The compact show_entries set keeps the JSON bounded to fields used
+    # by the timing/media contract instead of returning full frame diagnostics.
     command = [
         str(ffprobe),
         "-v",
@@ -185,6 +289,12 @@ def probe_composer_media(ffprobe: str, source: str | Path, *, timeout: float = 1
         "v:0",
         "-show_streams",
         "-show_format",
+        "-show_frames",
+        "-show_entries",
+        (
+            "stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,r_frame_rate,duration,nb_frames:"
+            "format=duration:frame=best_effort_timestamp_time,pts_time,pkt_duration_time"
+        ),
         "-of",
         "json",
         str(path),
@@ -237,7 +347,8 @@ def playback_position(
     Before ``start_time`` the layer is inactive. Looping layers wrap on media
     duration; non-looping layers become inactive immediately after their last
     frame instead of freezing forever. Static PNGs remain active because their
-    one-frame duration is treated as a held still.
+    one-frame duration is treated as a held still. Exact decoded timestamps win
+    over nominal FPS whenever the probe supplied a complete VFR timeline.
     """
     t = float(project_time) - max(0.0, float(start_time))
     if t < 0:
@@ -257,7 +368,11 @@ def playback_position(
         loop_index = 0
         local = t
 
-    frame = min(info.frame_count - 1, max(0, int(math.floor(local * info.fps + 1e-9))))
+    if info.timing_exact and len(info.frame_starts) == info.frame_count:
+        frame = bisect_right(info.frame_starts, local + 1e-12) - 1
+        frame = min(info.frame_count - 1, max(0, frame))
+    else:
+        frame = min(info.frame_count - 1, max(0, int(math.floor(local * info.fps + 1e-9))))
     return ComposerPlaybackPosition(True, local, frame, loop_index)
 
 
