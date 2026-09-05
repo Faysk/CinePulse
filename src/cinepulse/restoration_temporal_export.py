@@ -5,6 +5,12 @@ FFmpeg, reconstructs selected overlay regions from nearby source frames with a
 bounded rolling window, and feeds the reconstructed stream into a second FFmpeg
 process. Audio is mapped from the original source and color restoration is
 applied only after temporal reconstruction.
+
+The rawvideo bridge does not carry source timestamps. For that reason this path
+fails closed for sources whose average and nominal frame rates disagree (a
+strong VFR signal) instead of silently retiming them to CFR. It also enforces a
+bounded temporal working-set estimate before decoding, which is especially
+important for experimental 8K/12K jobs.
 """
 
 from __future__ import annotations
@@ -29,19 +35,51 @@ class TemporalPreviewCancelled(RuntimeError):
     """Raised when a streaming temporal Preview export is cancelled."""
 
 
+DEFAULT_MAX_TEMPORAL_WORKING_SET_BYTES = 2 * 1024**3
+
+
 @dataclass(frozen=True)
 class PreviewVideoGeometry:
     width: int
     height: int
     fps: float
+    nominal_fps: float | None = None
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0 or self.fps <= 0:
             raise ValueError("invalid Preview video geometry")
+        if self.nominal_fps is not None and self.nominal_fps <= 0:
+            raise ValueError("invalid nominal Preview frame rate")
 
     @property
     def frame_bytes(self) -> int:
         return self.width * self.height * 3
+
+    @property
+    def suspected_vfr(self) -> bool:
+        """Return True when ffprobe exposes materially different avg/base rates.
+
+        This is deliberately conservative. Raw RGB frames do not preserve PTS,
+        so the temporal exporter must not pretend it can safely maintain VFR
+        timing when ffprobe already signals a mismatch.
+        """
+
+        if self.nominal_fps is None:
+            return False
+        scale = max(self.fps, self.nominal_fps, 1.0)
+        return abs(self.fps - self.nominal_fps) / scale > 0.001
+
+    def estimated_temporal_working_set(self, policy: TemporalReconstructionPolicy) -> int:
+        """Estimate bounded resident RGB storage for the rolling window.
+
+        The rolling deque can retain at most ``2 * radius + 1`` decoded frames.
+        Reconstruction also creates a target copy, so reserve one additional
+        full-frame slot. Region-local arrays are deliberately not counted as
+        full frames and remain bounded by the selected overlay sizes.
+        """
+
+        resident_frames = (2 * int(policy.radius) + 1) + 1
+        return self.frame_bytes * resident_frames
 
 
 def _parse_rate(value: str) -> float:
@@ -61,8 +99,18 @@ def _parse_rate(value: str) -> float:
     return result
 
 
+def _optional_rate(value: object) -> float | None:
+    text = str(value or "").strip()
+    if not text or text == "0/0":
+        return None
+    try:
+        return _parse_rate(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
-    """Read only the geometry needed by the rawvideo streaming path."""
+    """Read only the geometry/timing hints needed by the rawvideo path."""
 
     if not ffprobe:
         raise ValueError("ffprobe executable is required for temporal Preview export")
@@ -94,11 +142,16 @@ def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
     if not streams:
         raise RuntimeError("A fonte não possui stream de vídeo para reconstrução temporal.")
     stream = streams[0]
-    fps_text = stream.get("avg_frame_rate") or stream.get("r_frame_rate")
+    avg_fps = _optional_rate(stream.get("avg_frame_rate"))
+    nominal_fps = _optional_rate(stream.get("r_frame_rate"))
+    fps = avg_fps or nominal_fps
+    if fps is None:
+        raise RuntimeError("Não foi possível determinar o frame rate do vídeo Preview.")
     return PreviewVideoGeometry(
         width=int(stream.get("width") or 0),
         height=int(stream.get("height") or 0),
-        fps=_parse_rate(str(fps_text or "")),
+        fps=fps,
+        nominal_fps=nominal_fps,
     )
 
 
@@ -169,6 +222,7 @@ def stream_temporal_preview(
     crf: int = 16,
     preset: str = "slow",
     policy: TemporalReconstructionPolicy = TemporalReconstructionPolicy(),
+    max_working_set_bytes: int = DEFAULT_MAX_TEMPORAL_WORKING_SET_BYTES,
 ) -> TemporalStreamReport:
     """Run bounded rolling-window temporal reconstruction into a complete file."""
 
@@ -176,8 +230,24 @@ def stream_temporal_preview(
         raise ValueError("temporal Preview export requires selected overlay regions")
     if not 0 <= int(crf) <= 51:
         raise ValueError("crf must be between 0 and 51")
+    if int(max_working_set_bytes) <= 0:
+        raise ValueError("max_working_set_bytes must be positive")
 
     geometry = probe_preview_geometry(ffprobe, source)
+    if geometry.suspected_vfr:
+        raise RuntimeError(
+            "A reconstrução temporal Preview não preserva timestamps VFR com segurança; "
+            "esta fonte foi recusada para evitar dessincronização ou retiming silencioso."
+        )
+    estimated_working_set = geometry.estimated_temporal_working_set(policy)
+    if estimated_working_set > int(max_working_set_bytes):
+        gib = estimated_working_set / 1024**3
+        limit_gib = int(max_working_set_bytes) / 1024**3
+        raise RuntimeError(
+            f"Reconstrução temporal exigiria aproximadamente {gib:.2f} GiB de RGB em memória "
+            f"(limite Preview: {limit_gib:.2f} GiB). Reduza resolução/janela ou use um caminho sem reconstrução temporal."
+        )
+
     cancel = cancel_event or threading.Event()
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     decoder: subprocess.Popen | None = None
