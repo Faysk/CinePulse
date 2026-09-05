@@ -87,21 +87,21 @@ class ComposerExportResult:
 
 
 def _range_token(value: str) -> str:
-    return "full" if str(value).strip().lower() in {"pc", "jpeg", "full"} else "limited"
+    return "pc" if str(value).strip().lower() in {"pc", "jpeg", "full"} else "tv"
 
 
 def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[str]:
     p = request.profile
     range_in = _range_token(p.color_range)
-    # zscale explicitly defines the SDR conversion contract rather than relying
-    # on implicit matrix/range guesses.  FFmpeg 9 tightened zscale family
-    # validation: requesting matrix=gbr while the negotiated output was packed
-    # RGBA could leave zscale on a YUV family and fail with code 1026.  An
-    # explicit planar GBR negotiation makes the YUV->RGB family transition part
-    # of zscale itself; the final gbrp->rgba packing is matrix-free.
+    # The reference accepts only BT.709 SDR, so no gamut/transfer conversion is
+    # required here. What must be explicit is the YUV->RGB matrix and range.
+    # swscale's scale filter owns that conversion directly and is portable across
+    # FFmpeg 6-9; newer zscale builds can reject matrix=gbr while negotiating a
+    # YUV output family before a following format=rgba filter (zimg code 1026).
+    # Keeping w/h unchanged makes this a pure color-family/range conversion.
     vf = (
-        f"zscale=matrixin=709:primariesin=709:transferin=709:rangein={range_in}:"
-        "matrix=gbr:primaries=709:transfer=709:range=full,format=gbrp,format=rgba"
+        f"scale=w=iw:h=ih:in_color_matrix=bt709:out_color_matrix=bt709:"
+        f"in_range={range_in}:out_range=pc,format=rgba"
     )
     return [
         str(request.ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error",
