@@ -9,7 +9,7 @@ from tkinter import StringVar, TclError, filedialog, ttk
 from ..loop_engine import FFMPEG, FFPROBE, first_video_size, probe_media
 from ..restoration_export import PreviewExportCancelled, export_preview_restoration
 from ..restoration_preview import build_preview_restoration_plan
-from .restoration_lab import RestorationUiState
+from .restoration_lab import RestorationUiState, source_identity
 
 
 _LABEL_TO_PRESET = {
@@ -105,9 +105,14 @@ def _build_export_plan(studio, source: str):
 
     evidence = ()
     if bool(studio.restoration_remove_overlays.get()):
-        if getattr(studio, "_restoration_plan_source", "") != source or getattr(studio, "_restoration_plan", None) is None:
+        plan = getattr(studio, "_restoration_plan", None)
+        analyzed_identity = getattr(studio, "_restoration_plan_identity", None)
+        current_identity = source_identity(source)
+        if plan is None or analyzed_identity is None:
             raise ValueError("Analise os overlays desta fonte antes de exportar com remoção ativada.")
-        evidence = tuple(studio._restoration_plan.evidence)
+        if current_identity is None or current_identity != analyzed_identity:
+            raise ValueError("A fonte mudou desde a análise. Analise novamente antes de remover overlays.")
+        evidence = tuple(plan.evidence)
 
     return build_preview_restoration_plan(
         evidence,
@@ -137,10 +142,14 @@ def _start_export(studio) -> None:
         studio.restoration_export_status.set(str(exc).strip() or exc.__class__.__name__)
         return
     if not plan.has_work:
-        studio.restoration_export_status.set("Nada para restaurar: ajuste a cor ou ative/análise a remoção de overlays.")
+        studio.restoration_export_status.set(
+            "Nada para restaurar: ajuste a cor ou ative e analise a remoção de overlays."
+        )
         return
     if plan.has_overlay_work and not FFPROBE:
-        studio.restoration_export_status.set("FFprobe não foi encontrado; reconstrução temporal não pode ser exportada com segurança.")
+        studio.restoration_export_status.set(
+            "FFprobe não foi encontrado; a reconstrução temporal não pode ser exportada com segurança."
+        )
         return
 
     suggested = _default_output(source)
@@ -163,7 +172,9 @@ def _start_export(studio) -> None:
     studio._restoration_export_cancel = cancel_event
     studio._restoration_export_running = True
     mode = "reconstrução temporal" if plan.has_overlay_work else "restauração de cor"
-    studio.restoration_export_status.set(f"Exportando Preview com {mode}… o Stable continua livre para tocar a vida dele.")
+    studio.restoration_export_status.set(
+        f"Exportando Preview com {mode}… o pipeline Stable permanece separado desta operação."
+    )
     try:
         studio.restoration_export_button.configure(state="disabled")
         studio.restoration_cancel_button.configure(state="normal")
