@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from tkinter import StringVar, TclError, filedialog, ttk
 
-from ..loop_engine import FFMPEG, first_video_size, probe_media
+from ..loop_engine import FFMPEG, FFPROBE, first_video_size, probe_media
 from ..restoration_export import PreviewExportCancelled, export_preview_restoration
 from ..restoration_preview import build_preview_restoration_plan
 from .restoration_lab import RestorationUiState
@@ -64,7 +64,10 @@ def build_restoration_export_panel(studio, parent) -> None:
     ttk.Label(head, text="Exportar restauração", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
     ttk.Label(
         head,
-        text="Gera um arquivo separado pelo pipeline Preview. O botão Renderizar do Stable não é reutilizado.",
+        text=(
+            "Gera um arquivo separado pelo pipeline Preview. Overlays selecionados usam reconstrução temporal; "
+            "o botão Renderizar do Stable não é reutilizado."
+        ),
         style="CardMuted.TLabel",
         wraplength=820,
     ).grid(row=1, column=0, sticky="w", pady=(2, 0))
@@ -136,6 +139,9 @@ def _start_export(studio) -> None:
     if not plan.has_work:
         studio.restoration_export_status.set("Nada para restaurar: ajuste a cor ou ative/análise a remoção de overlays.")
         return
+    if plan.has_overlay_work and not FFPROBE:
+        studio.restoration_export_status.set("FFprobe não foi encontrado; reconstrução temporal não pode ser exportada com segurança.")
+        return
 
     suggested = _default_output(source)
     output_text = filedialog.asksaveasfilename(
@@ -156,7 +162,8 @@ def _start_export(studio) -> None:
     cancel_event = threading.Event()
     studio._restoration_export_cancel = cancel_event
     studio._restoration_export_running = True
-    studio.restoration_export_status.set("Exportando Preview restaurado… o Stable continua livre para tocar a vida dele.")
+    mode = "reconstrução temporal" if plan.has_overlay_work else "restauração de cor"
+    studio.restoration_export_status.set(f"Exportando Preview com {mode}… o Stable continua livre para tocar a vida dele.")
     try:
         studio.restoration_export_button.configure(state="disabled")
         studio.restoration_cancel_button.configure(state="normal")
@@ -173,6 +180,7 @@ def _start_export(studio) -> None:
                 source,
                 output,
                 plan,
+                ffprobe=FFPROBE,
                 cancel_event=cancel_event,
             )
         except PreviewExportCancelled:
@@ -193,8 +201,15 @@ def _start_export(studio) -> None:
             elif error is not None:
                 studio.restoration_export_status.set(f"Falha no Preview: {error}")
             elif result is not None:
+                if result.used_temporal_reconstruction:
+                    detail = (
+                        f" temporal: {result.temporal_regions_applied} regiões aplicadas, "
+                        f"{result.temporal_regions_fallback} preservadas por baixa confiança;"
+                    )
+                else:
+                    detail = ""
                 studio.restoration_export_status.set(
-                    f"Preview concluído em {result.elapsed_seconds:.1f}s: {result.output}"
+                    f"Preview concluído em {result.elapsed_seconds:.1f}s;{detail} arquivo: {result.output}"
                 )
 
         try:
