@@ -45,6 +45,20 @@ def key(profile: ColorProfile | None = None, operation: str = "decode") -> GpuMe
     )
 
 
+def accepted_decode(policy: GpuMediaPolicy | None = None) -> GpuMediaEvidence:
+    return GpuMediaEvidence(
+        policy=policy or GpuMediaPolicy("h264_cuvid"),
+        baseline_seconds=10.0,
+        candidate_seconds=6.0,
+        psnr_db=90.0,
+        ssim=1.0,
+        integrity_ok=True,
+        metadata_ok=True,
+        frame_count_ok=True,
+        audio_sync_ok=True,
+    )
+
+
 class GpuMediaTests(unittest.TestCase):
     def test_sdr_known_color_can_generate_benchmark_candidate(self) -> None:
         values = safe_candidate_policies(capabilities(), codec="h264", profile=sdr_profile())
@@ -72,9 +86,7 @@ class GpuMediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             store = GpuMediaTuningStore(Path(temporary) / "gpu-media.json")
             self.assertIsNone(
-                select_proven_policy(
-                    store=store, key=key(), capabilities=capabilities(), profile=sdr_profile()
-                )
+                select_proven_policy(store=store, key=key(), capabilities=capabilities(), profile=sdr_profile())
             )
 
     def test_quality_or_metadata_failure_cannot_be_recorded(self) -> None:
@@ -97,7 +109,7 @@ class GpuMediaTests(unittest.TestCase):
                 policy=policy,
                 baseline_seconds=10.0,
                 candidate_seconds=5.0,
-                psnr_db=80.0,
+                psnr_db=90.0,
                 ssim=1.0,
                 integrity_ok=True,
                 metadata_ok=False,
@@ -107,12 +119,11 @@ class GpuMediaTests(unittest.TestCase):
             self.assertFalse(store.record(key(), bad_metadata))
             self.assertIsNone(store.lookup(key(), capabilities()))
 
-    def test_exact_approved_evidence_unlocks_only_matching_capability(self) -> None:
+    def test_decode_requires_near_bit_exact_quality(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = GpuMediaTuningStore(Path(temporary) / "gpu-media.json")
-            policy = GpuMediaPolicy("h264_cuvid")
-            evidence = GpuMediaEvidence(
-                policy=policy,
+            merely_good = GpuMediaEvidence(
+                policy=GpuMediaPolicy("h264_cuvid"),
                 baseline_seconds=10.0,
                 candidate_seconds=6.0,
                 psnr_db=70.0,
@@ -122,6 +133,29 @@ class GpuMediaTests(unittest.TestCase):
                 frame_count_ok=True,
                 audio_sync_ok=True,
             )
+            self.assertFalse(store.record(key(), merely_good))
+
+    def test_slower_gpu_candidate_is_not_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = GpuMediaTuningStore(Path(temporary) / "gpu-media.json")
+            slow = GpuMediaEvidence(
+                policy=GpuMediaPolicy("h264_cuvid"),
+                baseline_seconds=10.0,
+                candidate_seconds=10.0,
+                psnr_db=99.0,
+                ssim=1.0,
+                integrity_ok=True,
+                metadata_ok=True,
+                frame_count_ok=True,
+                audio_sync_ok=True,
+            )
+            self.assertFalse(store.record(key(), slow))
+
+    def test_exact_approved_evidence_unlocks_only_matching_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = GpuMediaTuningStore(Path(temporary) / "gpu-media.json")
+            policy = GpuMediaPolicy("h264_cuvid")
+            evidence = accepted_decode(policy)
             self.assertTrue(store.record(key(), evidence))
             self.assertEqual(policy, store.lookup(key(), capabilities()))
             missing_decoder = GpuMediaCapabilities(
@@ -138,18 +172,7 @@ class GpuMediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             store = GpuMediaTuningStore(Path(temporary) / "gpu-media.json")
             policy = GpuMediaPolicy("h264_cuvid")
-            evidence = GpuMediaEvidence(
-                policy=policy,
-                baseline_seconds=10.0,
-                candidate_seconds=6.0,
-                psnr_db=70.0,
-                ssim=1.0,
-                integrity_ok=True,
-                metadata_ok=True,
-                frame_count_ok=True,
-                audio_sync_ok=True,
-            )
-            self.assertTrue(store.record(key(), evidence))
+            self.assertTrue(store.record(key(), accepted_decode(policy)))
             different_driver = GpuMediaKey.from_profile(
                 gpu_name="RTX Test",
                 driver="999.2",
@@ -166,18 +189,7 @@ class GpuMediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             store = GpuMediaTuningStore(Path(temporary) / "gpu-media.json")
             policy = GpuMediaPolicy("h264_cuvid")
-            evidence = GpuMediaEvidence(
-                policy=policy,
-                baseline_seconds=10.0,
-                candidate_seconds=6.0,
-                psnr_db=70.0,
-                ssim=1.0,
-                integrity_ok=True,
-                metadata_ok=True,
-                frame_count_ok=True,
-                audio_sync_ok=True,
-            )
-            self.assertTrue(store.record(key(), evidence))
+            self.assertTrue(store.record(key(), accepted_decode(policy)))
             self.assertTrue(store.invalidate(key()))
             self.assertIsNone(store.lookup(key(), capabilities()))
 
