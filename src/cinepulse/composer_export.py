@@ -21,7 +21,7 @@ import numpy as np
 from .composer_audio import VisualizerAudioEnvelope
 from .composer_audio_binding import composer_audio_features
 from .composer_base_probe import ComposerBaseProfile
-from .composer_decode_stream import ComposerDecoderPool
+from .composer_decode_stream import ComposerMediaDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
 from .composer_runtime import render_composer_frame
 from .overlay_composer import OverlayComposerState
@@ -160,6 +160,12 @@ def export_composer_reference(
     frame_bytes = request.profile.width * request.profile.height * 4
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    decoder_layers = {
+        item.id: (item.media, infos[item.id])
+        for item in ordered
+        if item.media is not None
+    }
+
     with tempfile.TemporaryDirectory(prefix="cinepulse-composer-", dir=output.parent) as temporary:
         temp_root = Path(temporary)
         visual = temp_root / "composer-reference.mkv"
@@ -177,7 +183,7 @@ def export_composer_reference(
             creationflags=CREATE_NO_WINDOW,
         )
         logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
-        decoders = ComposerDecoderPool(request.ffmpeg)
+        decoders = ComposerMediaDecoderPool(request.ffmpeg, decoder_layers, log=logger)
         try:
             assert base.stdout is not None
             assert encoder.stdin is not None
@@ -201,7 +207,7 @@ def export_composer_reference(
                         continue
                     info = infos[item.id]
                     position = playback_position(item.media, info, project_time)
-                    media_frames[item.id] = decoders.frame(item.id, item.media, info, position)
+                    media_frames[item.id] = decoders.frame(item.id, position)
                 features = composer_audio_features(
                     request.state,
                     bound_envelopes,
