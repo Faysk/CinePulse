@@ -63,11 +63,23 @@ PASS requires at least the script's quality/integrity/temporal thresholds and sp
 
 ## H8 — sustained Overnight mode
 
-Run `scripts/overnight_acceptance.py` against telemetry from a sustained representative render; use the script's default minimum duration unless investigating a failure. For the final heavy-scenario acceptance, prefer a run long enough to expose steady-state laptop thermals and NVMe behavior rather than a short burst.
+The runtime measures **completed neural work per second** for successful Real-ESRGAN and RIFE chunks. The first sustained window becomes a fixed warm-up reference for that render. Temperature, power-limit proximity or a GPU clock drop may reduce CPU budget/chunk size/overlap only when the later completed-work window also regresses against that reference. A hot GPU that remains faster is left alone. RAM/VRAM exhaustion, scratch saturation and real instability remain direct safety/capacity signals. The controller is downshift-only inside one render and never changes model, resolution, FPS, color/HDR or codec quality.
 
-The adaptive runtime must not reduce load merely because a temperature is high or hardware thermal throttling is reported. Downshift CPU budget, chunk size or overlap only when sustained telemetry shows that thermal/power/clock pressure is actually reducing end-to-end throughput or increasing error/instability risk. Record temperature, power and clocks as evidence, but optimize for sustained completed work at fixed quality rather than for a low temperature number. Confirm no Realtime process priority, `powercfg`, GPU power-limit mutation, NVIDIA global-setting mutation or other silent system-wide change occurred.
+Physical H8 acceptance now requires a same-scenario conservative baseline. Run, for example:
 
-PASS requires stable completion, adequate telemetry coverage, output quality/integrity PASS, no unbounded scratch/RAM growth, no repeated OOM/fallback loop and no sustained throughput collapse. Temperatures may remain high and hardware-managed throttling may occur as long as the render stays stable and the chosen policy still delivers the best sustained end-to-end throughput among the tested candidates.
+```powershell
+python scripts/overnight_acceptance.py .\candidate\hardware-telemetry.json `
+  --baseline-telemetry .\baseline\hardware-telemetry.json `
+  --scenario 1080p30_to_4k60 `
+  --quality-passed `
+  --output .\candidate\overnight-acceptance.json
+```
+
+Repeat for `720p24_to_8k120_music`. Use the script's default sustained-duration floor unless investigating a failure; for final acceptance prefer a run long enough to expose steady-state laptop thermals and NVMe behavior.
+
+The adaptive runtime must not reduce load merely because a temperature is high or hardware thermal throttling is reported. Record temperature, power and clocks as evidence, but optimize for sustained completed work at fixed quality rather than for a low temperature number. Confirm no Realtime process priority, `powercfg`, GPU power-limit mutation, NVIDIA global-setting mutation or other silent system-wide change occurred.
+
+PASS requires stable completion, adequate telemetry coverage, output quality/integrity PASS, no unbounded scratch/RAM growth, no repeated OOM/fallback loop, and candidate sustained wall-time throughput no worse than the conservative baseline beyond the small measurement tolerance encoded by the acceptance script. Temperatures may remain high and hardware-managed throttling may occur as long as the render stays stable and the chosen policy still delivers the best sustained end-to-end throughput among the tested candidates.
 
 ## Final end-to-end gate
 
