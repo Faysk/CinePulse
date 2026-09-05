@@ -4488,6 +4488,7 @@ class VideoOptimizerStudio:
                     cache_source_video=settings.video, cache_quota_gb=settings.cache_quota_gb,
                                     chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                     overlap_extract=realesrgan_budget.overlap_extract,
+                    overlap_pack=realesrgan_budget.overlap_pack,
 )
                 self._release_temp_path(consumed_before_ai, temp_paths)
                 progress_base += 20.0
@@ -5117,6 +5118,7 @@ class VideoOptimizerStudio:
         source_w: int, source_h: int, temp_paths: list[Path], temp_dirs: list[Path],
         cpu_threads: int, base: float, weight: float, *, cache_source_video: str | None = None,
         cache_quota_gb: float = 50.0, chunk_budget_gb: float = 4.0, overlap_extract: bool = False,
+        overlap_pack: bool = False,
     ) -> tuple[str, int, int]:
         """Run Real-ESRGAN with a bounded PNG working set (CP-012/CP-021).
 
@@ -5206,6 +5208,7 @@ class VideoOptimizerStudio:
         processed = 0
         chunk_index = 0
         prefetch: tuple[int, int, Path, Path, BackgroundCommand] | None = None
+        pack: tuple[int, Path, Path, BackgroundCommand] | None = None
 
         def extraction_command(frame_offset: int, frame_count: int, destination: Path, *, progress: bool) -> list[str]:
             extraction_start = start_time + frame_offset / max(1.0, source_fps)
@@ -5338,23 +5341,52 @@ class VideoOptimizerStudio:
                             continue
                         raise
 
+                # Only one previous pack may remain in flight. Waiting here means
+                # pack(N-1) overlaps neural(N), but two pack encoders never stack.
+                if pack is not None:
+                    packed_index, packed_dir, packed_video, packed_task = pack
+                    packed_result = packed_task.wait()
+                    pack = None
+                    if packed_result.cancelled or self._cancelled:
+                        raise InterruptedError
+                    if not packed_video.is_file() or packed_video.stat().st_size <= 0:
+                        raise RuntimeError(f"H4 pack Real-ESRGAN lote {packed_index} não produziu FFV1 válido.")
+                    chunks.append(packed_video)
+                    safe_rmtree(packed_dir)
+                    self._log(f"H4 PACK Real-ESRGAN: lote {packed_index} concluído em ordem e workset liberado.")
+
                 self._set_stage("IA 3/3", f"Lote {chunk_index}: compactando o resultado lossless e liberando PNGs.")
                 chunk_video = chunk_root / f"segment_{chunk_index:05d}.mkv"
-                merge = [
+                merge_base = [
                     FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
                     "-framerate", f"{source_fps:.8f}", "-start_number", "1", "-i", str(outgoing / "frame%08d.png"),
                     "-map", "0:v:0", "-an", "-frames:v", str(frames),
                     "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1", "-g", "1", "-slicecrc", "1",
                     "-pix_fmt", "yuv420p", "-threads", str(cpu_threads),
-                    "-progress", "pipe:1", "-nostats", str(chunk_video),
                 ]
-                self._run_ffmpeg(
-                    merge, chunk_duration,
-                    stage_base + weight * fraction_chunk * 0.76,
-                    weight * fraction_chunk * 0.14,
-                )
-                chunks.append(chunk_video)
-                safe_rmtree(chunk_dir)
+                if overlap_pack and next_processed < total_frames:
+                    background_merge = merge_base + [str(chunk_video)]
+                    packed_task = BackgroundCommand(
+                        background_merge,
+                        cancel_requested=lambda: self._cancelled,
+                        log=self._log,
+                    ).start()
+                    pack = (chunk_index, chunk_dir, chunk_video, packed_task)
+                    self._log(
+                        f"H4 PACK Real-ESRGAN: lote {chunk_index} compactando em paralelo; "
+                        "fila rígida=1 pack anterior / teto total=3 worksets com prefetch."
+                    )
+                else:
+                    foreground_merge = merge_base + ["-progress", "pipe:1", "-nostats", str(chunk_video)]
+                    self._run_ffmpeg(
+                        foreground_merge, chunk_duration,
+                        stage_base + weight * fraction_chunk * 0.76,
+                        weight * fraction_chunk * 0.14,
+                    )
+                    if not chunk_video.is_file() or chunk_video.stat().st_size <= 0:
+                        raise RuntimeError(f"H4 pack Real-ESRGAN lote {chunk_index} não produziu FFV1 válido.")
+                    chunks.append(chunk_video)
+                    safe_rmtree(chunk_dir)
                 processed += count
         finally:
             if prefetch is not None:
@@ -5362,6 +5394,13 @@ class VideoOptimizerStudio:
                 task.cancel()
                 try:
                     task.wait(timeout=5.0)
+                except Exception:
+                    pass
+            if pack is not None:
+                packed_task = pack[3]
+                packed_task.cancel()
+                try:
+                    packed_task.wait(timeout=5.0)
                 except Exception:
                     pass
 
