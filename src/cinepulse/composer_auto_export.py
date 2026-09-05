@@ -190,7 +190,10 @@ def _export_gpu(
         _verify_gpu_product(request, visual, expect_audio=False)
         audio_source = request.output_audio or request.source
         expected_audio = _has_audio_stream(str(request.ffprobe), audio_source)
-        with AtomicOutput(output) as atomic:
+
+        atomic = AtomicOutput.for_path(output)
+        atomic.prepare()
+        try:
             _run_cancellable(
                 _mux_command(request, visual, atomic.partial),
                 cancelled=cancelled,
@@ -201,6 +204,8 @@ def _export_gpu(
                 raise InterruptedError("composer GPU export cancelled")
             _verify_gpu_product(request, atomic.partial, expect_audio=expected_audio)
             atomic.commit()
+        finally:
+            atomic.discard()
     return ComposerExportResult(output, frames)
 
 
