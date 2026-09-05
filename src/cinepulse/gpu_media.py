@@ -5,8 +5,8 @@ from __future__ import annotations
 Hardware Utilization MegaPack H5 deliberately separates *capability* from
 *permission*. Seeing ``cuda``/NVDEC/NVENC in FFmpeg only means a candidate may
 be benchmarked. Runtime acceleration is allowed only after an exact
-hardware/driver/FFmpeg/media key has an integrity-, metadata- and quality-
-approved record.
+hardware/driver/FFmpeg/media key has an integrity-, metadata-, seek- and
+quality-approved record.
 
 The stable CPU/zscale path therefore remains the fail-closed default.
 """
@@ -25,7 +25,10 @@ from .media_profile import ColorProfile
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
-GPU_MEDIA_SCHEMA = 1
+# Schema 2 intentionally invalidates H5 records written before non-zero seek
+# alignment became a mandatory acceptance gate. Old evidence was correct for
+# frame-zero playback but is insufficient for CinePulse's chunked runtime.
+GPU_MEDIA_SCHEMA = 2
 DEFAULT_PSNR_FLOOR_DB = 55.0
 DEFAULT_SSIM_FLOOR = 0.999
 DECODE_PSNR_FLOOR_DB = 80.0
@@ -244,6 +247,9 @@ class GpuMediaEvidence:
     metadata_ok: bool
     frame_count_ok: bool
     audio_sync_ok: bool
+    seek_alignment_ok: bool = True
+    seek_psnr_db: float | None = None
+    seek_ssim: float | None = None
 
     @property
     def quality_ok(self) -> bool:
@@ -268,6 +274,7 @@ class GpuMediaEvidence:
             and self.metadata_ok
             and self.frame_count_ok
             and self.audio_sync_ok
+            and self.seek_alignment_ok
             and self.quality_ok
             and self.performance_ok
             and self.baseline_seconds > 0
@@ -294,7 +301,7 @@ class GpuMediaTuningStore:
 
     def lookup(self, key: GpuMediaKey, capabilities: GpuMediaCapabilities) -> GpuMediaPolicy | None:
         record = self._load().get("records", {}).get(key.token())
-        if not isinstance(record, dict) or not record.get("accepted"):
+        if not isinstance(record, dict) or not record.get("accepted") or not record.get("seek_alignment_ok"):
             return None
         raw = record.get("policy")
         if not isinstance(raw, dict):
@@ -337,6 +344,9 @@ class GpuMediaTuningStore:
             "metadata_ok": bool(evidence.metadata_ok),
             "frame_count_ok": bool(evidence.frame_count_ok),
             "audio_sync_ok": bool(evidence.audio_sync_ok),
+            "seek_alignment_ok": bool(evidence.seek_alignment_ok),
+            "seek_psnr_db": float(evidence.seek_psnr_db) if evidence.seek_psnr_db is not None else None,
+            "seek_ssim": float(evidence.seek_ssim) if evidence.seek_ssim is not None else None,
             "updated_unix": time.time(),
         }
         payload["version"] = self.VERSION
