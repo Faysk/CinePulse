@@ -8,12 +8,15 @@ unproven GPU routes retain the deterministic CPU reference renderer.
 """
 
 from pathlib import Path
+import threading
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Toplevel, filedialog, messagebox, ttk
 import uuid
 
+from ..composer_base_probe import probe_composer_base
+from ..composer_export import ComposerExportRequest, export_composer_reference
 from ..composer_media import probe_composer_media, validate_layer_media
 from ..gpu_compositor import OverlayLayer
-from ..loop_engine import FFPROBE
+from ..loop_engine import FFMPEG, FFPROBE
 from ..overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer, media_layer_from_path
 
 
@@ -40,12 +43,26 @@ def _state_for(studio) -> OverlayComposerState:
     return state
 
 
-def _default_project_path(studio) -> Path:
+def _studio_source_path(studio) -> Path | None:
     source = str(getattr(getattr(studio, "source", None), "get", lambda: "")() or "").strip()
-    if source:
-        candidate = Path(source).expanduser()
-        return candidate.with_suffix(candidate.suffix + ".cinepulse-composer.json")
+    return Path(source).expanduser() if source else None
+
+
+def _default_project_path(studio) -> Path:
+    source = _studio_source_path(studio)
+    if source is not None:
+        return source.with_suffix(source.suffix + ".cinepulse-composer.json")
     return Path.home() / "cinepulse-composer.json"
+
+
+def _default_export_path(source: Path) -> Path:
+    source = Path(source).expanduser()
+    return source.with_name(f"{source.stem}-composer-reference.mkv")
+
+
+def _snapshot_state(state: OverlayComposerState) -> OverlayComposerState:
+    """Detach a running export from subsequent editor mutations."""
+    return OverlayComposerState.from_dict(state.as_dict())
 
 
 def show_overlay_composer(studio) -> None:
@@ -63,8 +80,8 @@ def show_overlay_composer(studio) -> None:
     window = Toplevel(studio.root if hasattr(studio, "root") else studio)
     studio._overlay_composer_window = window
     window.title("CinePulse Preview — Overlay Composer")
-    window.geometry("920x620")
-    window.minsize(760, 520)
+    window.geometry("960x660")
+    window.minsize(780, 540)
 
     shell = ttk.Frame(window, padding=12)
     shell.pack(fill="both", expand=True)
@@ -114,6 +131,9 @@ def show_overlay_composer(studio) -> None:
     thickness = DoubleVar(value=1.0)
     bars = IntVar(value=64)
     selected_id = StringVar(value="")
+    export_progress = DoubleVar(value=0.0)
+    export_cancel = threading.Event()
+    export_state = {"running": False, "close_requested": False}
 
     def field(row: int, label: str, variable, *, low: float, high: float, increment: float = 0.05) -> None:
         ttk.Label(editor, text=label).grid(row=row, column=0, sticky="w", pady=4)
@@ -146,13 +166,17 @@ def show_overlay_composer(studio) -> None:
     def refresh(select: str | None = None) -> None:
         for child in tree.get_children():
             tree.delete(child)
-        for item in state.ordered():
+        # Disabled items remain visible in the editor. Rendering still uses
+        # state.ordered(), which intentionally filters them out.
+        for item in sorted(state.items, key=lambda candidate: (candidate.z_order, candidate.id)):
             label, audio = item_label(item)
             tree.insert("", "end", iid=item.id, values=(label + ("" if item.enabled else " (off)"), item.z_order, audio))
         if select and tree.exists(select):
             tree.selection_set(select)
             tree.focus(select)
-        status.set(f"{len(state.items)} camada(s) • Preview isolado • CUDA somente com evidência aprovada")
+        if not export_state["running"]:
+            enabled_count = len(state.ordered())
+            status.set(f"{len(state.items)} camada(s), {enabled_count} ativa(s) • Preview isolado • CUDA só com evidência aprovada")
 
     def load_selected(_event=None) -> None:
         selection = tree.selection()
@@ -220,9 +244,15 @@ def show_overlay_composer(studio) -> None:
         )
         if not path:
             return
+        if not FFPROBE:
+            messagebox.showerror("Overlay Composer", "FFprobe não foi encontrado.", parent=window)
+            return
         try:
             layer = media_layer_from_path(path)
-            info = probe_composer_media(str(FFPROBE), path)
+            # Keep the add-layer interaction quick. Exact decoded timestamps are
+            # enumerated by the export preflight, where correctness matters and
+            # the work already runs off the Tk thread.
+            info = probe_composer_media(str(FFPROBE), path, timeout=15.0, exact_timing=False)
             problems = validate_layer_media(layer, info)
             if problems:
                 raise ValueError("; ".join(problems))
@@ -254,6 +284,9 @@ def show_overlay_composer(studio) -> None:
 
     footer = ttk.Frame(shell)
     footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+    footer.columnconfigure(3, weight=1)
+
+    progress = ttk.Progressbar(footer, variable=export_progress, maximum=100.0, mode="determinate", length=180)
 
     def save_state() -> None:
         default = _default_project_path(studio)
@@ -266,18 +299,152 @@ def show_overlay_composer(studio) -> None:
             messagebox.showerror("Overlay Composer", str(exc), parent=window)
 
     def load_state() -> None:
+        if export_state["running"]:
+            messagebox.showinfo("Overlay Composer", "Cancele o export atual antes de abrir outro projeto.", parent=window)
+            return
         path = filedialog.askopenfilename(parent=window, title="Abrir Composer", filetypes=(("CinePulse Composer", "*.json"),))
         if not path:
             return
         try:
             loaded = OverlayComposerState.load(Path(path))
             state.items[:] = loaded.items
+            selected_id.set("")
             refresh(); status.set(f"Aberto: {Path(path).name}")
         except ValueError as exc:
             messagebox.showerror("Overlay Composer", str(exc), parent=window)
 
-    ttk.Button(footer, text="Abrir…", command=load_state).pack(side="left")
-    ttk.Button(footer, text="Salvar…", command=save_state).pack(side="left", padx=(6, 0))
-    ttk.Label(footer, text="Stable não é alterado; rotas GPU sem evidência continuam no CPU.").pack(side="right")
+    ttk.Button(footer, text="Abrir…", command=load_state).grid(row=0, column=0, sticky="w")
+    ttk.Button(footer, text="Salvar…", command=save_state).grid(row=0, column=1, sticky="w", padx=(6, 0))
+    progress.grid(row=0, column=2, sticky="e", padx=(14, 8))
 
+    export_buttons = ttk.Frame(footer)
+    export_buttons.grid(row=0, column=4, sticky="e")
+
+    def post(callback, *args) -> None:
+        try:
+            if window.winfo_exists():
+                window.after(0, callback, *args)
+        except Exception:
+            pass
+
+    def finish_export(message: str, *, error: str | None = None, cancelled: bool = False) -> None:
+        export_state["running"] = False
+        export_button.configure(state="normal")
+        cancel_button.configure(state="disabled")
+        if cancelled:
+            status.set("Export do Composer cancelado • destino anterior preservado")
+        elif error is not None:
+            status.set("Falha no export do Composer • destino anterior preservado")
+            messagebox.showerror("Overlay Composer", error, parent=window)
+        else:
+            export_progress.set(100.0)
+            status.set(message)
+            messagebox.showinfo("Overlay Composer", message, parent=window)
+        if export_state["close_requested"]:
+            studio._overlay_composer_window = None
+            window.destroy()
+
+    def request_cancel() -> None:
+        if not export_state["running"]:
+            return
+        export_cancel.set()
+        cancel_button.configure(state="disabled")
+        status.set("Cancelando export do Composer…")
+
+    def start_export() -> None:
+        if export_state["running"]:
+            return
+        source = _studio_source_path(studio)
+        if source is None or not source.is_file():
+            messagebox.showerror("Overlay Composer", "Selecione um vídeo fonte válido no CinePulse.", parent=window)
+            return
+        if not FFMPEG or not FFPROBE:
+            messagebox.showerror("Overlay Composer", "FFmpeg/FFprobe não estão disponíveis.", parent=window)
+            return
+        snapshot = _snapshot_state(state)
+        if not snapshot.ordered():
+            messagebox.showerror("Overlay Composer", "Ative pelo menos uma camada antes de exportar.", parent=window)
+            return
+
+        default = _default_export_path(source)
+        chosen = filedialog.asksaveasfilename(
+            parent=window,
+            title="Exportar Composer lossless",
+            initialdir=str(default.parent),
+            initialfile=default.name,
+            defaultextension=".mkv",
+            filetypes=(("Matroska lossless", "*.mkv"),),
+        )
+        if not chosen:
+            return
+        output = Path(chosen).expanduser()
+        if output.suffix.lower() != ".mkv":
+            messagebox.showerror("Overlay Composer", "O export de referência lossless usa contêiner MKV.", parent=window)
+            return
+        try:
+            if output.resolve() == source.resolve():
+                raise ValueError("O Composer nunca sobrescreve o vídeo fonte.")
+        except OSError:
+            pass
+
+        export_cancel.clear()
+        export_progress.set(0.0)
+        export_state["running"] = True
+        export_state["close_requested"] = False
+        export_button.configure(state="disabled")
+        cancel_button.configure(state="normal")
+        status.set("Preparando export lossless • analisando timing exato das camadas…")
+
+        def worker() -> None:
+            try:
+                profile = probe_composer_base(str(FFPROBE), source)
+                request = ComposerExportRequest(
+                    source=source,
+                    output=output,
+                    profile=profile,
+                    state=snapshot,
+                    ffmpeg=str(FFMPEG),
+                    ffprobe=str(FFPROBE),
+                    audio_sources={"master": source},
+                )
+
+                def update_progress(done: int, total: int) -> None:
+                    percent = 100.0 * max(0, done) / max(1, total)
+                    post(export_progress.set, min(99.5, percent))
+                    post(status.set, f"Exportando Composer lossless… {done}/{total} frame(s) • {percent:.1f}%")
+
+                result = export_composer_reference(
+                    request,
+                    cancelled=export_cancel.is_set,
+                    progress=update_progress,
+                )
+                post(
+                    finish_export,
+                    f"Composer exportado: {result.output.name} • {result.frames} frame(s) • CPU reference lossless",
+                )
+            except InterruptedError:
+                post(finish_export, "", cancelled=True)
+            except Exception as exc:
+                post(finish_export, "", error=str(exc))
+
+        threading.Thread(target=worker, name="cinepulse-composer-export", daemon=True).start()
+
+    export_button = ttk.Button(export_buttons, text="Exportar MKV lossless…", command=start_export)
+    export_button.pack(side="left")
+    cancel_button = ttk.Button(export_buttons, text="Cancelar", command=request_cancel, state="disabled")
+    cancel_button.pack(side="left", padx=(6, 0))
+
+    note = ttk.Label(shell, text="Export CPU de referência: FFV1 RGB lossless + áudio master copiado. Stable permanece intacto.")
+    note.grid(row=3, column=0, columnspan=2, sticky="e", pady=(5, 0))
+
+    def close_window() -> None:
+        if export_state["running"]:
+            export_state["close_requested"] = True
+            request_cancel()
+            status.set("Fechando após cancelar e limpar o export em andamento…")
+            return
+        studio._overlay_composer_window = None
+        window.destroy()
+
+    window.protocol("WM_DELETE_WINDOW", close_window)
     refresh()
