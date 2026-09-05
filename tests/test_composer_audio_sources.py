@@ -40,14 +40,45 @@ class ComposerAudioSourceStateTests(unittest.TestCase):
         self.assertEqual({}, restored.audio_sources)
         self.assertEqual(2, restored.as_dict()["schema"])
 
-    def test_master_defaults_to_video_source_and_custom_master_overrides(self) -> None:
-        state = OverlayComposerState()
-        resolved = state.resolved_audio_sources("movie.mkv")
-        self.assertEqual("movie.mkv", resolved["master"])
-        state.set_audio_source("master", "song.flac")
-        self.assertEqual("song.flac", state.resolved_audio_sources("movie.mkv")["master"])
-        self.assertTrue(state.clear_audio_source("master"))
-        self.assertEqual("movie.mkv", state.resolved_audio_sources("movie.mkv")["master"])
+    def test_master_defaults_to_video_source_and_existing_custom_master_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            movie = root / "movie.mkv"
+            song = root / "song.flac"
+            movie.touch()
+            song.touch()
+            state = OverlayComposerState()
+            resolved = state.resolved_audio_sources(movie)
+            self.assertEqual(str(movie), resolved["master"])
+            state.set_audio_source("master", song)
+            self.assertEqual(str(song), state.resolved_audio_sources(movie)["master"])
+            self.assertTrue(state.clear_audio_source("master"))
+            self.assertEqual(str(movie), state.resolved_audio_sources(movie)["master"])
+
+    def test_missing_custom_master_and_optional_stems_fall_back_without_erasing_project_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            movie = root / "movie.mkv"
+            drums = root / "drums.wav"
+            movie.touch()
+            drums.touch()
+            missing_master = root / "master-moved.flac"
+            missing_vocals = root / "vocals-moved.wav"
+            state = OverlayComposerState(
+                audio_sources={
+                    "master": str(missing_master),
+                    "vocals": str(missing_vocals),
+                    "drums": str(drums),
+                }
+            )
+            resolved = state.resolved_audio_sources(movie)
+            self.assertEqual(str(movie), resolved["master"])
+            self.assertEqual(str(drums), resolved["drums"])
+            self.assertNotIn("vocals", resolved)
+            # Persisted intent survives so the project can recover automatically
+            # when an external drive/file becomes available again.
+            self.assertEqual(str(missing_master), state.audio_sources["master"])
+            self.assertEqual(str(missing_vocals), state.audio_sources["vocals"])
 
     def test_unknown_binding_and_empty_persisted_source_fail_closed(self) -> None:
         state = OverlayComposerState()
