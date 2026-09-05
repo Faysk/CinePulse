@@ -27,9 +27,12 @@ class ComposerDecodeTests(unittest.TestCase):
         command = build_exact_rgba_command(
             "ffmpeg", layer, self.info(), ComposerPlaybackPosition(True, 0.5, 12, 0)
         )
+        joined = " ".join(command)
         self.assertNotIn("-ss", command)
         self.assertIn("select=eq(n\\,12),format=rgba", command)
         self.assertIn("rgba", command)
+        self.assertIn("-fps_mode passthrough", joined)
+        self.assertNotIn("-vsync", command)
 
     def test_inactive_position_returns_none_without_spawning_ffmpeg(self) -> None:
         layer = OverlayLayer("clip.webm", "video-alpha")
