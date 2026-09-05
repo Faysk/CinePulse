@@ -14,7 +14,7 @@ from cinepulse.tensorrt_preview import (
 
 
 def backend() -> TensorRtExternalBackend:
-    return TensorRtExternalBackend("runner.exe", "11.2", "Apache-2.0", True)
+    return TensorRtExternalBackend("runner.exe", "1.4.0", "11.2", "Apache-2.0", True)
 
 
 def key(value: TensorRtExternalBackend | None = None) -> TensorRtKey:
@@ -22,7 +22,7 @@ def key(value: TensorRtExternalBackend | None = None) -> TensorRtKey:
     return TensorRtKey(
         gpu_name="RTX Test",
         driver="999.1",
-        tensorrt_version="11.2",
+        tensorrt_version=value.tensorrt_version,
         backend_fingerprint=value.fingerprint,
         model="rife",
         model_fingerprint="model123",
@@ -54,8 +54,17 @@ class TensorRtPreviewTests(unittest.TestCase):
             good = TensorRtEvidence(10, 5, True, True, True, True, 80, 1.0, vmaf_delta=0.0)
             self.assertTrue(store.record(key(), backend(), good))
             self.assertTrue(store.approved(key(), backend()))
-            other = TensorRtExternalBackend("other.exe", "11.2", "Apache-2.0", True)
+            other = TensorRtExternalBackend("other.exe", "1.4.0", "11.2", "Apache-2.0", True)
             self.assertFalse(store.approved(key(), other))
+
+    def test_runtime_version_mismatch_invalidates_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = TensorRtPreviewStore(Path(temporary) / "trt.json")
+            value = backend()
+            good = TensorRtEvidence(10, 5, True, True, True, True, 80, 1.0)
+            self.assertTrue(store.record(key(value), value, good))
+            upgraded = TensorRtExternalBackend("runner.exe", "1.4.0", "11.3", "Apache-2.0", True)
+            self.assertFalse(store.approved(key(value), upgraded))
 
     def test_external_command_contains_no_installer_or_global_changes(self) -> None:
         command = build_external_command(
