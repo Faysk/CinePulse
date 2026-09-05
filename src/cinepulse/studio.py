@@ -603,6 +603,7 @@ class VideoOptimizerStudio:
         self._cancelled = False
         self._busy = False
         self._available_update: update_manager.UpdateInfo | None = None
+        self._prepared_update: tuple[update_manager.UpdateInfo, str] | None = None
         self._update_check_running = False
         self._started_at: float | None = None
         self._progress_value = 0.0
@@ -5817,6 +5818,7 @@ class VideoOptimizerStudio:
 
     def _hide_update_cta(self) -> None:
         self._available_update = None
+        self._prepared_update = None
         if hasattr(self, "update_button"):
             self.update_button.configure(text="Atualizações", command=self._check_updates, state="normal")
         if hasattr(self, "header_update_button") and self.header_update_button.winfo_manager():
@@ -5869,6 +5871,10 @@ class VideoOptimizerStudio:
                 category="Atualização",
             )
             return
+        prepared = self._prepared_update
+        if prepared is not None and prepared[0].version == info.version:
+            self._launch_prepared_update(prepared[0], prepared[1])
+            return
         if hasattr(self, "header_update_button"):
             self.header_update_button.configure(state="disabled")
         if hasattr(self, "update_button"):
@@ -5893,6 +5899,16 @@ class VideoOptimizerStudio:
         threading.Thread(target=worker, daemon=True).start()
 
     def _launch_prepared_update(self, info: update_manager.UpdateInfo, staged: str) -> None:
+        if self._busy or self._queue_running or self._ai_installing:
+            self._prepared_update = (info, staged)
+            self._show_update_cta(info)
+            self._set_feedback(
+                "info", f"CinePulse {info.version} pronto para instalar",
+                "O pacote já foi verificado. Termine o processamento atual e clique em Atualizar para instalar sem baixar novamente.",
+                category="Atualização", primary=("Atualizar quando livre", self._apply_available_update),
+            )
+            return
+        self._prepared_update = None
         update_manager.launch_staged(info, Path(staged), APP_DIR, os.getpid())
         self._set_feedback(
             "success", f"CinePulse {info.version} verificado",
