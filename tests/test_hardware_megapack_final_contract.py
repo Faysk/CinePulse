@@ -33,6 +33,16 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         self.assertIn("overlay_stack_contract_token", compositor)
         self.assertIn("hwdownload,format=yuv420p[vout]", compositor)
 
+    def test_composer_exports_use_current_atomic_output_factory(self) -> None:
+        cpu = self.text("src/cinepulse/composer_export.py")
+        gpu = self.text("src/cinepulse/composer_auto_export.py")
+        for text in (cpu, gpu):
+            self.assertIn("AtomicOutput.for_path(", text)
+            self.assertIn("atomic.prepare()", text)
+            self.assertIn("atomic.commit()", text)
+            self.assertIn("atomic.discard()", text)
+            self.assertNotIn("with AtomicOutput(", text)
+
     def test_h7_is_external_preview_only_and_rolls_back_to_ncnn(self) -> None:
         contract = self.text("src/cinepulse/tensorrt_preview.py")
         runtime = self.text("src/cinepulse/tensorrt_preview_runtime.py")
