@@ -1,0 +1,48 @@
+name: Temporary Hardware H4 Pack Overlap Integrator
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-h4-pack-overlap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Integrate bounded Real-ESRGAN pack overlap
+        run: python scripts/_tmp_h4_pack_overlap.py
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: Compile Studio on Python 3.11
+        run: python -m py_compile src/cinepulse/studio.py
+      - name: Compile package
+        run: python -m compileall -q src/cinepulse
+      - name: Pipeline runtime tests
+        run: python -m unittest discover -s tests -p 'test_pipeline_runtime.py'
+      - name: Pipeline budget tests
+        run: python -m unittest discover -s tests -p 'test_pipeline_budget.py'
+      - name: Real-ESRGAN tuning tests
+        run: python -m unittest discover -s tests -p 'test_realesrgan_tuning.py'
+      - name: Render plan tests
+        run: python -m unittest discover -s tests -p 'test_render_plan.py'
+      - name: Pipeline preservation tests
+        run: python -m unittest discover -s tests -p 'test_pipeline_preservation.py'
+      - name: Commit integration and remove temporary writers
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git rm -f .github/workflows/_tmp-h4-pack-overlap.yml scripts/_tmp_h4_pack_overlap.py
+          git add src/cinepulse/studio.py
+          git commit -m "Hardware H4: overlap bounded Real-ESRGAN pack stage"
+          git push origin HEAD:preview-restoration-lab
