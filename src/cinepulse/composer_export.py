@@ -1,19 +1,12 @@
 from __future__ import annotations
 
-"""Bounded, cancellable CPU-reference export for Preview Overlay Composer.
+"""Cancellable, atomic CPU-reference export for the Preview Overlay Composer.
 
-This is deliberately a correctness path, not the H6 fast path. It streams one
-base frame at a time, keeps at most one decoded RGBA frame per enabled media
-layer, applies the deterministic CPU reference compositor, writes a lossless
-FFV1 RGB master, then atomically promotes the muxed result. Media assets use a
-bounded sequential decoder pool: forward playback consumes exact frame order,
-repeated frames reuse the immutable last frame, and loop/back-seek restarts from
-frame zero instead of using approximate timestamp seeking.
-
-GPU routes may only replace stages after their exact visual/timing/color
-evidence is approved. For now the reference export is intentionally limited to
-8-bit SDR BT.709. HDR/10-bit sources fail closed instead of being silently
-converted by a Preview feature whose HDR parity has not been proven.
+The export path intentionally prioritizes correctness and recovery over speed.
+It decodes the base video to an explicit BT.709 RGBA reference, composites every
+frame through the same deterministic NumPy renderer used by Preview, writes a
+lossless RGB FFV1 visual master, then muxes the chosen soundtrack atomically.
+GPU acceleration may replace this path only after H6 physical parity evidence.
 """
 
 from dataclasses import dataclass
@@ -22,48 +15,22 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 import numpy as np
 
 from .composer_audio import VisualizerAudioEnvelope
-from .composer_audio_binding import composer_audio_features, load_bound_visualizer_envelopes
-from .composer_decode_stream import ComposerMediaDecoderPool
+from .composer_audio_binding import features_for_item
+from .composer_base_probe import ComposerBaseProfile
+from .composer_decode_stream import ComposerDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
-from .composer_runtime import ComposerFrameInputs, render_composer_frame
+from .composer_runtime import render_composer_frame
+from .gpu_compositor import FrameAudioFeatures
 from .overlay_composer import OverlayComposerState
-from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
 
 
-@dataclass(frozen=True)
-class ComposerBaseProfile:
-    width: int
-    height: int
-    fps: float
-    duration: float
-    pixel_format: str
-    primaries: str
-    transfer: str
-    matrix: str
-    color_range: str
-
-    def __post_init__(self) -> None:
-        if self.width <= 0 or self.height <= 0 or self.fps <= 0 or self.duration <= 0:
-            raise ValueError("composer base dimensions/timing must be positive")
-
-    @property
-    def reference_supported(self) -> bool:
-        pix = self.pixel_format.strip().lower()
-        transfer = self.transfer.strip().lower()
-        primaries = self.primaries.strip().lower()
-        matrix = self.matrix.strip().lower()
-        return (
-            not any(token in pix for token in ("10", "12", "16", "p010", "p016"))
-            and transfer in {"bt709", "iec61966-2-1", "unknown", ""}
-            and primaries in {"bt709", "unknown", ""}
-            and matrix in {"bt709", "unknown", ""}
-        )
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 @dataclass(frozen=True)
@@ -82,9 +49,6 @@ class ComposerExportRequest:
 class ComposerExportResult:
     output: Path
     frames: int
-    duration: float
-    used_media_layers: int
-    used_visualizers: int
 
 
 def _range_token(value: str) -> str:
@@ -114,12 +78,17 @@ def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[st
 
 def _video_encode_command(request: ComposerExportRequest, target: Path) -> list[str]:
     p = request.profile
+    # gbrap already defines the RGB color family for the FFV1 reference. FFmpeg
+    # 9's FFV1 private `colorspace` option collides with the generic
+    # `-colorspace gbr` spelling and rejects the symbolic value on Windows.
+    # Keep primaries/transfer/range metadata explicit while letting gbrap carry
+    # the matrix/family truth instead of passing a version-fragile encoder flag.
     return [
         str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgba", "-s:v", f"{p.width}x{p.height}",
         "-r", f"{p.fps:.12g}", "-i", "pipe:0", "-an",
         "-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrap",
-        "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "gbr",
+        "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "pc",
         str(target),
     ]
 
@@ -178,143 +147,119 @@ def export_composer_reference(
     """Render one Preview Composer project through the lossless CPU reference."""
     cancel = cancelled or (lambda: False)
     logger = log or (lambda _message: None)
-    ordered_items = request.state.ordered()
+    source = Path(request.source)
+    output = Path(request.output)
+    if not source.is_file():
+        raise FileNotFoundError(f"composer source not found: {source}")
+    if source.resolve(strict=False) == output.resolve(strict=False):
+        raise ValueError("composer output cannot overwrite source")
     if not request.profile.reference_supported:
-        raise ValueError("Preview Composer CPU reference currently accepts only 8-bit SDR BT.709")
-    if not ordered_items:
-        raise ValueError("Preview Composer has no enabled layers to export")
-
-    # Validate source assets and build all read-only analysis state before an
-    # output partial is prepared. Validation failures therefore cannot leave a
-    # new partial file beside a previously good destination.
-    frame_count = max(1, int(round(request.profile.duration * request.profile.fps)))
+        raise ValueError("composer CPU reference currently supports only SDR BT.709 8-bit sources")
+    ordered = request.state.ordered()
+    if not ordered:
+        raise ValueError("composer project has no layers or visualizers")
+    infos = _validate_media(request)
+    frames = max(1, round(request.profile.duration * request.profile.fps))
     frame_bytes = request.profile.width * request.profile.height * 4
-    media_info = _validate_media(request)
-    visualizer_count = sum(1 for item in ordered_items if item.visualizer is not None)
-    media_count = len(media_info)
+    output.parent.mkdir(parents=True, exist_ok=True)
 
-    if envelopes is None:
-        envelopes = load_bound_visualizer_envelopes(
-            request.state,
-            ffmpeg=request.ffmpeg,
-            sources=request.audio_sources,
-            duration=request.profile.duration,
-            log=logger,
-        )
-
-    media_layers = {
-        item.id: (item.media, media_info[item.id])
-        for item in ordered_items
-        if item.media is not None
-    }
-    media_pool = ComposerMediaDecoderPool(request.ffmpeg, media_layers, log=logger)
-
-    output = AtomicOutput.for_path(request.output)
-    output.prepare()
-    decoder: subprocess.Popen | None = None
-    encoder: subprocess.Popen | None = None
-    temporary_dir = Path(tempfile.mkdtemp(prefix="cinepulse-composer-", dir=request.output.parent))
-    visual_master = temporary_dir / "composer-reference.mkv"
-    decoder_log = temporary_dir / "decode.log"
-    encoder_log = temporary_dir / "encode.log"
-    try:
-        with decoder_log.open("wb") as decode_stderr, encoder_log.open("wb") as encode_stderr:
-            decoder = subprocess.Popen(
-                _base_decode_command(request, frame_count),
-                stdout=subprocess.PIPE,
-                stderr=decode_stderr,
-                stdin=subprocess.DEVNULL,
-                **popen_group_kwargs(),
-            )
-            encoder = subprocess.Popen(
-                _video_encode_command(request, visual_master),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=encode_stderr,
-                **popen_group_kwargs(),
-            )
-            assert decoder.stdout is not None and encoder.stdin is not None
-            for index in range(frame_count):
-                if cancel():
-                    raise InterruptedError("Preview Composer export cancelled")
-                raw = _read_exact(decoder.stdout, frame_bytes)
-                if len(raw) != frame_bytes:
-                    decode_stderr.flush()
-                    code = decoder.poll()
-                    details = decoder_log.read_text(encoding="utf-8", errors="replace")[-4000:]
-                    suffix = f"; decoder exited with {code}" if code is not None else ""
-                    raise RuntimeError(
-                        (details.strip() + suffix) if details.strip() else
-                        f"base decoder produced {len(raw)}/{frame_bytes} bytes at frame {index}{suffix}"
-                    )
-                base = np.frombuffer(raw, dtype=np.uint8).reshape(request.profile.height, request.profile.width, 4)
-                project_time = index / request.profile.fps
-                media_frames: dict[str, np.ndarray] = {}
-                for item in ordered_items:
-                    if item.media is None:
-                        continue
-                    info = media_info[item.id]
-                    position = playback_position(item.media, info, project_time=project_time)
-                    decoded = media_pool.frame(item.id, position)
-                    if decoded is not None:
-                        media_frames[item.id] = decoded
-                audio = composer_audio_features(request.state, envelopes, project_time=project_time)
-                rendered = render_composer_frame(
-                    base,
-                    request.state,
-                    ComposerFrameInputs(project_time, media_frames, audio),
-                )
-                try:
-                    encoder.stdin.write(rendered.tobytes(order="C"))
-                except (BrokenPipeError, OSError) as exc:
-                    raise RuntimeError("composer reference encoder closed early") from exc
-                if progress:
-                    progress(index + 1, frame_count)
-            encoder.stdin.close()
-            decoder.stdout.close()
-
-        decoder_code = decoder.wait(timeout=30)
-        encoder_code = encoder.wait(timeout=60)
-        if decoder_code:
-            details = decoder_log.read_text(encoding="utf-8", errors="replace")[-4000:]
-            raise RuntimeError(details.strip() or f"composer base decoder exited with {decoder_code}")
-        if encoder_code or not visual_master.is_file() or visual_master.stat().st_size == 0:
-            details = encoder_log.read_text(encoding="utf-8", errors="replace")[-4000:]
-            raise RuntimeError(details.strip() or f"composer reference encoder exited with {encoder_code}")
-        if cancel():
-            raise InterruptedError("Preview Composer export cancelled")
-
-        stats = media_pool.stats
-        if media_count:
-            logger(
-                "Composer media decode: "
-                f"{stats.process_starts} processo(s), {stats.frames_read} frame(s), "
-                f"{stats.cache_hits} cache hit(s), {stats.restarts} restart(s)."
-            )
-
-        mux = subprocess.run(
-            _mux_command(request, visual_master, output.partial),
+    with tempfile.TemporaryDirectory(prefix="cinepulse-composer-", dir=output.parent) as temporary:
+        temp_root = Path(temporary)
+        visual = temp_root / "composer-reference.mkv"
+        base_command = _base_decode_command(request, frames)
+        encoder_command = _video_encode_command(request, visual)
+        logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
+        base = subprocess.Popen(
+            base_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=False,
-            creationflags=0x08000000 if os.name == "nt" else 0,
+            creationflags=CREATE_NO_WINDOW,
         )
-        if mux.returncode:
-            details = (mux.stderr or b"").decode("utf-8", errors="replace")[-4000:]
-            raise RuntimeError(details.strip() or f"composer mux exited with {mux.returncode}")
-        output.commit()
-        return ComposerExportResult(output.final, frame_count, request.profile.duration, media_count, visualizer_count)
-    except BaseException:
-        output.discard()
-        raise
-    finally:
-        media_pool.close()
-        terminate_process_tree(decoder, logger, grace_seconds=1.5)
-        terminate_process_tree(encoder, logger, grace_seconds=1.5)
-        for stream in (getattr(decoder, "stdout", None), getattr(encoder, "stdin", None)):
-            try:
-                if stream is not None and not stream.closed:
-                    stream.close()
-            except OSError:
-                pass
-        shutil.rmtree(temporary_dir, ignore_errors=True)
+        encoder = subprocess.Popen(
+            encoder_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        decoders = ComposerDecoderPool(request.ffmpeg)
+        try:
+            assert base.stdout is not None
+            assert encoder.stdin is not None
+            for frame_index in range(frames):
+                if cancel():
+                    raise InterruptedError("composer export cancelled")
+                payload = _read_exact(base.stdout, frame_bytes)
+                if len(payload) != frame_bytes:
+                    raise RuntimeError(
+                        f"composer base decode ended at frame {frame_index}/{frames}; "
+                        f"got {len(payload)} of {frame_bytes} bytes"
+                    )
+                base_frame = np.frombuffer(payload, dtype=np.uint8).reshape(
+                    request.profile.height, request.profile.width, 4
+                ).copy()
+                project_time = frame_index / request.profile.fps
+                media_frames: dict[str, np.ndarray | None] = {}
+                for item in ordered:
+                    if item.media is None:
+                        continue
+                    info = infos[item.id]
+                    position = playback_position(item.media, info, project_time)
+                    media_frames[item.id] = decoders.frame(item.id, item.media, info, position)
+                features: dict[str, FrameAudioFeatures] = {}
+                for item in ordered:
+                    envelope = features_for_item(item, envelopes or {})
+                    features[item.id] = envelope.sample(project_time) if envelope else FrameAudioFeatures()
+                composed = render_composer_frame(
+                    base_frame,
+                    request.state,
+                    media_frames=media_frames,
+                    audio_features=features,
+                    output_size=(request.profile.width, request.profile.height),
+                )
+                try:
+                    encoder.stdin.write(composed.tobytes())
+                except (BrokenPipeError, OSError) as exc:
+                    raise RuntimeError("composer reference encoder pipe closed early") from exc
+                if progress:
+                    progress(frame_index + 1, frames)
+            encoder.stdin.close()
+            base_code = base.wait(timeout=30)
+            encoder_code = encoder.wait(timeout=30)
+            if base_code:
+                details = (base.stderr.read() if base.stderr else b"").decode("utf-8", errors="replace")
+                raise RuntimeError(details.strip() or f"composer base decoder exited with {base_code}")
+            if encoder_code:
+                details = (encoder.stderr.read() if encoder.stderr else b"").decode("utf-8", errors="replace")
+                raise RuntimeError(details.strip() or f"composer reference encoder exited with {encoder_code}")
+            if cancel():
+                raise InterruptedError("composer export cancelled")
+            if not visual.is_file() or visual.stat().st_size <= 0:
+                raise RuntimeError("composer reference visual master was not produced")
+            with AtomicOutput(output) as atomic:
+                mux = subprocess.run(
+                    _mux_command(request, visual, atomic.partial),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                if mux.returncode:
+                    details = (mux.stderr or b"").decode("utf-8", errors="replace").strip()
+                    raise RuntimeError(details or f"composer mux exited with {mux.returncode}")
+                if cancel():
+                    raise InterruptedError("composer export cancelled")
+                atomic.commit()
+        finally:
+            decoders.close()
+            for process in (base, encoder):
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                        process.wait(timeout=3)
+                    except (OSError, subprocess.SubprocessError):
+                        try:
+                            process.kill()
+                        except OSError:
+                            pass
+    return ComposerExportResult(output, frames)
