@@ -33,6 +33,7 @@ VISUALIZER_LABELS = {
     "circular": "Circular",
 }
 BINDINGS = ("master", "vocals", "drums", "bass", "other")
+BLEND_MODES = ("normal", "multiply", "screen", "add", "overlay")
 
 
 def _state_for(studio) -> OverlayComposerState:
@@ -81,8 +82,8 @@ def show_overlay_composer(studio) -> None:
     window = Toplevel(studio.root if hasattr(studio, "root") else studio)
     studio._overlay_composer_window = window
     window.title("CinePulse Preview — Overlay Composer")
-    window.geometry("960x660")
-    window.minsize(780, 540)
+    window.geometry("980x710")
+    window.minsize(800, 580)
 
     # Worker threads never call Tk directly. They enqueue UI work and this pump
     # executes it on Tk's owning thread.
@@ -150,6 +151,8 @@ def show_overlay_composer(studio) -> None:
     y = DoubleVar(value=0.5)
     scale = DoubleVar(value=1.0)
     opacity = DoubleVar(value=1.0)
+    blend = StringVar(value="normal")
+    loop = BooleanVar(value=True)
     z_order = IntVar(value=0)
     rotation = DoubleVar(value=0.0)
     spin = DoubleVar(value=0.0)
@@ -190,22 +193,32 @@ def show_overlay_composer(studio) -> None:
     field(2, "Y normalizado", y, low=0, high=1, increment=0.01)
     field(3, "Escala", scale, low=0.01, high=16, increment=0.05)
     field(4, "Opacidade", opacity, low=0, high=1, increment=0.05)
-    field(5, "Z-order", z_order, low=-999, high=999, increment=1)
-    field(6, "Rotação °", rotation, low=-3600, high=3600, increment=1)
-    field(7, "Spin RPM", spin, low=-120, high=120, increment=0.5)
-    field(8, "Pulse", pulse, low=0, high=2, increment=0.05)
-    field(9, "Beat reaction", beat, low=0, high=2, increment=0.05)
-    ttk.Label(editor, text="Binding").grid(row=10, column=0, sticky="w", pady=4)
+    ttk.Label(editor, text="Blend").grid(row=5, column=0, sticky="w", pady=4)
+    blend_box = ttk.Combobox(
+        editor,
+        textvariable=blend,
+        values=BLEND_MODES,
+        state="readonly",
+    )
+    blend_box.grid(row=5, column=1, sticky="ew", pady=4)
+    loop_check = ttk.Checkbutton(editor, text="Loop da mídia", variable=loop)
+    loop_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
+    field(7, "Z-order", z_order, low=-999, high=999, increment=1)
+    field(8, "Rotação °", rotation, low=-3600, high=3600, increment=1)
+    field(9, "Spin RPM", spin, low=-120, high=120, increment=0.5)
+    field(10, "Pulse", pulse, low=0, high=2, increment=0.05)
+    field(11, "Beat reaction", beat, low=0, high=2, increment=0.05)
+    ttk.Label(editor, text="Binding").grid(row=12, column=0, sticky="w", pady=4)
     ttk.Combobox(
         editor,
         textvariable=binding,
         values=BINDINGS,
         state="readonly",
-    ).grid(row=10, column=1, sticky="ew", pady=4)
-    field(11, "Suavização", smoothing, low=0, high=1, increment=0.05)
-    field(12, "Reação", reaction, low=0, high=2, increment=0.05)
-    field(13, "Espessura", thickness, low=0.25, high=8, increment=0.25)
-    field(14, "Barras", bars, low=8, high=512, increment=8)
+    ).grid(row=12, column=1, sticky="ew", pady=4)
+    field(13, "Suavização", smoothing, low=0, high=1, increment=0.05)
+    field(14, "Reação", reaction, low=0, high=2, increment=0.05)
+    field(15, "Espessura", thickness, low=0.25, high=8, increment=0.25)
+    field(16, "Barras", bars, low=8, high=512, increment=8)
 
     def item_label(item: ComposerItem) -> tuple[str, str]:
         if item.media is not None:
@@ -250,6 +263,10 @@ def show_overlay_composer(studio) -> None:
         rotation.set(getattr(layer, "rotation_degrees", 0.0))
         spin.set(getattr(layer, "spin_rpm", 0.0))
         if item.media is not None:
+            blend.set(item.media.blend)
+            loop.set(item.media.loop)
+            blend_box.configure(state="readonly")
+            loop_check.configure(state="normal")
             pulse.set(item.media.pulse)
             beat.set(item.media.beat_reaction)
             binding.set(item.media.audio_binding)
@@ -259,6 +276,10 @@ def show_overlay_composer(studio) -> None:
             bars.set(64)
         else:
             assert item.visualizer is not None
+            blend.set("normal")
+            loop.set(False)
+            blend_box.configure(state="disabled")
+            loop_check.configure(state="disabled")
             pulse.set(0.0)
             beat.set(0.0)
             binding.set(item.visualizer.binding)
@@ -288,9 +309,9 @@ def show_overlay_composer(studio) -> None:
                     scale=scale.get(),
                     opacity=opacity.get(),
                     z_order=z_order.get(),
-                    blend=old.media.blend,
+                    blend=blend.get(),  # type: ignore[arg-type]
                     rotation_degrees=rotation.get(),
-                    loop=old.media.loop,
+                    loop=loop.get(),
                     spin_rpm=spin.get(),
                     pulse=pulse.get(),
                     beat_reaction=beat.get(),
@@ -321,7 +342,7 @@ def show_overlay_composer(studio) -> None:
             messagebox.showerror("Overlay Composer", str(exc), parent=window)
 
     ttk.Button(editor, text="Aplicar propriedades", command=apply_selected).grid(
-        row=15, column=0, columnspan=2, sticky="ew", pady=(10, 0)
+        row=17, column=0, columnspan=2, sticky="ew", pady=(10, 0)
     )
 
     actions = ttk.Frame(list_card)
@@ -602,7 +623,10 @@ def show_overlay_composer(studio) -> None:
 
     ttk.Label(
         shell,
-        text="Export CPU de referência: FFV1 RGB lossless + áudio master copiado. Stable permanece intacto.",
+        text=(
+            "Export CPU de referência: FFV1 RGB lossless + áudio master copiado. "
+            "Blend avançado cai no CPU; Stable permanece intacto."
+        ),
     ).grid(row=3, column=0, columnspan=2, sticky="e", pady=(5, 0))
 
     def close_window() -> None:
