@@ -139,8 +139,9 @@ class ComposerMediaTimingInferenceTests(unittest.TestCase):
         self.assertEqual(3, info.frame_count)
         self.assertEqual(2, playback_position(OverlayLayer("broken-timing.webp", "webp"), info, project_time=0.25).frame_index)
 
-    def test_probe_requests_compact_decoded_frame_timeline(self) -> None:
-        payload = {
+    @staticmethod
+    def _probe_payload() -> dict:
+        return {
             "streams": [
                 {
                     "codec_type": "video",
@@ -159,7 +160,9 @@ class ComposerMediaTimingInferenceTests(unittest.TestCase):
                 {"best_effort_timestamp_time": "0.1", "pkt_duration_time": "0.1"},
             ],
         }
-        completed = mock.Mock(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    def test_probe_requests_compact_decoded_frame_timeline(self) -> None:
+        completed = mock.Mock(returncode=0, stdout=json.dumps(self._probe_payload()), stderr="")
         with mock.patch("cinepulse.composer_media.subprocess.run", return_value=completed) as run:
             info = probe_composer_media("ffprobe", "clip.gif")
         command = run.call_args.args[0]
@@ -168,6 +171,19 @@ class ComposerMediaTimingInferenceTests(unittest.TestCase):
         self.assertIn("frame=best_effort_timestamp_time,pts_time,pkt_duration_time", entries)
         self.assertTrue(info.timing_exact)
         self.assertEqual((0.0, 0.1), info.frame_starts)
+
+    def test_lightweight_probe_omits_frame_enumeration(self) -> None:
+        payload = self._probe_payload()
+        payload.pop("frames")
+        completed = mock.Mock(returncode=0, stdout=json.dumps(payload), stderr="")
+        with mock.patch("cinepulse.composer_media.subprocess.run", return_value=completed) as run:
+            info = probe_composer_media("ffprobe", "clip.gif", exact_timing=False, timeout=15.0)
+        command = run.call_args.args[0]
+        self.assertNotIn("-show_frames", command)
+        entries = command[command.index("-show_entries") + 1]
+        self.assertNotIn("frame=", entries)
+        self.assertFalse(info.timing_exact)
+        self.assertEqual(2, info.frame_count)
 
 
 if __name__ == "__main__":
