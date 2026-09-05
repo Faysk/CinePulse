@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import signal
 import subprocess
 import unittest
 from unittest.mock import MagicMock, patch
@@ -24,7 +23,7 @@ class ProcessControlTests(unittest.TestCase):
             process_control.terminate_process_tree(process, messages.append, grace_seconds=0.01)
         self.assertEqual(
             [call.args for call in killpg.call_args_list],
-            [(4321, signal.SIGTERM), (4321, signal.SIGKILL)],
+            [(4321, process_control.SIGTERM), (4321, process_control.SIGKILL)],
         )
         self.assertTrue(any("SIGKILL" in message for message in messages))
 
@@ -39,7 +38,7 @@ class ProcessControlTests(unittest.TestCase):
             patch("cinepulse.process_control._wait_for_exit", return_value=True),
         ):
             process_control.terminate_process_tree(process, grace_seconds=0.01)
-        killpg.assert_called_once_with(4321, signal.SIGTERM)
+        killpg.assert_called_once_with(4321, process_control.SIGTERM)
 
     def test_direct_fallback_escalates_from_terminate_to_kill(self) -> None:
         process = MagicMock(spec=subprocess.Popen)
