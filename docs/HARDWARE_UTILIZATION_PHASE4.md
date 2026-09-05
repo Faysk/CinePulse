@@ -19,7 +19,7 @@ The live headroom contract is now consumed by the actual Studio render path befo
 
 The throughput probe runs only when the RenderPlan contains a neural enhancement or RIFE step. Non-neural renders therefore do not pay the physical scratch-probe cost. Real-ESRGAN and RIFE keep their existing model, scale, frame target, integrity and fallback behavior; H4 changes only how many frames may be materialized in one bounded workset.
 
-Focused source tests cover the live RAM/VRAM/scratch snapshot, low-space fail-closed behavior, probe cleanup, bounded budget derivation and both neural tuning safety contracts.
+Focused source tests cover the live RAM/VRAM/scratch snapshot, low-space fail-closed behavior, probe cleanup, bounded budget derivation and both neural tuning safety contracts. The Studio integration is also compiled and exercised under Python 3.11 so H4 does not accidentally rely on newer f-string grammar while the supported release matrix still includes 3.11.
 
 ## What the evidence is allowed to change
 
