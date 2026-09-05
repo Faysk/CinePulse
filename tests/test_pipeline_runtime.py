@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from cinepulse.pipeline_runtime import measure_resource_headroom, measure_scratch_write_mbps, vram_free_mb
+from cinepulse.pipeline_runtime import (
+    BackgroundCommand,
+    measure_resource_headroom,
+    measure_scratch_write_mbps,
+    vram_free_mb,
+)
 
 
 class FakeGpuSampler:
@@ -58,6 +65,39 @@ class PipelineRuntimeTests(unittest.TestCase):
             self.assertAlmostEqual(headroom.scratch_free_gb, 400.0)
             self.assertEqual(headroom.scratch_write_mbps, 1280.0)
             self.assertEqual(headroom.probe_bytes, 32 * 1024 ** 2)
+
+    def test_background_command_keeps_output_tail_and_reports_success(self) -> None:
+        task = BackgroundCommand(
+            [sys.executable, "-c", "print('H4_BACKGROUND_OK')"],
+            poll_seconds=0.02,
+        ).start()
+        result = task.wait(timeout=10)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(result.cancelled)
+        self.assertIn("H4_BACKGROUND_OK", result.output_tail)
+        self.assertTrue(task.done)
+
+    def test_background_command_surfaces_child_failure_tail(self) -> None:
+        task = BackgroundCommand(
+            [sys.executable, "-c", "import sys; print('H4_FAIL_MARKER'); sys.exit(7)"],
+            poll_seconds=0.02,
+        ).start()
+        with self.assertRaisesRegex(RuntimeError, "H4_FAIL_MARKER"):
+            task.wait(timeout=10)
+        self.assertTrue(task.done)
+
+    def test_background_command_cancel_terminates_independent_process_group(self) -> None:
+        task = BackgroundCommand(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            poll_seconds=0.02,
+        ).start()
+        deadline = time.monotonic() + 5.0
+        while not task.running and time.monotonic() < deadline:
+            time.sleep(0.01)
+        task.cancel()
+        result = task.wait(timeout=10)
+        self.assertTrue(result.cancelled)
+        self.assertTrue(task.done)
 
 
 if __name__ == "__main__":
