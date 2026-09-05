@@ -39,3 +39,9 @@ A Phase 2 optimization is accepted only when throughput improves without changin
 ## Runtime stage-aware integration
 
 The render worker now derives a bounded CPU budget per stage from detected topology while treating the saved/user thread value as a hard ceiling. CPU-heavy stages can use the profile envelope; GPU neural stages deliberately keep host concurrency modest to protect laptop package power and driver feed. Concurrency changes only: image algorithms, model selection, color/HDR transforms, cadence, audio, verification and recovery contracts are unchanged. Physical throughput and thermal acceptance still require real hardware telemetry.
+
+## Integrity-gated measured autotuning
+
+H1 can now consume a local `cpu-tuning.json` evidence cache keyed by exact stage, logical/physical topology, machine mode and whether the stage is feeding an active GPU path. The benchmark CLI records a winner only when at least one candidate has an explicit integrity PASS; a faster failed candidate can never win. Corrupt, missing, mismatched or over-cap evidence is ignored and the conservative topology scheduler remains the fallback.
+
+CI proves the policy contracts only. The repository still claims no physical throughput or thermal PASS until the representative workloads are run on real hardware and their telemetry is recorded.

@@ -57,6 +57,7 @@ from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
 from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
+from .cpu_tuning import CpuTuningKey, CpuTuningStore
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -4390,15 +4391,26 @@ class VideoOptimizerStudio:
             cpu_topology = detect_cpu_topology()
             dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
             machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
+            cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
 
             def stage_threads(stage: str, *, gpu_active: bool = False) -> int:
                 plan = schedule_cpu_threads(
                     stage, topology=cpu_topology, mode=machine_mode, gpu_active=gpu_active,
                     max_threads=settings.cpu_threads,
                 )
+                tuning_key = CpuTuningKey.from_topology(
+                    stage, cpu_topology, mode=machine_mode, gpu_active=gpu_active,
+                )
+                proven = cpu_tuning.lookup(tuning_key, max_threads=settings.cpu_threads)
+                if proven is not None:
+                    self._log(
+                        f"H1 CPU {stage}: usando política medida {proven}/{plan.logical_cpus} threads "
+                        f"(cap {settings.cpu_threads}, {machine_mode}; integridade aprovada)."
+                    )
+                    return proven
                 self._log(
                     f"H1 CPU {stage}: {plan.threads}/{plan.logical_cpus} threads "
-                    f"(cap {settings.cpu_threads}, {machine_mode}; {plan.reason})"
+                    f"(cap {settings.cpu_threads}, {machine_mode}; sem evidência medida aplicável; {plan.reason})"
                 )
                 return plan.threads
 
