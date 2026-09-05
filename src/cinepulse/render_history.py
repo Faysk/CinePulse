@@ -160,7 +160,7 @@ class RenderHistory:
             }:
                 return current
             updated = self.job_store.transition(target, reason=reason)
-            self.append_log(f"MANIFEST {label} revision={updated.revision} state={updated.state}")
+            self.append_log(f"MANIFEST transition {current.state}->{target} revision={updated.revision}")
             return updated
         except InvalidJobTransition as exc:
             self.append_log(f"MANIFEST WARNING transition {target}: {exc}")
