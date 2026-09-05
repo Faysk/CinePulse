@@ -4516,12 +4516,13 @@ class VideoOptimizerStudio:
                 working_video, working_w, working_h = self._enhance_clip_ai(
                     working_video, job_dir, working_start, video_duration, source_fps, source_w, source_h,
                     temp_paths, temp_dirs, stage_threads("neural_gpu", gpu_active=True), progress_base, 20,
-                    cache_source_video=settings.video, cache_quota_gb=settings.cache_quota_gb,
-                                    chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
+                    cache_source_video=settings.video,
+                    cache_quota_gb=settings.cache_quota_gb,
+                    chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                     overlap_extract=realesrgan_budget.overlap_extract,
                     overlap_pack=realesrgan_budget.overlap_pack,
                     runtime_guard=h5_ai_guard,
-)
+                )
                 self._release_temp_path(consumed_before_ai, temp_paths)
                 progress_base += 20.0
                 working_start = 0.0
@@ -4539,12 +4540,16 @@ class VideoOptimizerStudio:
                     previous_working = working_video
                     working_video = self._interpolate_rife(
                         working_video, job_dir, working_start, video_duration, working_fps, target_fps,
-                        settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, base_rife_weight,
+                        settings.use_cpu,
+                        stage_threads("neural_gpu", gpu_active=True),
+                        temp_paths,
+                        progress_base,
+                        base_rife_weight,
                         color_plan=color_plan,
-                                            chunk_budget_gb=rife_budget.chunk_budget_gb,
+                        chunk_budget_gb=rife_budget.chunk_budget_gb,
                         overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
                         runtime_guard=h5_rife_guard,
-)
+                    )
                     self._release_temp_path(previous_working, temp_paths)
                     working_start = 0.0
                     working_fps = float(target_fps)
@@ -4717,12 +4722,16 @@ class VideoOptimizerStudio:
                     previous_visual = visual_source
                     visual_source = self._interpolate_rife(
                         visual_source, job_dir, 0.0, project_duration, visual_fps, target_fps,
-                        settings.use_cpu, stage_threads("neural_gpu", gpu_active=True), temp_paths, progress_base, rife_weight,
+                        settings.use_cpu,
+                        stage_threads("neural_gpu", gpu_active=True),
+                        temp_paths,
+                        progress_base,
+                        rife_weight,
                         color_plan=color_plan,
-                                            chunk_budget_gb=rife_budget.chunk_budget_gb,
+                        chunk_budget_gb=rife_budget.chunk_budget_gb,
                         overlap_extract=(rife_budget.overlap_extract and not settings.use_cpu),
                         runtime_guard=h5_rife_guard,
-)
+                    )
                     self._release_temp_path(previous_visual, temp_paths)
                     visual_fps = float(target_fps)
                     progress_base += rife_weight

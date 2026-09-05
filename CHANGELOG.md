@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.3 — 2026-09-05
+
+- corrige a estimativa/materialização de armazenamento de loops longos distinguindo duração do clipe reutilizável da duração total do projeto;
+- em Loop musical, RIFE interpola o clipe reutilizável antes da expansão temporal e evita uma segunda passagem full-length;
+- VFX terminal de Loop musical pode ser fundido à entrega final, eliminando o intermediário FFV1 full-length sem remover AtomicOutput/verificação;
+- mantém 8K/120 como carga extrema sujeita a aceitação física separada, sem converter CI hospedado em PASS de hardware.
+
+## Não lançado — Restauração Preview + Hardware H1–H5
+
+- adiciona laboratório Preview isolado para detectar/revisar textos, QR codes e overlays persistentes, reconstruir regiões temporalmente e aplicar restauração de cor limitada;
+- exportação Preview usa arquivo temporário + promoção atômica, invalida análise quando a fonte muda no mesmo caminho e mantém o render Stable separado;
+- envelope experimental permite planejar até 12K/120 com guardas de memória/scratch e aviso explícito de aceitação física pendente para 8K+/alta cadência;
+- H1–H4 adicionam telemetria local, topologia/orçamentos de CPU, tuning físico opt-in, headroom RAM/VRAM/scratch e overlap neural estritamente limitado;
+- H5 consome a telemetria já coletada para downshift monotônico de chunks/overlap sob pressão térmica ou de memória, sem reduzir modelo, resolução, FPS, cor ou qualidade de entrega;
+- auditoria pesada reforça cancelamento Windows e Preview temporal por árvore de processos, contabiliza buffers rawvideo no working set e preserva fail-closed para VFR/FFprobe/baixa confiança;
+- aceitação física RTX/8K/12K/120 continua PENDING até execução em runner/hardware real; nenhuma evidência sintética é promovida a PASS físico.
+
 ## 1.1.2 — 2026-09-05
 
 - fecha a auditoria pós-1.1.1 com correções de preflight, saída atômica, locks/leases, cancelamento, persistência e updater;
