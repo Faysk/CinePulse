@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-import pytest
-
 from cinepulse.restoration_color import (
     RestorationColorControls,
     build_restoration_color_filter,
     preset_controls,
 )
+
+
+def _assert_raises(error_type: type[BaseException], callback) -> None:
+    try:
+        callback()
+    except error_type:
+        return
+    raise AssertionError(f"expected {error_type.__name__} to be raised")
 
 
 def test_neutral_controls_do_not_add_filter() -> None:
@@ -40,13 +46,9 @@ def test_tint_changes_green_channel() -> None:
 
 
 def test_controls_reject_values_outside_restoration_envelope() -> None:
-    with pytest.raises(ValueError):
-        RestorationColorControls(saturation=1.8)
-
-    with pytest.raises(ValueError):
-        RestorationColorControls(temperature=-0.4)
+    _assert_raises(ValueError, lambda: RestorationColorControls(saturation=1.8))
+    _assert_raises(ValueError, lambda: RestorationColorControls(temperature=-0.4))
 
 
 def test_unknown_preset_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        preset_controls("cinematic")  # type: ignore[arg-type]
+    _assert_raises(ValueError, lambda: preset_controls("cinematic"))  # type: ignore[arg-type]
