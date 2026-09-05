@@ -4,14 +4,22 @@ import re
 path = Path("src/cinepulse/studio.py")
 text = path.read_text(encoding="utf-8")
 
-old = "        self._busy = False\n"
+old = (
+    "        self._process: subprocess.Popen | None = None\n"
+    "        self._cancelled = False\n"
+    "        self._busy = False\n"
+    "        self._started_at: float | None = None\n"
+)
 new = (
+    "        self._process: subprocess.Popen | None = None\n"
+    "        self._cancelled = False\n"
     "        self._busy = False\n"
     "        self._available_update: update_manager.UpdateInfo | None = None\n"
     "        self._update_check_running = False\n"
+    "        self._started_at: float | None = None\n"
 )
 if text.count(old) != 1:
-    raise SystemExit("busy state anchor mismatch")
+    raise SystemExit("Studio init state anchor mismatch")
 text = text.replace(old, new, 1)
 
 old = "        self._schedule(350, self._recover_interrupted_render)\n"
