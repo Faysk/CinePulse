@@ -68,7 +68,6 @@ def run_candidate(
     incoming: Path,
     outgoing: Path,
     policy: RifePolicy,
-    requested_frames: int,
     uhd: bool,
     ffmpeg: str,
     timeout_seconds: float = 900.0,
@@ -150,12 +149,34 @@ def benchmark_and_record(
     ffmpeg: str,
     timeout_seconds: float = 900.0,
 ) -> tuple[RifePolicy | None, tuple[RifeSample, ...]]:
+    """Benchmark a bounded RIFE candidate set and persist only proven evidence.
+
+    The first policy is the conservative baseline by contract.  If that baseline
+    cannot pass the same integrity gates on the real machine, Phase 3 stops there
+    instead of trying more aggressive concurrency against an already unstable
+    hardware/software state.
+    """
     materialized = tuple(candidates)
     if not materialized:
         raise ValueError("no RIFE candidates supplied")
     work_dir.mkdir(parents=True, exist_ok=True)
     samples: list[RifeSample] = []
-    for index, policy in enumerate(materialized, start=1):
+
+    baseline = run_candidate(
+        executable=executable,
+        model=model,
+        incoming=incoming,
+        outgoing=work_dir / "candidate_01",
+        policy=materialized[0],
+        uhd=uhd,
+        ffmpeg=ffmpeg,
+        timeout_seconds=timeout_seconds,
+    )
+    samples.append(baseline)
+    if not baseline.accepted:
+        return None, tuple(samples)
+
+    for index, policy in enumerate(materialized[1:], start=2):
         samples.append(
             run_candidate(
                 executable=executable,
@@ -163,7 +184,6 @@ def benchmark_and_record(
                 incoming=incoming,
                 outgoing=work_dir / f"candidate_{index:02d}",
                 policy=policy,
-                requested_frames=0,
                 uhd=uhd,
                 ffmpeg=ffmpeg,
                 timeout_seconds=timeout_seconds,
