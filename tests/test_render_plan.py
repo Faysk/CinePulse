@@ -117,7 +117,7 @@ class RenderPlanTests(unittest.TestCase):
         )
         self.assertTrue(plan.step("enhancement").attempts)
 
-    def test_rife_is_one_shot_after_master(self):
+    def test_music_rife_is_one_shot_on_reusable_clip(self):
         plan = self._plan(
             source_width=1280,
             source_height=720,
@@ -128,11 +128,32 @@ class RenderPlanTests(unittest.TestCase):
             enhancement_mode="lanczos",
             interpolation_mode="rife",
         )
+        self.assertTrue(plan.step("rife_base").runs)
+        self.assertEqual(plan.step("rife_base").output_spec.fps, 60.0)
+        self.assertEqual(plan.step("master").output_spec.fps, 60.0)
+        self.assertFalse(plan.step("rife_final").attempts)
+        self.assertEqual(plan.metadata["rife_calls_planned"], 1)
+        self.assertTrue(plan.metadata["rife_loop_optimized"])
+        self.assertFalse(plan.metadata["vfx_delivery_fused"])
+
+    def test_music_vfx_delivery_is_fused_after_loop_rife(self):
+        plan = self._plan(
+            source_fps=24.0, target_fps=120.0, effects_active=True, interpolation_mode="rife",
+        )
+        self.assertTrue(plan.step("rife_base").runs)
+        self.assertFalse(plan.step("rife_final").attempts)
+        self.assertTrue(plan.metadata["vfx_delivery_fused"])
+
+    def test_original_project_keeps_one_shot_final_rife(self):
+        plan = self._plan(
+            project_mode="original", source_fps=24.0, target_fps=60.0,
+            effects_active=True, interpolation_mode="rife",
+        )
         self.assertFalse(plan.step("rife_base").attempts)
         self.assertEqual(plan.step("master").output_spec.fps, 24.0)
         self.assertTrue(plan.step("rife_final").runs)
-        self.assertEqual(plan.step("rife_final").output_spec.fps, 60.0)
         self.assertEqual(plan.metadata["rife_calls_planned"], 1)
+        self.assertFalse(plan.metadata["rife_loop_optimized"])
 
     def test_rife_is_skipped_when_source_already_meets_target_fps(self):
         plan = self._plan(

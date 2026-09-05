@@ -49,9 +49,58 @@ class StorageEngineTests(unittest.TestCase):
         estimate = estimate_storage(self._plan(), duration=30, output_gb=1.2, cache_current_gb=0, cache_quota_gb=50)
         keys = {stage.key for stage in estimate.stages}
         self.assertIn("enhancement", keys)
-        self.assertIn("rife_final", keys)
+        self.assertIn("rife_base", keys)
+        self.assertNotIn("rife_final", keys)
         self.assertGreater(estimate.peak_scratch_gb, 0)
         self.assertLessEqual(estimate.ai_chunk_frames, 240)
+
+    def test_music_loop_uses_clip_duration_before_timeline_expansion(self):
+        plan = self._plan(
+            source_width=1280, source_height=720, source_fps=24,
+            target_width=7680, target_height=4320, target_fps=120,
+            effects_active=True, transition_active=True,
+        )
+        short = estimate_storage(
+            plan, clip_duration=10, project_duration=10, output_gb=1.0, cache_quota_gb=50,
+        )
+        long = estimate_storage(
+            plan, clip_duration=10, project_duration=264, output_gb=20.0, cache_quota_gb=50,
+        )
+        short_by_key = {stage.key: stage for stage in short.stages}
+        long_by_key = {stage.key: stage for stage in long.stages}
+        for key in ("enhancement", "master", "transition"):
+            self.assertAlmostEqual(short_by_key[key].duration_seconds, 10.0)
+            self.assertAlmostEqual(long_by_key[key].duration_seconds, 10.0)
+            self.assertAlmostEqual(short_by_key[key].peak_scratch_gb, long_by_key[key].peak_scratch_gb, places=6)
+        self.assertAlmostEqual(short.cache_growth_gb, long.cache_growth_gb, places=6)
+        self.assertAlmostEqual(long_by_key["rife_base"].duration_seconds, 10.0)
+        self.assertNotIn("rife_final", long_by_key)
+        self.assertAlmostEqual(long_by_key["vfx"].duration_seconds, 264.0)
+        self.assertEqual(long_by_key["vfx"].persistent_gb, 0.0)
+        self.assertEqual(long_by_key["vfx"].working_set_gb, 0.0)
+        self.assertIn("streaming direto", long_by_key["vfx"].detail)
+        self.assertLess(long.peak_scratch_gb, 100.0)
+        self.assertEqual(long.clip_duration_seconds, 10.0)
+        self.assertEqual(long.project_duration_seconds, 264.0)
+
+    def test_color_prepass_is_counted_at_clip_duration(self):
+        plan = self._plan(
+            source_bit_depth=10, source_pixel_format="yuv420p10le",
+            source_primaries="bt709", source_transfer="bt709", source_space="bt709", source_range="tv",
+        )
+        estimate = estimate_storage(
+            plan, clip_duration=8, project_duration=240, output_gb=10, cache_quota_gb=50,
+        )
+        by_key = {stage.key: stage for stage in estimate.stages}
+        self.assertIn("color", by_key)
+        self.assertAlmostEqual(by_key["color"].duration_seconds, 8.0)
+        self.assertAlmostEqual(by_key["enhancement"].duration_seconds, 8.0)
+        self.assertAlmostEqual(by_key["vfx"].duration_seconds, 240.0)
+
+    def test_legacy_duration_keeps_single_timeline_compatibility(self):
+        estimate = estimate_storage(self._plan(), duration=30, output_gb=1.2)
+        self.assertEqual(estimate.clip_duration_seconds, 30.0)
+        self.assertEqual(estimate.project_duration_seconds, 30.0)
 
     def test_estimator_skips_ai_for_downscale(self):
         plan = self._plan(

@@ -31,12 +31,14 @@ class StorageStageEstimate:
     persistent_gb: float
     working_set_gb: float
     peak_scratch_gb: float
+    duration_seconds: float
     detail: str
 
     def line(self) -> str:
         return (
             f"{self.title}: persistente ~{self.persistent_gb:.2f} GB • "
-            f"workset ~{self.working_set_gb:.2f} GB • pico ~{self.peak_scratch_gb:.2f} GB — {self.detail}"
+            f"workset ~{self.working_set_gb:.2f} GB • pico ~{self.peak_scratch_gb:.2f} GB • "
+            f"duração materializada ~{self.duration_seconds:.1f}s — {self.detail}"
         )
 
 
@@ -49,7 +51,9 @@ class StorageEstimate:
     stages: tuple[StorageStageEstimate, ...]
     ai_chunk_frames: int
     rife_chunk_frames: int
-    architecture_version: str = "core-integrity-phase6-storage-engine"
+    clip_duration_seconds: float = 0.0
+    project_duration_seconds: float = 0.0
+    architecture_version: str = "core-integrity-phase6-storage-engine-stage-duration-v2"
 
     @property
     def temporary_gb(self) -> float:
@@ -228,66 +232,163 @@ def _neural_chunk_gb(
 def estimate_storage(
     plan: RenderPlan,
     *,
-    duration: float,
     output_gb: float,
+    duration: float | None = None,
+    clip_duration: float | None = None,
+    project_duration: float | None = None,
     cache_current_gb: float = 0.0,
     cache_quota_gb: float = DEFAULT_CACHE_QUOTA_GB,
     chunk_budget_gb: float = DEFAULT_CHUNK_BUDGET_GB,
 ) -> StorageEstimate:
-    """Estimate per-stage scratch peak from the actual RenderPlan.
+    """Estimate scratch/cache pressure from the durations each stage materializes.
 
-    The model intentionally tracks *peak concurrent scratch* instead of adding
-    every temporary ever produced. Phase 6 releases consumed intermediates and
-    neural PNG worksets after each chunk, so this number maps to the execution
-    policy instead of the old whole-project frame materialization model.
+    ``clip_duration`` is the duration of the reusable visual clip before a music
+    loop is expanded. ``project_duration`` is the final timeline duration (for
+    example the music length).  The legacy ``duration`` argument remains as a
+    compatibility fallback and maps to both values.
+
+    In music mode the expensive pre-loop stages (color prepass, Real-ESRGAN,
+    master and loop transition) operate on the reusable clip only.  VFX, final
+    RIFE and delivery operate on the expanded project timeline.  Treating every
+    stage as project-long was the 1.1.2 false-terabyte preflight bug.
     """
 
-    seconds = max(0.01, float(duration))
+    if project_duration is None:
+        project_duration = duration
+    if clip_duration is None:
+        clip_duration = duration if duration is not None else project_duration
+    if project_duration is None or clip_duration is None:
+        raise TypeError("estimate_storage requires duration or both clip_duration/project_duration")
+
+    clip_seconds = max(0.01, float(clip_duration))
+    project_seconds = max(0.01, float(project_duration))
+    # Original-video projects have one timeline.  Keeping this normalization
+    # here prevents an accidental caller mismatch from under-estimating stages.
+    if plan.project_mode != "music":
+        clip_seconds = project_seconds
+
+    def stage_duration(key: str) -> float:
+        if plan.project_mode == "music" and key in {"color", "enhancement", "rife_base", "master", "transition"}:
+            return clip_seconds
+        return project_seconds
+
     stages: list[StorageStageEstimate] = []
     current_persistent = 0.0
     peak = 0.0
     cache_growth = 0.0
 
     ai = plan.step("enhancement")
+    rife_base = plan.step("rife_base")
+    rife = plan.step("rife_final")
+    color = plan.step("color")
+    ai_will_attempt = ai.attempts and plan.enhancement_mode == "realesrgan"
+    rife_final_will_attempt = rife.attempts and plan.interpolation_mode == "rife"
+    color_prepass = color.runs and (
+        ai_will_attempt
+        or rife_base.runs
+        or (rife_final_will_attempt and not plan.needs_master)
+    )
+
+    # The worker materializes an explicit lossless color prepass only when a
+    # neural stage is the first consumer.  Otherwise color conversion is fused
+    # into the master/final filter and does not create a separate scratch file.
+    if color_prepass and color.output_spec is not None:
+        seconds = stage_duration("color")
+        converted = _compressed_gb(color.output_spec, seconds, lossless=True)
+        stage_peak = current_persistent + converted
+        stages.append(StorageStageEstimate(
+            "color", "Gerenciamento de cor", converted, converted, stage_peak, seconds,
+            "prepass lossless explícito antes do primeiro estágio neural.",
+        ))
+        current_persistent = converted
+        peak = max(peak, stage_peak)
+
     ai_chunk = MAX_CHUNK_FRAMES
     if ai.attempts and ai.input_spec and ai.output_spec and ai.materializes_frames:
+        seconds = stage_duration("enhancement")
         ai_chunk = choose_chunk_frames(ai.input_spec, ai.output_spec, budget_gb=chunk_budget_gb)
         working = _neural_chunk_gb(ai.input_spec, ai.output_spec, ai_chunk)
         enhanced = _compressed_gb(ai.output_spec, seconds, lossless=True)
         # Chunk videos coexist with the assembled cache only during concat.
+        # A color prepass, when present, also remains live until AI promotion.
         stage_peak = max(current_persistent + working, current_persistent + enhanced * 2.05)
-        # Retention quota does not remove the transient need to write the new
-        # cache entry before older entries are evicted. Account for the new
-        # protected artifact itself, capped by the configured retention size.
         cache_growth = min(enhanced, cache_quota_gb) if cache_quota_gb > 0 else 0.0
         stages.append(StorageStageEstimate(
-            "enhancement", "Real-ESRGAN em chunks", 0.0, working, stage_peak,
+            "enhancement", "Real-ESRGAN em chunks", 0.0, working, stage_peak, seconds,
             f"{ai_chunk} quadro(s)/lote; PNGs são descartados e o master (~{enhanced:.2f} GB) é promovido ao cache.",
         ))
-        # The assembled AI master is atomically moved to cache, so it no longer
-        # occupies the scratch workset after this stage. Cache volume pressure
-        # is tracked separately through cache_growth_gb.
+        # The assembled AI master is atomically moved to cache and the optional
+        # color prepass is released by the worker after successful promotion.
         current_persistent = 0.0
         peak = max(peak, stage_peak)
 
-    for key in ("master", "transition", "vfx"):
+    rife_chunk = MAX_CHUNK_FRAMES
+    if rife_base.runs and rife_base.input_spec and rife_base.output_spec and rife_base.materializes_frames:
+        seconds = stage_duration("rife_base")
+        ratio = rife_base.output_spec.fps / max(1.0, rife_base.input_spec.fps)
+        rife_chunk = choose_chunk_frames(
+            rife_base.input_spec, rife_base.output_spec, budget_gb=chunk_budget_gb,
+            output_frames_per_input=ratio,
+        )
+        working = _neural_chunk_gb(
+            rife_base.input_spec, rife_base.output_spec, rife_chunk,
+            output_frames_per_input=ratio,
+        )
+        interpolated = _compressed_gb(rife_base.output_spec, seconds, lossless=True)
+        stage_peak = max(current_persistent + working, current_persistent + interpolated * 2.05)
+        stages.append(StorageStageEstimate(
+            "rife_base", "RIFE do clipe reutilizável", interpolated, working, stage_peak, seconds,
+            f"{rife_chunk} quadro(s) fonte/lote; o master neural cobre apenas o clipe reutilizável.",
+        ))
+        current_persistent = interpolated
+        peak = max(peak, stage_peak)
+
+    for key in ("master", "transition"):
         step = plan.step(key)
         if not step.runs or step.output_spec is None:
             continue
+        seconds = stage_duration(key)
         produced = _compressed_gb(step.output_spec, seconds, lossless=not step.lossy_intermediate)
-        # During production, previous visual source and new file overlap.  Once
-        # the stage succeeds, Phase 6 removes the consumed temporary.
+        # During production, previous visual source and new file overlap. Once
+        # the stage succeeds the worker releases the consumed scratch source.
         stage_peak = current_persistent + produced
         stages.append(StorageStageEstimate(
-            key, step.title, produced, produced, stage_peak,
+            key, step.title, produced, produced, stage_peak, seconds,
             "intermediário anterior é liberado após a promoção desta etapa.",
         ))
         current_persistent = produced
         peak = max(peak, stage_peak)
 
-    rife = plan.step("rife_final")
-    rife_chunk = MAX_CHUNK_FRAMES
+    vfx = plan.step("vfx")
+    fused_vfx_delivery = bool(
+        plan.project_mode == "music" and vfx.runs and not rife.attempts
+    )
+    if vfx.runs and vfx.output_spec is not None:
+        seconds = stage_duration("vfx")
+        if fused_vfx_delivery:
+            # The lossless reusable clip/master remains scratch while FFmpeg
+            # consumes it, but the project-long composed video is encoded
+            # directly into AtomicOutput on the output volume. No giant FFV1
+            # VFX master is materialized on scratch.
+            stage_peak = current_persistent
+            stages.append(StorageStageEstimate(
+                "vfx", "VFX reativos + entrega final", 0.0, 0.0, stage_peak, seconds,
+                "VFX do projeto inteiro são compostos e codificados por streaming direto na saída final; nenhum master VFX full-length é gravado no scratch.",
+            ))
+            peak = max(peak, stage_peak)
+            current_persistent = 0.0
+        else:
+            produced = _compressed_gb(vfx.output_spec, seconds, lossless=not vfx.lossy_intermediate)
+            stage_peak = current_persistent + produced
+            stages.append(StorageStageEstimate(
+                "vfx", vfx.title, produced, produced, stage_peak, seconds,
+                "intermediário VFX é necessário porque ainda existe uma etapa visual posterior.",
+            ))
+            current_persistent = produced
+            peak = max(peak, stage_peak)
+
     if rife.attempts and rife.input_spec and rife.output_spec and rife.materializes_frames:
+        seconds = stage_duration("rife_final")
         ratio = rife.output_spec.fps / max(1.0, rife.input_spec.fps)
         rife_chunk = choose_chunk_frames(
             rife.input_spec, rife.output_spec, budget_gb=chunk_budget_gb,
@@ -300,17 +401,17 @@ def estimate_storage(
         interpolated = _compressed_gb(rife.output_spec, seconds, lossless=True)
         stage_peak = max(current_persistent + working, current_persistent + interpolated * 2.05)
         stages.append(StorageStageEstimate(
-            "rife_final", "RIFE em chunks", interpolated, working, stage_peak,
+            "rife_final", "RIFE em chunks", interpolated, working, stage_peak, seconds,
             f"{rife_chunk} quadro(s) fonte/lote; entrada/saída PNG não cobrem mais o projeto inteiro.",
         ))
         current_persistent = interpolated
         peak = max(peak, stage_peak)
 
     # Final encoding overlaps the latest visual intermediate with the partial
-    # output, but the partial file belongs to the output volume.  Track only the
-    # scratch part here; build_storage_plan handles shared-volume addition.
+    # output, but the partial file belongs to the output volume.
+    final_seconds = stage_duration("finalize")
     stages.append(StorageStageEstimate(
-        "finalize", "Codificação final", current_persistent, 0.0, current_persistent,
+        "finalize", "Codificação final", current_persistent, 0.0, current_persistent, final_seconds,
         f"arquivo parcial de saída estimado separadamente em ~{max(0.0, output_gb):.2f} GB.",
     ))
     peak = max(peak, current_persistent)
@@ -323,6 +424,8 @@ def estimate_storage(
         stages=tuple(stages),
         ai_chunk_frames=ai_chunk,
         rife_chunk_frames=rife_chunk,
+        clip_duration_seconds=clip_seconds,
+        project_duration_seconds=project_seconds,
     )
 
 
