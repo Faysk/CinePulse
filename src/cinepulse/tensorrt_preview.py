@@ -22,7 +22,7 @@ import time
 from typing import Literal
 
 
-TENSORRT_PREVIEW_SCHEMA = 1
+TENSORRT_PREVIEW_SCHEMA = 2
 BackendModel = Literal["realesrgan", "rife"]
 Precision = Literal["fp32", "fp16"]
 
@@ -31,12 +31,17 @@ Precision = Literal["fp32", "fp16"]
 class TensorRtExternalBackend:
     runner: str
     version: str
+    tensorrt_version: str
     license_id: str
     redistributable_with_mit: bool = False
 
+    def __post_init__(self) -> None:
+        if not self.version.strip() or not self.tensorrt_version.strip() or not self.license_id.strip():
+            raise ValueError("TensorRT runner must report runner version, TensorRT version and license")
+
     @property
     def fingerprint(self) -> str:
-        raw = f"{self.runner}|{self.version}|{self.license_id}"
+        raw = f"{self.runner}|{self.version}|{self.tensorrt_version}|{self.license_id}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
     @property
@@ -47,7 +52,12 @@ class TensorRtExternalBackend:
 
 
 def probe_external_backend(runner: str) -> TensorRtExternalBackend | None:
-    """Probe a separately installed runner using a side-effect-free JSON call."""
+    """Probe a separately installed runner using a side-effect-free JSON call.
+
+    The runner, not a CLI flag or cached user setting, is authoritative for the
+    TensorRT runtime version. This prevents evidence generated against one
+    runtime from being replayed after an upgrade/downgrade.
+    """
     candidate = Path(runner)
     executable = str(candidate) if candidate.is_file() else runner
     try:
@@ -73,6 +83,7 @@ def probe_external_backend(runner: str) -> TensorRtExternalBackend | None:
         return TensorRtExternalBackend(
             runner=executable,
             version=str(payload["version"]),
+            tensorrt_version=str(payload["tensorrt_version"]),
             license_id=str(payload["license_id"]),
             redistributable_with_mit=bool(payload.get("redistributable_with_mit", False)),
         )
@@ -124,9 +135,6 @@ class TensorRtEvidence:
 
     @property
     def accepted(self) -> bool:
-        # TensorRT is optional and invasive enough to demand a material win.
-        # FP16/FP32 precision is encoded in the key; both still need the same
-        # near-identical visual threshold against the tuned NCNN baseline.
         return bool(
             not self.oom
             and self.baseline_seconds > 0
@@ -158,13 +166,17 @@ class TensorRtPreviewStore:
         return payload
 
     def approved(self, key: TensorRtKey, backend: TensorRtExternalBackend) -> bool:
-        if key.backend_fingerprint != backend.fingerprint:
+        if key.backend_fingerprint != backend.fingerprint or key.tensorrt_version != backend.tensorrt_version:
             return False
         record = self._load().get("records", {}).get(key.token())
         return bool(isinstance(record, dict) and record.get("accepted"))
 
     def record(self, key: TensorRtKey, backend: TensorRtExternalBackend, evidence: TensorRtEvidence) -> bool:
-        if key.backend_fingerprint != backend.fingerprint or not evidence.accepted:
+        if (
+            key.backend_fingerprint != backend.fingerprint
+            or key.tensorrt_version != backend.tensorrt_version
+            or not evidence.accepted
+        ):
             return False
         payload = self._load()
         records = payload.setdefault("records", {})
@@ -221,7 +233,6 @@ def build_external_command(
     height: int,
     precision: Precision,
 ) -> list[str]:
-    """Build the strict external protocol invocation; does not install anything."""
     return [
         backend.runner,
         "--cinepulse-run",
