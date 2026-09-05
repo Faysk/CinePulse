@@ -3,14 +3,17 @@ from __future__ import annotations
 """Bounded, cancellable CPU-reference export for Preview Overlay Composer.
 
 This is deliberately a correctness path, not the H6 fast path. It streams one
-base frame at a time, materializes at most one RGBA frame per enabled media
+base frame at a time, keeps at most one decoded RGBA frame per enabled media
 layer, applies the deterministic CPU reference compositor, writes a lossless
-FFV1 RGB master, then atomically promotes the muxed result. GPU routes may only
-replace stages after their exact visual/timing/color evidence is approved.
+FFV1 RGB master, then atomically promotes the muxed result. Media assets use a
+bounded sequential decoder pool: forward playback consumes exact frame order,
+repeated frames reuse the immutable last frame, and loop/back-seek restarts from
+frame zero instead of using approximate timestamp seeking.
 
-For now the reference export is intentionally limited to 8-bit SDR BT.709.
-HDR/10-bit sources fail closed instead of being silently converted by a Preview
-feature whose HDR parity has not been proven.
+GPU routes may only replace stages after their exact visual/timing/color
+evidence is approved. For now the reference export is intentionally limited to
+8-bit SDR BT.709. HDR/10-bit sources fail closed instead of being silently
+converted by a Preview feature whose HDR parity has not been proven.
 """
 
 from dataclasses import dataclass
@@ -25,7 +28,7 @@ import numpy as np
 
 from .composer_audio import VisualizerAudioEnvelope
 from .composer_audio_binding import composer_audio_features, load_bound_visualizer_envelopes
-from .composer_decode import decode_exact_rgba_frame
+from .composer_decode_stream import ComposerMediaDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
 from .composer_runtime import ComposerFrameInputs, render_composer_frame
 from .overlay_composer import OverlayComposerState
@@ -164,17 +167,19 @@ def export_composer_reference(
     """Render one Preview Composer project through the lossless CPU reference."""
     cancel = cancelled or (lambda: False)
     logger = log or (lambda _message: None)
+    ordered_items = request.state.ordered()
     if not request.profile.reference_supported:
         raise ValueError("Preview Composer CPU reference currently accepts only 8-bit SDR BT.709")
-    if not request.state.ordered():
+    if not ordered_items:
         raise ValueError("Preview Composer has no enabled layers to export")
 
-    output = AtomicOutput.for_path(request.output)
-    output.prepare()
+    # Validate source assets and build all read-only analysis state before an
+    # output partial is prepared. Validation failures therefore cannot leave a
+    # new partial file beside a previously good destination.
     frame_count = max(1, int(round(request.profile.duration * request.profile.fps)))
     frame_bytes = request.profile.width * request.profile.height * 4
     media_info = _validate_media(request)
-    visualizer_count = sum(1 for item in request.state.ordered() if item.visualizer is not None)
+    visualizer_count = sum(1 for item in ordered_items if item.visualizer is not None)
     media_count = len(media_info)
 
     if envelopes is None:
@@ -186,6 +191,15 @@ def export_composer_reference(
             log=logger,
         )
 
+    media_layers = {
+        item.id: (item.media, media_info[item.id])
+        for item in ordered_items
+        if item.media is not None
+    }
+    media_pool = ComposerMediaDecoderPool(request.ffmpeg, media_layers, log=logger)
+
+    output = AtomicOutput.for_path(request.output)
+    output.prepare()
     decoder: subprocess.Popen | None = None
     encoder: subprocess.Popen | None = None
     temporary_dir = Path(tempfile.mkdtemp(prefix="cinepulse-composer-", dir=request.output.parent))
@@ -225,12 +239,12 @@ def export_composer_reference(
                 base = np.frombuffer(raw, dtype=np.uint8).reshape(request.profile.height, request.profile.width, 4)
                 project_time = index / request.profile.fps
                 media_frames: dict[str, np.ndarray] = {}
-                for item in request.state.ordered():
+                for item in ordered_items:
                     if item.media is None:
                         continue
                     info = media_info[item.id]
                     position = playback_position(item.media, info, project_time=project_time)
-                    decoded = decode_exact_rgba_frame(request.ffmpeg, item.media, info, position)
+                    decoded = media_pool.frame(item.id, position)
                     if decoded is not None:
                         media_frames[item.id] = decoded
                 audio = composer_audio_features(request.state, envelopes, project_time=project_time)
@@ -259,6 +273,14 @@ def export_composer_reference(
         if cancel():
             raise InterruptedError("Preview Composer export cancelled")
 
+        stats = media_pool.stats
+        if media_count:
+            logger(
+                "Composer media decode: "
+                f"{stats.process_starts} processo(s), {stats.frames_read} frame(s), "
+                f"{stats.cache_hits} cache hit(s), {stats.restarts} restart(s)."
+            )
+
         mux = subprocess.run(
             _mux_command(request, visual_master, output.partial),
             stdout=subprocess.PIPE,
@@ -275,6 +297,7 @@ def export_composer_reference(
         output.discard()
         raise
     finally:
+        media_pool.close()
         terminate_process_tree(decoder, logger, grace_seconds=1.5)
         terminate_process_tree(encoder, logger, grace_seconds=1.5)
         for stream in (getattr(decoder, "stdout", None), getattr(encoder, "stdin", None)):
