@@ -1,0 +1,46 @@
+name: Temporary Final Audit Temporal Cancellation
+
+on:
+  push:
+    branches: [preview-restoration-lab]
+    paths:
+      - .github/workflows/_tmp-final-temporal-cancel.yml
+
+permissions:
+  contents: write
+
+jobs:
+  audit-fix:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: preview-restoration-lab
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Apply temporal cancellation hardening
+        run: |
+          python scripts/_tmp_final_temporal_cancel.py
+          python scripts/_tmp_final_temporal_tests.py
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check --editable .
+      - name: Compile package
+        run: python -m compileall -q src/cinepulse tests
+      - name: Temporal restoration tests
+        run: python -m unittest discover -s tests -p 'test_restoration_temporal_export.py'
+      - name: Preview export tests
+        run: python -m unittest discover -s tests -p 'test_restoration_export.py'
+      - name: Temporal route tests
+        run: python -m unittest discover -s tests -p 'test_restoration_export_temporal_route.py'
+      - name: Process control tests
+        run: python -m unittest discover -s tests -p 'test_process_control.py'
+      - name: Commit fix and remove temporary writers
+        shell: bash
+        run: |
+          git config user.name "CinePulse Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/_tmp-final-temporal-cancel.yml scripts/_tmp_final_temporal_cancel.py scripts/_tmp_final_temporal_tests.py
+          git add src/cinepulse/restoration_temporal_export.py src/cinepulse/restoration_export.py tests/test_restoration_temporal_export.py
+          git commit -m "Final audit: harden Preview temporal cancellation"
+          git push origin HEAD:preview-restoration-lab
