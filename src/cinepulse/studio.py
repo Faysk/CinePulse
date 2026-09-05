@@ -55,6 +55,7 @@ from .loop_engine import (
 from .paths import PATHS
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
+from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -246,7 +247,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 75,
         "audio_mode": "Preservar dinâmica original",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 20,
         "quality_check": True,
         "deep_verify": False,
@@ -275,7 +276,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 85,
         "audio_mode": "Normalizar para YouTube — -14 LUFS",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 20,
         "quality_check": True,
         "deep_verify": False,
@@ -304,7 +305,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 80,
         "audio_mode": "Normalizar para YouTube — -14 LUFS",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 15,
         "quality_check": True,
         "deep_verify": False,
@@ -333,7 +334,7 @@ BUILTIN_PRESETS = {
         "section_dynamics": 70,
         "audio_mode": "Preservar dinâmica original",
         "interpolation": "Movimento suave — FFmpeg",
-        "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+        "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
         "minimum_free_gb": 20,
         "quality_check": True,
         "deep_verify": False,
@@ -488,7 +489,7 @@ class VideoOptimizerStudio:
         self.preview_seconds = IntVar(value=10)
         self.audio_mode = StringVar(value="Preservar dinâmica original")
         self.interpolation = StringVar(value="Movimento suave — FFmpeg")
-        self.cpu_threads = IntVar(value=max(1, min(8, os.cpu_count() or 4)))
+        self.cpu_threads = IntVar(value=default_cpu_threads(os.cpu_count() or 4))
         self.minimum_free_gb = DoubleVar(value=20.0)
         self.scratch_dir = StringVar(value=str(WORK_DIR))
         self.cache_quota_gb = DoubleVar(value=50.0)
@@ -1239,7 +1240,7 @@ class VideoOptimizerStudio:
         defaults = {
             "audio_mode": "Preservar dinâmica original",
             "interpolation": "Movimento suave — FFmpeg",
-            "cpu_threads": max(1, min(8, os.cpu_count() or 4)),
+            "cpu_threads": default_cpu_threads(os.cpu_count() or 4),
             "minimum_free_gb": 20.0,
             "scratch_dir": str(WORK_DIR),
             "cache_quota_gb": 50.0,
@@ -1345,7 +1346,7 @@ class VideoOptimizerStudio:
             "section_dynamics": round(self.section_dynamics.get()),
             "audio_mode": self.audio_mode.get(),
             "interpolation": self.interpolation.get(),
-            "cpu_threads": int(self.cpu_threads.get()),
+            "cpu_threads": clamp_cpu_threads(int(self.cpu_threads.get()), self._hardware.cpu_threads),
             "minimum_free_gb": float(self.minimum_free_gb.get()),
             "scratch_dir": self.scratch_dir.get().strip(),
             "cache_quota_gb": float(self.cache_quota_gb.get()),
@@ -5135,7 +5136,7 @@ class VideoOptimizerStudio:
             self._set_stage("IA 2/3", f"Lote {chunk_index}: Real-ESRGAN em {frames} quadro(s).")
             command = [
                 str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
-                "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", "2:2:2",
+                "-n", "realesr-animevideov3", "-s", "2", "-f", "png", "-t", "256", "-j", realesrgan_pipeline_threads(cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb),
             ]
             self._run_ai(
                 command, outgoing, frames,
