@@ -5266,8 +5266,14 @@ class VideoOptimizerStudio:
                     self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
 
                 frames = len(list(incoming.glob("frame*.png")))
+                if frames < 1:
+                    raise RuntimeError("A IA não recebeu nenhum quadro do vídeo.")
                 if frames != count:
-                    raise RuntimeError(f"A IA recebeu {frames} de {count} quadros esperados no lote.")
+                    self._log(
+                        f"H4 PREFETCH Real-ESRGAN: FFmpeg entregou {frames}/{count} quadros; "
+                        "desativando prefetch para os lotes restantes e preservando a tolerância histórica."
+                    )
+                    overlap_extract = False
 
                 next_processed = processed + count
                 if overlap_extract and next_processed < total_frames and prefetch is None:
@@ -5824,28 +5830,79 @@ class VideoOptimizerStudio:
         path = Path(handle.name); handle.close(); paths.append(path); return path
 
     def _run_ffmpeg(self, command: list[str], duration: float, base: float, weight: float) -> None:
+        """Run FFmpeg without letting a blocked stdout pipe stall cancellation.
+
+        Progress parsing is performed on the render worker while a daemon reader
+        drains FFmpeg output. The worker therefore keeps polling the process and
+        can enforce cancellation even when Windows pipe EOF is delayed by a shim
+        or descendant process.
+        """
+        if self._cancelled:
+            raise InterruptedError
         self._log("Comando FFmpeg: " + subprocess.list2cmdline(command))
         recent: deque[str] = deque(maxlen=60)
+        lines = queue.Queue()
         process = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace", **popen_group_kwargs(),
         )
         self._process = process
         assert process.stdout is not None
-        for raw in process.stdout:
-            line = raw.strip()
-            if line:
-                recent.append(line); self._log(line)
-            if line.startswith("out_time="):
+
+        def reader() -> None:
+            try:
+                for raw in process.stdout:
+                    lines.put(raw)
+            except (OSError, ValueError):
+                # Cancellation may close the pipe from the worker thread after
+                # the process has already been terminated.
+                return
+
+        reader_thread = threading.Thread(target=reader, daemon=True)
+        reader_thread.start()
+
+        def drain_output() -> None:
+            while True:
                 try:
-                    hours, minutes, seconds = line.split("=", 1)[1].split(":")
-                    elapsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-                    self._push_progress(base + weight * min(1, elapsed / max(0.001, duration)))
-                except ValueError:
-                    pass
-            if self._cancelled and process.poll() is None:
-                terminate_process_tree(process, self._log)
-        code = process.wait()
+                    raw = lines.get_nowait()
+                except queue.Empty:
+                    return
+                line = raw.strip()
+                if line:
+                    recent.append(line)
+                    self._log(line)
+                if line.startswith("out_time="):
+                    try:
+                        hours, minutes, seconds = line.split("=", 1)[1].split(":")
+                        elapsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                        self._push_progress(base + weight * min(1, elapsed / max(0.001, duration)))
+                    except ValueError:
+                        pass
+
+        while process.poll() is None:
+            drain_output()
+            if self._cancelled:
+                terminate_process_tree(process, self._log, grace_seconds=2.0)
+                break
+            time.sleep(0.05)
+
+        drain_output()
+        try:
+            code = process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            terminate_process_tree(process, self._log, grace_seconds=1.0)
+            try:
+                code = process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("FFmpeg não encerrou após cancelamento forçado.") from exc
+        finally:
+            try:
+                process.stdout.close()
+            except (OSError, ValueError):
+                pass
+            reader_thread.join(timeout=1.0)
+            drain_output()
+
         if self._cancelled:
             raise InterruptedError
         if code:
