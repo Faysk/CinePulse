@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -11,6 +13,7 @@ from cinepulse.ui.restoration_lab import (
     analysis_summary,
     color_preview,
     overlay_boxes_preview,
+    source_identity,
 )
 
 
@@ -51,6 +54,21 @@ class RestorationLabTests(unittest.TestCase):
         region = OverlayRegion(x=0.1, y=0.2, width=0.2, height=0.1)
         plan = PreviewRestorationPlan(evidence=(), regions=(region,), overlay_filter="x", color_filter="")
         self.assertIn("1 região segura", analysis_summary(plan))
+
+    def test_source_identity_changes_when_file_is_replaced_in_place(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "clip.mp4"
+            source.write_bytes(b"first")
+            before = source_identity(source)
+            self.assertIsNotNone(before)
+            source.write_bytes(b"second-version")
+            after = source_identity(source)
+            self.assertIsNotNone(after)
+            self.assertNotEqual(before, after)
+            self.assertEqual(after.size, len(b"second-version"))
+
+    def test_source_identity_fails_closed_for_missing_source(self):
+        self.assertIsNone(source_identity(Path("definitely-missing-cinepulse-preview.mp4")))
 
 
 if __name__ == "__main__":
