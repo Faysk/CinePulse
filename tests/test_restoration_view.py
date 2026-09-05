@@ -27,6 +27,19 @@ class RestorationViewTests(unittest.TestCase):
         self.assertNotIn("RenderSettings(", source)
         self.assertNotIn("studio._settings", source)
 
+    def test_temperature_and_tint_sliders_match_color_contract_bounds(self) -> None:
+        source = inspect.getsource(restoration_view.build_restoration_panel)
+        self.assertIn(
+            'slider(7, "Temperatura", studio.restoration_temperature, -0.30, 0.30, "±30%")',
+            source,
+        )
+        self.assertIn(
+            'slider(8, "Tint", studio.restoration_tint, -0.25, 0.25, "±25%")',
+            source,
+        )
+        self.assertNotIn("restoration_temperature, -1.0, 1.0", source)
+        self.assertNotIn("restoration_tint, -1.0, 1.0", source)
+
 
 if __name__ == "__main__":
     unittest.main()
