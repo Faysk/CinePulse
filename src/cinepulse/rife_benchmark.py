@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
@@ -17,6 +19,9 @@ OOM_TOKENS = (
     "vk_error_out_of_device_memory",
     "device memory allocation failed",
 )
+QUALITY_PSNR_FLOOR_DB = 55.0
+QUALITY_SAMPLE_WIDTH = 320
+QUALITY_SAMPLE_HEIGHT = 180
 
 
 def looks_like_oom(text: str) -> bool:
@@ -54,11 +59,56 @@ def _black_frame_ok(ffmpeg: str, frames: list[Path]) -> bool:
         if result.returncode or len(result.stdout) != 64 * 36:
             return False
         values = result.stdout
-        # Only reject near-zero machine-black output. Real dark footage normally
-        # retains codec/image noise or non-zero structure and remains accepted.
         if max(values, default=0) <= 1:
             return False
     return True
+
+
+def _decode_quality_sample(ffmpeg: str, path: Path) -> bytes | None:
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+        "-vf",
+        f"scale={QUALITY_SAMPLE_WIDTH}:{QUALITY_SAMPLE_HEIGHT}:flags=lanczos,format=gray",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
+    result = subprocess.run(command, capture_output=True, check=False)
+    expected = QUALITY_SAMPLE_WIDTH * QUALITY_SAMPLE_HEIGHT
+    if result.returncode or len(result.stdout) != expected:
+        return None
+    return result.stdout
+
+
+def sampled_psnr(ffmpeg: str, reference_dir: Path, candidate_dir: Path) -> float | None:
+    """Measure sampled visual parity; concurrency tuning should be effectively identical."""
+    references = sorted(reference_dir.glob("*.png"))
+    candidates = sorted(candidate_dir.glob("*.png"))
+    if not references or len(references) != len(candidates):
+        return None
+    positions = sorted(set((0, len(references) // 2, len(references) - 1)))
+    squared_error = 0
+    sample_values = 0
+    for index in positions:
+        left = _decode_quality_sample(ffmpeg, references[index])
+        right = _decode_quality_sample(ffmpeg, candidates[index])
+        if left is None or right is None or len(left) != len(right):
+            return None
+        squared_error += sum((a - b) * (a - b) for a, b in zip(left, right))
+        sample_values += len(left)
+    if sample_values <= 0:
+        return None
+    mse = squared_error / sample_values
+    if mse <= 0:
+        return 120.0
+    return 10.0 * math.log10((255.0 * 255.0) / mse)
 
 
 def run_candidate(
@@ -149,24 +199,18 @@ def benchmark_and_record(
     ffmpeg: str,
     timeout_seconds: float = 900.0,
 ) -> tuple[RifePolicy | None, tuple[RifeSample, ...]]:
-    """Benchmark a bounded RIFE candidate set and persist only proven evidence.
-
-    The first policy is the conservative baseline by contract.  If that baseline
-    cannot pass the same integrity gates on the real machine, Phase 3 stops there
-    instead of trying more aggressive concurrency against an already unstable
-    hardware/software state.
-    """
+    """Benchmark candidates; baseline integrity and visual parity outrank speed."""
     materialized = tuple(candidates)
     if not materialized:
         raise ValueError("no RIFE candidates supplied")
     work_dir.mkdir(parents=True, exist_ok=True)
     samples: list[RifeSample] = []
-
+    baseline_dir = work_dir / "candidate_01"
     baseline = run_candidate(
         executable=executable,
         model=model,
         incoming=incoming,
-        outgoing=work_dir / "candidate_01",
+        outgoing=baseline_dir,
         policy=materialized[0],
         uhd=uhd,
         ffmpeg=ffmpeg,
@@ -177,17 +221,21 @@ def benchmark_and_record(
         return None, tuple(samples)
 
     for index, policy in enumerate(materialized[1:], start=2):
-        samples.append(
-            run_candidate(
-                executable=executable,
-                model=model,
-                incoming=incoming,
-                outgoing=work_dir / f"candidate_{index:02d}",
-                policy=policy,
-                uhd=uhd,
-                ffmpeg=ffmpeg,
-                timeout_seconds=timeout_seconds,
-            )
+        candidate_dir = work_dir / f"candidate_{index:02d}"
+        sample = run_candidate(
+            executable=executable,
+            model=model,
+            incoming=incoming,
+            outgoing=candidate_dir,
+            policy=policy,
+            uhd=uhd,
+            ffmpeg=ffmpeg,
+            timeout_seconds=timeout_seconds,
         )
+        if sample.accepted:
+            psnr = sampled_psnr(ffmpeg, baseline_dir, candidate_dir)
+            quality_ok = psnr is not None and psnr >= QUALITY_PSNR_FLOOR_DB
+            sample = replace(sample, quality_ok=quality_ok, quality_psnr_db=psnr)
+        samples.append(sample)
     winner = store.record_samples(key, samples, fallback=materialized[0])
     return winner, tuple(samples)
