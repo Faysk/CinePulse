@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from cinepulse.ui.composer_view import (
     _studio_audio_path,
     _studio_output_size,
     _studio_source_path,
+    show_overlay_composer,
 )
 
 
@@ -56,6 +58,15 @@ class ComposerViewHelpersTests(unittest.TestCase):
 
     def test_empty_source_has_no_source_path(self) -> None:
         self.assertIsNone(_studio_source_path(DummyStudio("   ")))
+
+    def test_default_composer_ui_is_direct_manipulation_not_coordinate_form(self) -> None:
+        source = inspect.getsource(show_overlay_composer)
+        self.assertIn("Escolher fundo", source)
+        self.assertIn("+ GIF / imagem", source)
+        self.assertIn("Arraste para mover", source)
+        self.assertIn("<B1-Motion>", source)
+        self.assertIn("Música automática", source)
+        self.assertNotIn('text="Áudio / stems"', source)
 
     def test_export_snapshot_is_detached_from_editor_mutations(self) -> None:
         original = OverlayComposerState(
