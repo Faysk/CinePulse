@@ -126,11 +126,14 @@ class OverlayComposerTests(unittest.TestCase):
     def test_preview_state_roundtrips_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "composer.json"
-            state = OverlayComposerState([
-                ComposerItem("logo", media=OverlayLayer("logo.png", "png", opacity=0.7, pulse=0.5)),
-                ComposerItem("viz", visualizer=VisualizerLayer("circular", binding="bass", spin_rpm=2.0)),
-                ComposerItem("hidden", media=OverlayLayer("hidden.webp", "webp"), enabled=False),
-            ])
+            state = OverlayComposerState(
+                [
+                    ComposerItem("logo", media=OverlayLayer("logo.png", "png", opacity=0.7, pulse=0.5)),
+                    ComposerItem("viz", visualizer=VisualizerLayer("circular", binding="bass", spin_rpm=2.0)),
+                    ComposerItem("hidden", media=OverlayLayer("hidden.webp", "webp"), enabled=False),
+                ],
+                background_source="background.png",
+            )
             state.save(path)
             restored = OverlayComposerState.load(path)
             self.assertEqual(state.as_dict(), restored.as_dict())
