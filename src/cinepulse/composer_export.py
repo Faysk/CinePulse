@@ -72,9 +72,8 @@ def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[st
 
     range_in = _range_token(p.color_range)
     vf = (
-        f"scale=w={p.width}:h={p.height}:force_original_aspect_ratio=increase:"
-        f"in_color_matrix=bt709:out_color_matrix=bt709:"
-        f"in_range={range_in}:out_range=pc,crop={p.width}:{p.height},format=rgba"
+        f"scale=w=iw:h=ih:in_color_matrix=bt709:out_color_matrix=bt709:"
+        f"in_range={range_in}:out_range=pc,format=rgba"
     )
     return [
         str(request.ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error",
