@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Shared base-video contract for the Preview Overlay Composer.
+"""Shared base-media contract for the Preview Overlay Composer.
 
-This module is deliberately dependency-light so probing and exporting can share
-one exact color/timing contract without importing each other.
+The Composer can use either a video or a still image as its visual base.  A
+still image receives timing from the project audio/output settings while the
+final render keeps the same deterministic SDR BT.709 reference contract.
 """
 
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ class ComposerBaseProfile:
     transfer: str
     matrix: str
     color_range: str
+    still_image: bool = False
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0 or self.fps <= 0 or self.duration <= 0:
