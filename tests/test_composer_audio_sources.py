@@ -20,7 +20,7 @@ class ComposerAudioSourceStateTests(unittest.TestCase):
             state.save(project)
             restored = OverlayComposerState.load(project)
             self.assertEqual(state.as_dict(), restored.as_dict())
-            self.assertEqual(2, restored.as_dict()["schema"])
+            self.assertEqual(3, restored.as_dict()["schema"])
             self.assertTrue(str(restored.audio_sources["vocals"]).endswith("vocals.wav"))
 
     def test_legacy_schema_one_loads_with_empty_audio_map(self) -> None:
@@ -38,7 +38,7 @@ class ComposerAudioSourceStateTests(unittest.TestCase):
             }
         )
         self.assertEqual({}, restored.audio_sources)
-        self.assertEqual(2, restored.as_dict()["schema"])
+        self.assertEqual(3, restored.as_dict()["schema"])
 
     def test_master_defaults_to_video_source_and_existing_custom_master_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
