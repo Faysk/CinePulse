@@ -774,6 +774,7 @@ def show_overlay_composer(studio) -> None:
         snapshot = _snapshot_state(state)
         master = _project_master_source(studio, base)
         sources = snapshot.resolved_audio_sources(master)
+        sources["master"] = str(master)
         stage["rendering"] = True
         preview_button.configure(state="disabled")
         export_button.configure(state="disabled")
@@ -867,7 +868,7 @@ def show_overlay_composer(studio) -> None:
         request = ComposerExportRequest(
             source=base, output=Path(output), profile=profile, state=snapshot,
             ffmpeg=str(FFMPEG), ffprobe=str(FFPROBE),
-            audio_sources=snapshot.resolved_audio_sources(master),
+            audio_sources={**snapshot.resolved_audio_sources(master), "master": str(master)},
             output_audio=output_audio,
         )
         export_cancel.clear()
