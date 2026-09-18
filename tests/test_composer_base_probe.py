@@ -40,6 +40,33 @@ class ComposerBaseProbeTests(unittest.TestCase):
         profile = base_profile_from_probe(payload)
         self.assertEqual(3.75, profile.duration)
 
+
+    def test_still_image_uses_project_timing_and_output_geometry(self) -> None:
+        payload = self.payload(
+            avg_frame_rate="0/0",
+            r_frame_rate="0/0",
+            duration=None,
+            pix_fmt="rgb24",
+            color_primaries=None,
+            color_transfer=None,
+            color_space=None,
+            color_range=None,
+        )
+        payload["format"]["duration"] = None
+        profile = base_profile_from_probe(
+            payload,
+            source="background.png",
+            duration_override=42.5,
+            fps_override=60.0,
+            width_override=3840,
+            height_override=2160,
+        )
+        self.assertTrue(profile.still_image)
+        self.assertEqual((3840, 2160), (profile.width, profile.height))
+        self.assertEqual(60.0, profile.fps)
+        self.assertEqual(42.5, profile.duration)
+        self.assertTrue(profile.reference_supported)
+
     def test_missing_video_or_bad_rate_fails_validation(self) -> None:
         with self.assertRaises(ValueError):
             base_profile_from_probe({"streams": [], "format": {}})
