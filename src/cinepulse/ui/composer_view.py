@@ -458,11 +458,13 @@ def show_overlay_composer(studio) -> None:
                 bw, bh = 180.0, 100.0
         else:
             assert item.visualizer is not None
+            # Visualizer geometry is normalized to the full local canvas and
+            # then scaled around its center by VisualizerLayer.scale.
             if item.visualizer.kind == "circular":
-                bw = bh = max(50.0, min(w, h) * 0.34 * item.visualizer.scale)
+                bw = bh = max(50.0, min(w, h) * item.visualizer.scale)
             else:
-                bw = max(70.0, w * 0.42 * item.visualizer.scale)
-                bh = max(45.0, h * 0.20 * item.visualizer.scale)
+                bw = max(70.0, w * item.visualizer.scale)
+                bh = max(45.0, h * item.visualizer.scale)
         return (cx - bw / 2.0, cy - bh / 2.0, cx + bw / 2.0, cy + bh / 2.0)
 
     def draw_selection() -> None:
@@ -625,7 +627,7 @@ def show_overlay_composer(studio) -> None:
 
     def add_visualizer(kind: str) -> None:
         top_z = max((item.z_order for item in state.items), default=0) + 1
-        x, y, scale = (0.84, 0.78, 0.55) if kind == "circular" else (0.78, 0.82, 0.55)
+        x, y, scale = (0.84, 0.78, 0.24) if kind == "circular" else (0.78, 0.82, 0.28)
         item = ComposerItem(
             "viz-" + uuid.uuid4().hex[:8],
             visualizer=VisualizerLayer(
