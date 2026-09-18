@@ -1,48 +1,129 @@
 from __future__ import annotations
 
-"""Isolated Tk editor for the Preview Overlay Composer.
+"""Direct-manipulation Preview Overlay Composer.
 
-The window owns Preview-only state and never writes Stable RenderSettings.
-Unproven GPU routes retain the deterministic CPU-reference renderer.
+The default Composer UI intentionally behaves like a small visual editor:
+choose a background, add media/visualizers, then drag and resize them directly
+on the canvas. Project music is consumed automatically from Studio; stems and
+low-level routing remain backend capabilities rather than mandatory UI steps.
+
+Preview-only state stays isolated from Stable RenderSettings. Unproven GPU
+routes remain evidence-gated and the deterministic CPU reference is always
+available.
 """
 
+from dataclasses import replace
 from pathlib import Path
+import math
 import queue
+import subprocess
 import threading
-from tkinter import BooleanVar, DoubleVar, IntVar, PhotoImage, StringVar, Toplevel, filedialog, messagebox, ttk
+from tkinter import BooleanVar, Canvas, DoubleVar, PhotoImage, StringVar, Toplevel, filedialog, messagebox, ttk
 import uuid
 
-from ..composer_base_probe import probe_composer_base
 from ..composer_auto_export import export_composer_auto
+from ..composer_base_probe import STILL_IMAGE_SUFFIXES, probe_composer_base
 from ..composer_export import ComposerExportRequest
-from ..composer_media import probe_composer_media, validate_layer_media
-from ..composer_preview import ComposerPreviewResult, render_composer_preview
-from ..gpu_compositor import OverlayLayer
-from ..loop_engine import FFMPEG, FFPROBE
-from ..overlay_composer import (
-    AUDIO_SOURCE_BINDINGS,
-    ComposerItem,
-    OverlayComposerState,
-    VisualizerLayer,
-    media_layer_from_path,
+from ..composer_media import ComposerMediaInfo, probe_composer_media, validate_layer_media
+from ..composer_preview import (
+    ComposerPreviewResult,
+    _decode_base_frame,
+    fit_preview_canvas,
+    render_composer_preview,
 )
+from ..loop_engine import FFMPEG, FFPROBE
+from ..overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer, media_layer_from_path
 from .preview import to_ppm_bytes
 
 
 MEDIA_LABELS = {
-    "png": "PNG",
+    "png": "Imagem",
     "gif": "GIF",
     "apng": "APNG",
     "webp": "WebP",
-    "video-alpha": "Vídeo/alpha",
+    "video-alpha": "Vídeo / alpha",
 }
 VISUALIZER_LABELS = {
-    "waveform": "Waveform",
-    "spectrum": "Spectrum",
+    "waveform": "Onda",
+    "spectrum": "Gráfico",
     "circular": "Circular",
 }
-BINDINGS = AUDIO_SOURCE_BINDINGS
 BLEND_MODES = ("normal", "multiply", "screen", "add", "overlay")
+OUTPUT_RESOLUTIONS = {
+    "720p HD": (1280, 720),
+    "1080p Full HD": (1920, 1080),
+    "1440p QHD": (2560, 1440),
+    "4K UHD": (3840, 2160),
+    "5K": (5120, 2880),
+    "6K": (5760, 3240),
+    "8K UHD": (7680, 4320),
+    "10K": (10240, 5760),
+    "12K": (11520, 6480),
+}
+
+
+def _var_value(studio, name: str) -> str:
+    variable = getattr(studio, name, None)
+    getter = getattr(variable, "get", None)
+    if getter is None:
+        return ""
+    try:
+        return str(getter() or "").strip()
+    except Exception:
+        return ""
+
+
+def _studio_source_path(studio) -> Path | None:
+    # Compatibility: older tests/helpers used source while real Studio owns video.
+    for name in ("source", "video"):
+        raw = _var_value(studio, name)
+        if raw:
+            return Path(raw).expanduser()
+    return None
+
+
+def _studio_audio_path(studio) -> Path | None:
+    raw = _var_value(studio, "audio")
+    return Path(raw).expanduser() if raw else None
+
+
+def _studio_fps(studio) -> float:
+    variable = getattr(studio, "fps", None)
+    getter = getattr(variable, "get", None)
+    try:
+        value = float(getter()) if getter is not None else 30.0
+    except Exception:
+        value = 30.0
+    return value if value > 0 else 30.0
+
+
+def _studio_output_size(studio) -> tuple[int, int]:
+    return OUTPUT_RESOLUTIONS.get(_var_value(studio, "resolution"), (1920, 1080))
+
+
+def _probe_duration(path: Path) -> float:
+    if not FFPROBE or not path.is_file():
+        return 0.0
+    try:
+        result = subprocess.run(
+            [
+                str(FFPROBE), "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=nw=1:nk=1", str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+        if result.returncode:
+            return 0.0
+        value = float((result.stdout or "").strip() or 0.0)
+        return value if math.isfinite(value) and value > 0 else 0.0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
 
 
 def _state_for(studio) -> OverlayComposerState:
@@ -53,14 +134,18 @@ def _state_for(studio) -> OverlayComposerState:
     return state
 
 
-def _studio_source_path(studio) -> Path | None:
-    getter = getattr(getattr(studio, "source", None), "get", lambda: "")
-    source = str(getter() or "").strip()
-    return Path(source).expanduser() if source else None
+def _composer_base_source(studio, state: OverlayComposerState) -> Path | None:
+    if state.background_source:
+        candidate = Path(state.background_source).expanduser()
+        if candidate.is_file():
+            return candidate
+    candidate = _studio_source_path(studio)
+    return candidate if candidate is not None and candidate.is_file() else None
 
 
 def _default_project_path(studio) -> Path:
-    source = _studio_source_path(studio)
+    state = _state_for(studio)
+    source = _composer_base_source(studio, state) or _studio_source_path(studio)
     if source is not None:
         return source.with_suffix(source.suffix + ".cinepulse-composer.json")
     return Path.home() / "cinepulse-composer.json"
@@ -74,6 +159,38 @@ def _default_export_path(source: Path) -> Path:
 def _snapshot_state(state: OverlayComposerState) -> OverlayComposerState:
     """Detach a running preview/export from subsequent editor mutations."""
     return OverlayComposerState.from_dict(state.as_dict())
+
+
+def _profile_for(studio, state: OverlayComposerState):
+    if not FFPROBE:
+        raise RuntimeError("FFprobe não foi encontrado.")
+    source = _composer_base_source(studio, state)
+    if source is None:
+        raise ValueError("Escolha um fundo para começar.")
+
+    if source.suffix.lower() in STILL_IMAGE_SUFFIXES:
+        audio = _studio_audio_path(studio)
+        duration = _probe_duration(audio) if audio is not None else 0.0
+        if duration <= 0:
+            duration = 10.0
+        width, height = _studio_output_size(studio)
+        return source, probe_composer_base(
+            str(FFPROBE),
+            source,
+            duration_override=duration,
+            fps_override=_studio_fps(studio),
+            width_override=width,
+            height_override=height,
+        )
+
+    return source, probe_composer_base(str(FFPROBE), source)
+
+
+def _project_master_source(studio, base: Path) -> Path:
+    audio = _studio_audio_path(studio)
+    if audio is not None and audio.is_file():
+        return audio
+    return base
 
 
 def show_overlay_composer(studio) -> None:
@@ -90,12 +207,10 @@ def show_overlay_composer(studio) -> None:
     state = _state_for(studio)
     window = Toplevel(studio.root if hasattr(studio, "root") else studio)
     studio._overlay_composer_window = window
-    window.title("CinePulse Preview — Overlay Composer")
-    window.geometry("1000x730")
-    window.minsize(820, 600)
+    window.title("CinePulse Preview — Composer visual")
+    window.geometry("1380x820")
+    window.minsize(1050, 680)
 
-    # Worker threads never call Tk directly. They enqueue UI work and this pump
-    # executes it on Tk's owning thread.
     ui_events: queue.Queue[tuple[object, tuple, dict]] = queue.Queue()
 
     def post(callback, *args, **kwargs) -> None:
@@ -116,383 +231,669 @@ def show_overlay_composer(studio) -> None:
 
     shell = ttk.Frame(window, padding=12)
     shell.pack(fill="both", expand=True)
-    shell.columnconfigure(0, weight=3)
-    shell.columnconfigure(1, weight=4)
+    shell.columnconfigure(0, weight=1)
+    shell.columnconfigure(1, weight=0)
     shell.rowconfigure(1, weight=1)
 
-    header = ttk.Frame(shell)
-    header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-    ttk.Label(
-        header,
-        text="Overlay Composer / Music Visualizer — Preview",
-        font=("Segoe UI", 13, "bold"),
-    ).pack(side="left")
-    status = StringVar(value="Preview isolado • GPU só com evidência física exata")
-    ttk.Label(header, textvariable=status).pack(side="right")
+    title_row = ttk.Frame(shell)
+    title_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+    ttk.Label(title_row, text="Composer visual", font=("Segoe UI", 15, "bold")).pack(side="left")
+    ttk.Label(title_row, text="Arraste para mover • puxe os cantos para redimensionar").pack(side="left", padx=(14, 0))
+    audio_status = StringVar()
+    ttk.Label(title_row, textvariable=audio_status).pack(side="right")
 
-    list_card = ttk.LabelFrame(shell, text="Camadas", padding=10)
-    list_card.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
-    list_card.rowconfigure(0, weight=1)
-    list_card.columnconfigure(0, weight=1)
-    tree = ttk.Treeview(
-        list_card,
-        columns=("type", "z", "binding"),
-        show="headings",
-        selectmode="browse",
-    )
-    tree.heading("type", text="Tipo")
-    tree.heading("z", text="Z")
-    tree.heading("binding", text="Áudio")
-    tree.column("type", width=150, anchor="w")
-    tree.column("z", width=45, anchor="center")
-    tree.column("binding", width=75, anchor="center")
-    tree.grid(row=0, column=0, columnspan=3, sticky="nsew")
-    scroll = ttk.Scrollbar(list_card, orient="vertical", command=tree.yview)
-    scroll.grid(row=0, column=3, sticky="ns")
-    tree.configure(yscrollcommand=scroll.set)
+    left = ttk.Frame(shell)
+    left.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+    left.columnconfigure(0, weight=1)
+    left.rowconfigure(1, weight=1)
 
-    editor = ttk.LabelFrame(shell, text="Propriedades", padding=12)
-    editor.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
-    editor.columnconfigure(1, weight=1)
+    toolbar = ttk.Frame(left)
+    toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
-    enabled = BooleanVar(value=True)
-    x = DoubleVar(value=0.5)
-    y = DoubleVar(value=0.5)
-    scale = DoubleVar(value=1.0)
-    opacity = DoubleVar(value=1.0)
-    blend = StringVar(value="normal")
-    loop = BooleanVar(value=True)
-    z_order = IntVar(value=0)
-    rotation = DoubleVar(value=0.0)
-    spin = DoubleVar(value=0.0)
-    pulse = DoubleVar(value=0.0)
-    beat = DoubleVar(value=0.0)
-    binding = StringVar(value="master")
-    smoothing = DoubleVar(value=0.65)
-    reaction = DoubleVar(value=1.0)
-    thickness = DoubleVar(value=1.0)
-    bars = IntVar(value=64)
-    selected_id = StringVar(value="")
-    export_progress = DoubleVar(value=0.0)
+    background_text = StringVar(value="Escolher fundo…")
+    ttk.Button(toolbar, textvariable=background_text, command=lambda: choose_background()).pack(side="left")
+    ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=8)
+    ttk.Button(toolbar, text="+ GIF / imagem", command=lambda: add_media()).pack(side="left")
+    ttk.Button(toolbar, text="+ Gráfico", command=lambda: add_visualizer("spectrum")).pack(side="left", padx=(5, 0))
+    ttk.Button(toolbar, text="+ Onda", command=lambda: add_visualizer("waveform")).pack(side="left", padx=(5, 0))
+    ttk.Button(toolbar, text="+ Circular", command=lambda: add_visualizer("circular")).pack(side="left", padx=(5, 0))
+
+    stage_card = ttk.LabelFrame(left, text="Prévia do vídeo", padding=8)
+    stage_card.grid(row=1, column=0, sticky="nsew")
+    stage_card.columnconfigure(0, weight=1)
+    stage_card.rowconfigure(0, weight=1)
+
+    canvas = Canvas(stage_card, width=960, height=540, background="#06090f", highlightthickness=0)
+    canvas.grid(row=0, column=0, sticky="nsew")
+
+    footer = ttk.Frame(left)
+    footer.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+    footer.columnconfigure(2, weight=1)
     preview_time = DoubleVar(value=0.0)
+    ttk.Label(footer, text="Tempo").grid(row=0, column=0, sticky="w")
+    ttk.Spinbox(footer, textvariable=preview_time, from_=0.0, to=86400.0, increment=0.5, width=8).grid(row=0, column=1, sticky="w", padx=(5, 10))
+    status = StringVar(value="Escolha um fundo. A música do projeto será usada automaticamente.")
+    ttk.Label(footer, textvariable=status).grid(row=0, column=2, sticky="ew")
+    preview_button = ttk.Button(footer, text="Atualizar prévia", command=lambda: request_render("manual"))
+    preview_button.grid(row=0, column=3, padx=(8, 0))
+    export_button = ttk.Button(footer, text="Exportar vídeo…", command=lambda: start_export())
+    export_button.grid(row=0, column=4, padx=(6, 0))
+    cancel_button = ttk.Button(footer, text="Cancelar", command=lambda: request_cancel(), state="disabled")
+    cancel_button.grid(row=0, column=5, padx=(6, 0))
+
+    sidebar = ttk.Frame(shell, width=330)
+    sidebar.grid(row=1, column=1, sticky="ns")
+    sidebar.grid_propagate(False)
+    sidebar.columnconfigure(0, weight=1)
+    sidebar.rowconfigure(1, weight=1)
+
+    ttk.Label(sidebar, text="Camadas", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+    layers = ttk.Treeview(sidebar, columns=("name",), show="headings", height=10, selectmode="browse")
+    layers.heading("name", text="Clique para selecionar")
+    layers.column("name", width=310, anchor="w")
+    layers.grid(row=1, column=0, sticky="nsew", pady=(5, 8))
+
+    selected_title = StringVar(value="Nenhuma camada selecionada")
+    properties = ttk.LabelFrame(sidebar, text="Ajustes rápidos", padding=10)
+    properties.grid(row=2, column=0, sticky="ew")
+    properties.columnconfigure(0, weight=1)
+    ttk.Label(properties, textvariable=selected_title, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+    opacity_var = DoubleVar(value=100.0)
+    reaction_var = DoubleVar(value=100.0)
+    opacity_text = StringVar(value="100%")
+    reaction_text = StringVar(value="100%")
+    loop_var = BooleanVar(value=True)
+
+    def slider_row(row: int, title: str, variable: DoubleVar, value_text: StringVar) -> ttk.Scale:
+        head = ttk.Frame(properties)
+        head.grid(row=row, column=0, sticky="ew", pady=(2, 0))
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text=title).grid(row=0, column=0, sticky="w")
+        ttk.Label(head, textvariable=value_text).grid(row=0, column=1, sticky="e")
+        scale_widget = ttk.Scale(properties, from_=0, to=200 if title == "Reação à música" else 100, variable=variable)
+        scale_widget.grid(row=row + 1, column=0, sticky="ew", pady=(0, 7))
+        scale_widget.bind("<ButtonRelease-1>", lambda _event: apply_quick_properties())
+        return scale_widget
+
+    slider_row(1, "Opacidade", opacity_var, opacity_text)
+    slider_row(3, "Reação à música", reaction_var, reaction_text)
+    loop_check = ttk.Checkbutton(properties, text="Repetir GIF / vídeo", variable=loop_var, command=lambda: apply_quick_properties())
+    loop_check.grid(row=5, column=0, sticky="w", pady=(2, 8))
+
+    order_row = ttk.Frame(properties)
+    order_row.grid(row=6, column=0, sticky="ew")
+    ttk.Button(order_row, text="Para frente", command=lambda: move_z(1)).pack(side="left")
+    ttk.Button(order_row, text="Para trás", command=lambda: move_z(-1)).pack(side="left", padx=(5, 0))
+    ttk.Button(order_row, text="Remover", command=lambda: remove_selected()).pack(side="right")
+
+    advanced_open = BooleanVar(value=False)
+    advanced = ttk.Frame(properties)
+    advanced.columnconfigure(1, weight=1)
+    rotation_var = DoubleVar(value=0.0)
+    spin_var = DoubleVar(value=0.0)
+    blend_var = StringVar(value="normal")
+    ttk.Label(advanced, text="Rotação").grid(row=0, column=0, sticky="w", pady=3)
+    ttk.Spinbox(advanced, textvariable=rotation_var, from_=-3600, to=3600, increment=1).grid(row=0, column=1, sticky="ew", pady=3)
+    ttk.Label(advanced, text="Spin RPM").grid(row=1, column=0, sticky="w", pady=3)
+    ttk.Spinbox(advanced, textvariable=spin_var, from_=-120, to=120, increment=0.5).grid(row=1, column=1, sticky="ew", pady=3)
+    ttk.Label(advanced, text="Blend").grid(row=2, column=0, sticky="w", pady=3)
+    blend_box = ttk.Combobox(advanced, textvariable=blend_var, values=BLEND_MODES, state="readonly")
+    blend_box.grid(row=2, column=1, sticky="ew", pady=3)
+    ttk.Button(advanced, text="Aplicar avançado", command=lambda: apply_advanced()).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(7, 0))
+
+    def toggle_advanced() -> None:
+        if advanced_open.get():
+            advanced_open.set(False)
+            advanced.grid_remove()
+            advanced_button.configure(text="Mais opções…")
+        else:
+            advanced_open.set(True)
+            advanced.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+            advanced_button.configure(text="Menos opções")
+
+    advanced_button = ttk.Button(properties, text="Mais opções…", command=toggle_advanced)
+    advanced_button.grid(row=7, column=0, sticky="ew", pady=(4, 0))
+
+    project_row = ttk.LabelFrame(sidebar, text="Projeto", padding=8)
+    project_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+    project_row.columnconfigure(0, weight=1)
+    ttk.Button(project_row, text="Abrir projeto…", command=lambda: load_state()).grid(row=0, column=0, sticky="ew")
+    ttk.Button(project_row, text="Salvar projeto…", command=lambda: save_state()).grid(row=1, column=0, sticky="ew", pady=(5, 0))
+
+    selected_id = StringVar(value="")
+    media_info: dict[str, ComposerMediaInfo] = {}
+    stage = {
+        "photo": None,
+        "preview_w": 960,
+        "preview_h": 540,
+        "origin_x": 0,
+        "origin_y": 0,
+        "profile": None,
+        "rendering": False,
+        "dirty": False,
+        "closing": False,
+    }
+    drag = {
+        "mode": "",
+        "start_x": 0.0,
+        "start_y": 0.0,
+        "start_layer_x": 0.5,
+        "start_layer_y": 0.5,
+        "start_scale": 1.0,
+        "start_distance": 1.0,
+    }
     export_cancel = threading.Event()
-    export_state = {"running": False, "close_requested": False}
-    preview_state = {"running": False, "close_requested": False}
+    export_running = {"value": False}
 
-    def field(
-        row: int,
-        label: str,
-        variable,
-        *,
-        low: float,
-        high: float,
-        increment: float = 0.05,
-    ) -> None:
-        ttk.Label(editor, text=label).grid(row=row, column=0, sticky="w", pady=4)
-        ttk.Spinbox(
-            editor,
-            textvariable=variable,
-            from_=low,
-            to=high,
-            increment=increment,
-        ).grid(row=row, column=1, sticky="ew", pady=4)
+    def update_audio_status() -> None:
+        audio = _studio_audio_path(studio)
+        if audio is not None and audio.is_file():
+            audio_status.set(f"Música automática: {audio.name}")
+        else:
+            audio_status.set("Música: nenhuma selecionada")
 
-    ttk.Checkbutton(editor, text="Camada ativa", variable=enabled).grid(
-        row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
-    )
-    field(1, "X normalizado", x, low=0, high=1, increment=0.01)
-    field(2, "Y normalizado", y, low=0, high=1, increment=0.01)
-    field(3, "Escala", scale, low=0.01, high=16, increment=0.05)
-    field(4, "Opacidade", opacity, low=0, high=1, increment=0.05)
-    ttk.Label(editor, text="Blend").grid(row=5, column=0, sticky="w", pady=4)
-    blend_box = ttk.Combobox(
-        editor,
-        textvariable=blend,
-        values=BLEND_MODES,
-        state="readonly",
-    )
-    blend_box.grid(row=5, column=1, sticky="ew", pady=4)
-    loop_check = ttk.Checkbutton(editor, text="Loop da mídia", variable=loop)
-    loop_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
-    field(7, "Z-order", z_order, low=-999, high=999, increment=1)
-    field(8, "Rotação °", rotation, low=-3600, high=3600, increment=1)
-    field(9, "Spin RPM", spin, low=-120, high=120, increment=0.5)
-    field(10, "Pulse", pulse, low=0, high=2, increment=0.05)
-    field(11, "Beat reaction", beat, low=0, high=2, increment=0.05)
-    ttk.Label(editor, text="Binding").grid(row=12, column=0, sticky="w", pady=4)
-    ttk.Combobox(
-        editor,
-        textvariable=binding,
-        values=BINDINGS,
-        state="readonly",
-    ).grid(row=12, column=1, sticky="ew", pady=4)
-    field(13, "Suavização", smoothing, low=0, high=1, increment=0.05)
-    field(14, "Reação", reaction, low=0, high=2, increment=0.05)
-    field(15, "Espessura", thickness, low=0.25, high=8, increment=0.25)
-    field(16, "Barras", bars, low=8, high=512, increment=8)
+    def update_background_text() -> None:
+        base = _composer_base_source(studio, state)
+        background_text.set(f"Fundo: {base.name}" if base is not None else "Escolher fundo…")
 
-    def item_label(item: ComposerItem) -> tuple[str, str]:
+    def item_text(item: ComposerItem) -> str:
         if item.media is not None:
-            return MEDIA_LABELS.get(item.media.kind, item.media.kind), item.media.audio_binding
+            return f"{MEDIA_LABELS.get(item.media.kind, item.media.kind)} • {Path(item.media.source).name}"
         assert item.visualizer is not None
-        return VISUALIZER_LABELS[item.visualizer.kind], item.visualizer.binding
+        return VISUALIZER_LABELS.get(item.visualizer.kind, item.visualizer.kind)
 
-    def refresh(select: str | None = None) -> None:
-        for child in tree.get_children():
-            tree.delete(child)
-        # Disabled items must remain editable even though ordered() intentionally
-        # omits them from rendering.
-        for item in sorted(state.items, key=lambda candidate: (candidate.z_order, candidate.id)):
-            label, audio = item_label(item)
-            suffix = "" if item.enabled else " (off)"
-            tree.insert("", "end", iid=item.id, values=(label + suffix, item.z_order, audio))
-        if select and tree.exists(select):
-            tree.selection_set(select)
-            tree.focus(select)
-        if not export_state["running"] and not preview_state["running"]:
-            status.set(
-                f"{len(state.items)} camada(s), {len(state.ordered())} ativa(s) • "
-                "Preview isolado • CUDA só com evidência aprovada"
-            )
+    def refresh_layers(select: str | None = None) -> None:
+        for child in layers.get_children():
+            layers.delete(child)
+        for item in sorted(state.items, key=lambda candidate: (candidate.z_order, candidate.id), reverse=True):
+            suffix = "" if item.enabled else " (oculta)"
+            layers.insert("", "end", iid=item.id, values=(item_text(item) + suffix,))
+        candidate = select or selected_id.get()
+        if candidate and layers.exists(candidate):
+            layers.selection_set(candidate)
+            layers.focus(candidate)
+        draw_selection()
 
-    def load_selected(_event=None) -> None:
-        selection = tree.selection()
-        if not selection:
-            return
-        item = next((candidate for candidate in state.items if candidate.id == selection[0]), None)
-        if item is None:
-            return
-        selected_id.set(item.id)
-        enabled.set(item.enabled)
+    def selected_item() -> ComposerItem | None:
+        item_id = selected_id.get()
+        return next((item for item in state.items if item.id == item_id), None)
+
+    def item_index(item_id: str) -> int | None:
+        return next((index for index, item in enumerate(state.items) if item.id == item_id), None)
+
+    def cached_media_info(item: ComposerItem) -> ComposerMediaInfo | None:
+        if item.media is None or not FFPROBE:
+            return None
+        existing_info = media_info.get(item.id)
+        if existing_info is not None:
+            return existing_info
+        try:
+            info = probe_composer_media(str(FFPROBE), item.media.source, timeout=10.0, exact_timing=False)
+        except Exception:
+            return None
+        media_info[item.id] = info
+        return info
+
+    def item_bbox(item: ComposerItem) -> tuple[float, float, float, float] | None:
+        profile = stage.get("profile")
+        if profile is None:
+            return None
+        w = float(stage["preview_w"])
+        h = float(stage["preview_h"])
+        ox = float(stage["origin_x"])
+        oy = float(stage["origin_y"])
         layer = item.media or item.visualizer
-        assert layer is not None
-        x.set(layer.x)
-        y.set(layer.y)
-        scale.set(layer.scale)
-        opacity.set(layer.opacity)
-        z_order.set(layer.z_order)
-        rotation.set(getattr(layer, "rotation_degrees", 0.0))
-        spin.set(getattr(layer, "spin_rpm", 0.0))
+        if layer is None:
+            return None
+        cx = ox + float(layer.x) * max(1.0, w - 1.0)
+        cy = oy + float(layer.y) * max(1.0, h - 1.0)
         if item.media is not None:
-            blend.set(item.media.blend)
-            loop.set(item.media.loop)
-            blend_box.configure(state="readonly")
-            loop_check.configure(state="normal")
-            pulse.set(item.media.pulse)
-            beat.set(item.media.beat_reaction)
-            binding.set(item.media.audio_binding)
-            smoothing.set(0.65)
-            reaction.set(1.0)
-            thickness.set(1.0)
-            bars.set(64)
+            info = cached_media_info(item)
+            if info is not None:
+                ratio = w / max(1.0, float(profile.width))
+                bw = max(24.0, info.width * float(layer.scale) * ratio)
+                bh = max(24.0, info.height * float(layer.scale) * ratio)
+            else:
+                bw, bh = 180.0, 100.0
         else:
             assert item.visualizer is not None
-            blend.set("normal")
-            loop.set(False)
-            blend_box.configure(state="disabled")
-            loop_check.configure(state="disabled")
-            pulse.set(0.0)
-            beat.set(0.0)
-            binding.set(item.visualizer.binding)
-            smoothing.set(item.visualizer.smoothing)
-            reaction.set(item.visualizer.reaction)
-            thickness.set(item.visualizer.thickness)
-            bars.set(item.visualizer.bars)
-
-    tree.bind("<<TreeviewSelect>>", load_selected)
-
-    def apply_selected() -> None:
-        item_id = selected_id.get()
-        index = next(
-            (idx for idx, candidate in enumerate(state.items) if candidate.id == item_id),
-            None,
-        )
-        if index is None:
-            return
-        old = state.items[index]
-        try:
-            if old.media is not None:
-                layer = OverlayLayer(
-                    source=old.media.source,
-                    kind=old.media.kind,
-                    x=x.get(),
-                    y=y.get(),
-                    scale=scale.get(),
-                    opacity=opacity.get(),
-                    z_order=z_order.get(),
-                    blend=blend.get(),  # type: ignore[arg-type]
-                    rotation_degrees=rotation.get(),
-                    loop=loop.get(),
-                    spin_rpm=spin.get(),
-                    pulse=pulse.get(),
-                    beat_reaction=beat.get(),
-                    audio_binding=binding.get(),
-                )
-                replacement = ComposerItem(old.id, media=layer, enabled=enabled.get())
+            # Visualizer geometry is normalized to the full local canvas and
+            # then scaled around its center by VisualizerLayer.scale.
+            if item.visualizer.kind == "circular":
+                bw = bh = max(50.0, min(w, h) * item.visualizer.scale)
             else:
-                assert old.visualizer is not None
-                layer = VisualizerLayer(
-                    old.visualizer.kind,
-                    x=x.get(),
-                    y=y.get(),
-                    scale=scale.get(),
-                    opacity=opacity.get(),
-                    z_order=z_order.get(),
-                    binding=binding.get(),
-                    smoothing=smoothing.get(),
-                    reaction=reaction.get(),
-                    thickness=thickness.get(),
-                    bars=bars.get(),
-                    rotation_degrees=rotation.get(),
-                    spin_rpm=spin.get(),
-                )
-                replacement = ComposerItem(old.id, visualizer=layer, enabled=enabled.get())
-            state.items[index] = replacement
-            refresh(old.id)
-        except (ValueError, TypeError) as exc:
-            messagebox.showerror("Overlay Composer", str(exc), parent=window)
+                bw = max(70.0, w * item.visualizer.scale)
+                bh = max(45.0, h * item.visualizer.scale)
+        return (cx - bw / 2.0, cy - bh / 2.0, cx + bw / 2.0, cy + bh / 2.0)
 
-    ttk.Button(editor, text="Aplicar propriedades", command=apply_selected).grid(
-        row=17, column=0, columnspan=2, sticky="ew", pady=(10, 0)
-    )
+    def draw_selection() -> None:
+        canvas.delete("selection")
+        item = selected_item()
+        if item is None:
+            return
+        bbox = item_bbox(item)
+        if bbox is None:
+            return
+        x0, y0, x1, y1 = bbox
+        canvas.create_rectangle(x0, y0, x1, y1, outline="#35a7ff", width=2, tags="selection")
+        size = 7
+        for px, py in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+            canvas.create_rectangle(px - size, py - size, px + size, py + size, fill="#35a7ff", outline="#dff3ff", tags="selection")
 
-    actions = ttk.Frame(list_card)
-    actions.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+    def sync_properties() -> None:
+        item = selected_item()
+        if item is None:
+            selected_title.set("Nenhuma camada selecionada")
+            return
+        layer = item.media or item.visualizer
+        assert layer is not None
+        selected_title.set(item_text(item))
+        opacity_var.set(float(layer.opacity) * 100.0)
+        opacity_text.set(f"{round(opacity_var.get())}%")
+        rotation_var.set(float(getattr(layer, "rotation_degrees", 0.0)))
+        spin_var.set(float(getattr(layer, "spin_rpm", 0.0)))
+        if item.media is not None:
+            reaction_var.set(float(item.media.beat_reaction) * 100.0)
+            loop_var.set(bool(item.media.loop))
+            blend_var.set(item.media.blend)
+            loop_check.configure(state="normal")
+            blend_box.configure(state="readonly")
+        else:
+            assert item.visualizer is not None
+            reaction_var.set(float(item.visualizer.reaction) * 100.0)
+            loop_var.set(False)
+            blend_var.set("normal")
+            loop_check.configure(state="disabled")
+            blend_box.configure(state="disabled")
+        reaction_text.set(f"{round(reaction_var.get())}%")
+        draw_selection()
+
+    def select_item(item_id: str) -> None:
+        if item_index(item_id) is None:
+            return
+        selected_id.set(item_id)
+        if layers.exists(item_id):
+            layers.selection_set(item_id)
+            layers.focus(item_id)
+        sync_properties()
+
+    def replace_selected_layer(**changes) -> bool:
+        index = item_index(selected_id.get())
+        if index is None:
+            return False
+        item = state.items[index]
+        if item.media is not None:
+            state.items[index] = replace(item, media=replace(item.media, **changes))
+        else:
+            assert item.visualizer is not None
+            state.items[index] = replace(item, visualizer=replace(item.visualizer, **changes))
+        return True
+
+    def apply_quick_properties() -> None:
+        item = selected_item()
+        if item is None:
+            return
+        opacity = max(0.0, min(1.0, float(opacity_var.get()) / 100.0))
+        reaction = max(0.0, min(2.0, float(reaction_var.get()) / 100.0))
+        opacity_text.set(f"{round(opacity * 100)}%")
+        reaction_text.set(f"{round(reaction * 100)}%")
+        if item.media is not None:
+            replace_selected_layer(opacity=opacity, beat_reaction=reaction, loop=bool(loop_var.get()))
+        else:
+            replace_selected_layer(opacity=opacity, reaction=reaction)
+        request_render("property")
+
+    def apply_advanced() -> None:
+        item = selected_item()
+        if item is None:
+            return
+        try:
+            changes = {"rotation_degrees": float(rotation_var.get()), "spin_rpm": float(spin_var.get())}
+            if item.media is not None:
+                changes["blend"] = blend_var.get()
+            replace_selected_layer(**changes)
+            request_render("advanced")
+        except (TypeError, ValueError) as exc:
+            messagebox.showerror("Composer", str(exc), parent=window)
+
+    def move_z(direction: int) -> None:
+        item = selected_item()
+        if item is None:
+            return
+        replace_selected_layer(z_order=item.z_order + (1 if direction > 0 else -1))
+        refresh_layers(item.id)
+        request_render("z")
+
+    def remove_selected() -> None:
+        item = selected_item()
+        if item is None:
+            return
+        if state.remove(item.id):
+            selected_id.set("")
+            media_info.pop(item.id, None)
+            refresh_layers()
+            sync_properties()
+            request_render("remove")
+
+    def choose_background() -> None:
+        path = filedialog.askopenfilename(
+            parent=window,
+            title="Escolher fundo",
+            filetypes=(
+                ("Imagem ou vídeo", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.webm"),
+                ("Imagens", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"),
+                ("Vídeos", "*.mp4 *.mov *.mkv *.webm"),
+                ("Todos", "*.*"),
+            ),
+        )
+        if not path:
+            return
+        state.background_source = str(Path(path).expanduser())
+        update_background_text()
+        status.set(f"Fundo selecionado: {Path(path).name}")
+        request_render("background")
 
     def add_media() -> None:
         path = filedialog.askopenfilename(
             parent=window,
-            title="Adicionar camada",
-            filetypes=(
-                ("Mídia visual", "*.png *.gif *.apng *.webp *.mov *.webm *.mkv *.mp4"),
-                ("Todos", "*.*"),
-            ),
+            title="Adicionar GIF, imagem ou vídeo",
+            filetypes=(("Mídia visual", "*.png *.gif *.apng *.webp *.mov *.webm *.mkv *.mp4"), ("Todos", "*.*")),
         )
         if not path:
             return
         if not FFPROBE:
-            messagebox.showerror("Overlay Composer", "FFprobe não foi encontrado.", parent=window)
+            messagebox.showerror("Composer", "FFprobe não foi encontrado.", parent=window)
             return
         try:
             layer = media_layer_from_path(path)
-            # UI validation is intentionally metadata-only. Exact VFR frame
-            # enumeration happens during the off-thread export preflight.
-            info = probe_composer_media(
-                str(FFPROBE),
-                path,
-                timeout=15.0,
-                exact_timing=False,
-            )
+            info = probe_composer_media(str(FFPROBE), path, timeout=15.0, exact_timing=False)
             problems = validate_layer_media(layer, info)
             if problems:
                 raise ValueError("; ".join(problems))
+            target_w, _target_h = _studio_output_size(studio)
+            default_scale = max(0.01, min(16.0, (target_w * 0.24) / max(1, info.width)))
+            top_z = max((item.z_order for item in state.items), default=0) + 1
+            layer = replace(layer, x=0.78, y=0.20, scale=default_scale, z_order=top_z, loop=True)
             item = ComposerItem("media-" + uuid.uuid4().hex[:8], media=layer)
             state.add(item)
-            refresh(item.id)
-            alpha = " • alpha" if info.has_alpha else ""
-            status.set(
-                f"{Path(path).name}: {info.width}x{info.height} • "
-                f"{info.fps:g} fps • {info.duration:.2f}s{alpha}"
-            )
+            media_info[item.id] = info
+            refresh_layers(item.id)
+            select_item(item.id)
+            status.set(f"{Path(path).name} adicionado • arraste no quadro para posicionar")
+            request_render("add-media")
         except (ValueError, RuntimeError) as exc:
-            messagebox.showerror("Overlay Composer", str(exc), parent=window)
+            messagebox.showerror("Composer", str(exc), parent=window)
 
     def add_visualizer(kind: str) -> None:
+        top_z = max((item.z_order for item in state.items), default=0) + 1
+        x, y, scale = (0.84, 0.78, 0.24) if kind == "circular" else (0.78, 0.82, 0.28)
         item = ComposerItem(
             "viz-" + uuid.uuid4().hex[:8],
-            visualizer=VisualizerLayer(kind),  # type: ignore[arg-type]
-        )
-        state.add(item)
-        refresh(item.id)
-
-    def remove_selected() -> None:
-        selection = tree.selection()
-        if selection and state.remove(selection[0]):
-            selected_id.set("")
-            refresh()
-
-    ttk.Button(actions, text="+ Mídia", command=add_media).pack(side="left")
-    ttk.Button(actions, text="+ Wave", command=lambda: add_visualizer("waveform")).pack(
-        side="left", padx=(4, 0)
-    )
-    ttk.Button(actions, text="+ Spectrum", command=lambda: add_visualizer("spectrum")).pack(
-        side="left", padx=(4, 0)
-    )
-    ttk.Button(actions, text="+ Circular", command=lambda: add_visualizer("circular")).pack(
-        side="left", padx=(4, 0)
-    )
-    ttk.Button(actions, text="Remover", command=remove_selected).pack(side="right")
-
-    audio_card = ttk.LabelFrame(list_card, text="Áudio / stems", padding=8)
-    audio_card.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(9, 0))
-    audio_card.columnconfigure(1, weight=1)
-    audio_labels = {name: StringVar(value="") for name in BINDINGS}
-    audio_titles = {
-        "master": "Master",
-        "vocals": "Vocals",
-        "drums": "Drums",
-        "bass": "Bass",
-        "other": "Other",
-    }
-
-    def refresh_audio_sources() -> None:
-        source = _studio_source_path(studio)
-        for name in BINDINGS:
-            configured = state.audio_sources.get(name)
-            if configured:
-                path = Path(configured).expanduser()
-                suffix = " • ausente" if not path.is_file() else ""
-                audio_labels[name].set(f"{path.name}{suffix}")
-            elif name == "master":
-                label = source.name if source is not None else "vídeo fonte"
-                audio_labels[name].set(f"vídeo fonte • {label}")
-            else:
-                audio_labels[name].set("não configurado • fallback master")
-
-    def choose_audio_source(name: str) -> None:
-        path = filedialog.askopenfilename(
-            parent=window,
-            title=f"Selecionar áudio/stem — {audio_titles[name]}",
-            filetypes=(
-                ("Áudio/vídeo", "*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.mka *.mkv *.mp4 *.mov *.webm"),
-                ("Todos", "*.*"),
+            visualizer=VisualizerLayer(
+                kind, x=x, y=y, scale=scale, z_order=top_z,
+                binding="master", reaction=1.0, bars=48 if kind == "spectrum" else 64,
             ),
         )
-        if not path:
+        state.add(item)
+        refresh_layers(item.id)
+        select_item(item.id)
+        status.set(f"{VISUALIZER_LABELS[kind]} adicionado • já usa a música do projeto")
+        request_render("add-visualizer")
+
+    def on_layer_select(_event=None) -> None:
+        selection = layers.selection()
+        if selection:
+            select_item(selection[0])
+
+    layers.bind("<<TreeviewSelect>>", on_layer_select)
+
+    def hit_handle(x: float, y: float, bbox: tuple[float, float, float, float]) -> bool:
+        x0, y0, x1, y1 = bbox
+        radius = 14.0
+        return any(abs(x - px) <= radius and abs(y - py) <= radius for px, py in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)))
+
+    def item_at(x: float, y: float) -> ComposerItem | None:
+        for item in sorted(state.items, key=lambda candidate: (candidate.z_order, candidate.id), reverse=True):
+            if not item.enabled:
+                continue
+            bbox = item_bbox(item)
+            if bbox is None:
+                continue
+            x0, y0, x1, y1 = bbox
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return item
+        return None
+
+    def on_canvas_press(event) -> None:
+        item = selected_item()
+        if item is not None:
+            bbox = item_bbox(item)
+            if bbox is not None and hit_handle(event.x, event.y, bbox):
+                x0, y0, x1, y1 = bbox
+                cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                layer = item.media or item.visualizer
+                assert layer is not None
+                drag.update(
+                    mode="resize", start_x=float(event.x), start_y=float(event.y),
+                    start_scale=float(layer.scale),
+                    start_distance=max(1.0, math.hypot(event.x - cx, event.y - cy)),
+                )
+                return
+        hit = item_at(event.x, event.y)
+        if hit is None:
+            return
+        select_item(hit.id)
+        layer = hit.media or hit.visualizer
+        assert layer is not None
+        drag.update(
+            mode="move", start_x=float(event.x), start_y=float(event.y),
+            start_layer_x=float(layer.x), start_layer_y=float(layer.y), start_scale=float(layer.scale),
+        )
+
+    def on_canvas_drag(event) -> None:
+        item = selected_item()
+        if item is None or not drag["mode"]:
+            return
+        preview_w = max(1.0, float(stage["preview_w"]))
+        preview_h = max(1.0, float(stage["preview_h"]))
+        if drag["mode"] == "move":
+            nx = max(0.0, min(1.0, float(drag["start_layer_x"]) + (event.x - float(drag["start_x"])) / preview_w))
+            ny = max(0.0, min(1.0, float(drag["start_layer_y"]) + (event.y - float(drag["start_y"])) / preview_h))
+            replace_selected_layer(x=nx, y=ny)
+            draw_selection()
+            return
+        bbox = item_bbox(item)
+        if bbox is None:
+            return
+        x0, y0, x1, y1 = bbox
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        distance = max(1.0, math.hypot(event.x - cx, event.y - cy))
+        factor = distance / max(1.0, float(drag["start_distance"]))
+        replace_selected_layer(scale=max(0.01, min(16.0, float(drag["start_scale"]) * factor)))
+        draw_selection()
+
+    def on_canvas_release(_event) -> None:
+        if drag["mode"]:
+            drag["mode"] = ""
+            request_render("drag")
+
+    canvas.bind("<ButtonPress-1>", on_canvas_press)
+    canvas.bind("<B1-Motion>", on_canvas_drag)
+    canvas.bind("<ButtonRelease-1>", on_canvas_release)
+
+    def show_stage(ppm: bytes, width: int, height: int, profile, message: str) -> None:
+        stage["rendering"] = False
+        photo = PhotoImage(data=ppm, format="PPM")
+        stage["photo"] = photo
+        stage["preview_w"] = width
+        stage["preview_h"] = height
+        stage["profile"] = profile
+        canvas.delete("preview")
+        canvas.update_idletasks()
+        cw = max(width, canvas.winfo_width())
+        ch = max(height, canvas.winfo_height())
+        ox = max(0, int((cw - width) / 2))
+        oy = max(0, int((ch - height) / 2))
+        stage["origin_x"] = ox
+        stage["origin_y"] = oy
+        canvas.create_image(ox, oy, image=photo, anchor="nw", tags="preview")
+        canvas.tag_lower("preview")
+        draw_selection()
+        status.set(message)
+        preview_button.configure(state="normal")
+        if not export_running["value"]:
+            export_button.configure(state="normal")
+        if stage["dirty"] and not stage["closing"]:
+            stage["dirty"] = False
+            request_render("queued")
+
+    def show_render_error(message: str) -> None:
+        stage["rendering"] = False
+        preview_button.configure(state="normal")
+        if not export_running["value"]:
+            export_button.configure(state="normal")
+        status.set(message)
+        if stage["dirty"] and not stage["closing"]:
+            stage["dirty"] = False
+            request_render("queued")
+
+    def request_render(_reason: str = "") -> None:
+        if stage["closing"]:
+            return
+        if stage["rendering"]:
+            stage["dirty"] = True
+            return
+        if not FFMPEG or not FFPROBE:
+            status.set("FFmpeg/FFprobe não estão disponíveis.")
             return
         try:
-            state.set_audio_source(name, path)
-            refresh_audio_sources()
-            status.set(f"{audio_titles[name]}: {Path(path).name}")
-        except ValueError as exc:
-            messagebox.showerror("Overlay Composer", str(exc), parent=window)
+            base, profile = _profile_for(studio, state)
+            requested_time = max(0.0, float(preview_time.get()))
+        except Exception as exc:
+            status.set(str(exc))
+            return
+        snapshot = _snapshot_state(state)
+        master = _project_master_source(studio, base)
+        sources = snapshot.resolved_audio_sources(master)
+        sources["master"] = str(master)
+        stage["rendering"] = True
+        preview_button.configure(state="disabled")
+        export_button.configure(state="disabled")
+        status.set("Atualizando prévia…")
 
-    def clear_audio_source(name: str) -> None:
-        state.clear_audio_source(name)
-        refresh_audio_sources()
-        if name == "master":
-            status.set("Master voltou a usar o áudio do vídeo fonte.")
+        def worker() -> None:
+            try:
+                if snapshot.ordered():
+                    result: ComposerPreviewResult = render_composer_preview(
+                        source=base, profile=profile, state=snapshot,
+                        ffmpeg=str(FFMPEG), ffprobe=str(FFPROBE),
+                        project_time=requested_time, audio_sources=sources,
+                        max_width=960, max_height=540,
+                    )
+                    post(
+                        show_stage,
+                        to_ppm_bytes(result.rgba[..., :3]),
+                        result.canvas_width,
+                        result.canvas_height,
+                        profile,
+                        f"Prévia pronta • {result.media_layers} mídia(s) • {result.visualizers} visualizador(es)",
+                    )
+                    return
+                width, height, _scale = fit_preview_canvas(profile.width, profile.height, max_width=960, max_height=540)
+                frame_count = max(1, int(round(profile.duration * profile.fps)))
+                frame_index = 0 if profile.still_image else min(
+                    frame_count - 1,
+                    max(0, int(math.floor(min(requested_time, profile.duration - 1e-9) * profile.fps))),
+                )
+                rgba = _decode_base_frame(
+                    str(FFMPEG), base, profile, frame_index,
+                    target_width=width, target_height=height,
+                )
+                post(show_stage, to_ppm_bytes(rgba[..., :3]), width, height, profile, "Fundo pronto • adicione GIF, imagem ou gráfico")
+            except Exception as exc:
+                post(show_render_error, f"Prévia: {exc}")
+
+        threading.Thread(target=worker, name="cinepulse-composer-stage", daemon=True).start()
+
+    def request_cancel() -> None:
+        if not export_running["value"]:
+            return
+        export_cancel.set()
+        cancel_button.configure(state="disabled")
+        status.set("Cancelando export…")
+
+    def finish_export(message: str, error: str | None = None, cancelled: bool = False) -> None:
+        export_running["value"] = False
+        export_button.configure(state="normal")
+        preview_button.configure(state="normal")
+        cancel_button.configure(state="disabled")
+        if cancelled:
+            status.set("Export cancelado • arquivo anterior preservado")
+        elif error is not None:
+            status.set("Falha no export • arquivo anterior preservado")
+            messagebox.showerror("Composer", error, parent=window)
         else:
-            status.set(f"{audio_titles[name]} removido • binding volta ao fallback master.")
+            status.set(message)
+            messagebox.showinfo("Composer", message, parent=window)
 
-    for row, name in enumerate(BINDINGS):
-        ttk.Label(audio_card, text=audio_titles[name], width=8).grid(row=row, column=0, sticky="w", pady=2)
-        ttk.Label(audio_card, textvariable=audio_labels[name]).grid(row=row, column=1, sticky="ew", padx=(4, 6), pady=2)
-        ttk.Button(audio_card, text="Escolher…", command=lambda key=name: choose_audio_source(key)).grid(
-            row=row, column=2, padx=(0, 4), pady=2
+    def start_export() -> None:
+        if export_running["value"] or stage["rendering"]:
+            return
+        if not FFMPEG or not FFPROBE:
+            messagebox.showerror("Composer", "FFmpeg/FFprobe não estão disponíveis.", parent=window)
+            return
+        snapshot = _snapshot_state(state)
+        if not snapshot.ordered():
+            messagebox.showinfo("Composer", "Adicione pelo menos um GIF, imagem ou visualizador.", parent=window)
+            return
+        try:
+            base, profile = _profile_for(studio, snapshot)
+        except Exception as exc:
+            messagebox.showerror("Composer", str(exc), parent=window)
+            return
+        default = _default_export_path(base)
+        output = filedialog.asksaveasfilename(
+            parent=window,
+            title="Exportar Composer",
+            initialdir=str(default.parent),
+            initialfile=default.name,
+            defaultextension=".mkv",
+            filetypes=(("Matroska lossless", "*.mkv"),),
         )
-        ttk.Button(audio_card, text="Limpar", command=lambda key=name: clear_audio_source(key)).grid(
-            row=row, column=3, pady=2
+        if not output:
+            return
+        master = _project_master_source(studio, base)
+        output_audio = _studio_audio_path(studio)
+        if output_audio is not None and not output_audio.is_file():
+            output_audio = None
+        request = ComposerExportRequest(
+            source=base, output=Path(output), profile=profile, state=snapshot,
+            ffmpeg=str(FFMPEG), ffprobe=str(FFPROBE),
+            audio_sources={**snapshot.resolved_audio_sources(master), "master": str(master)},
+            output_audio=output_audio,
         )
-    ttk.Label(
-        audio_card,
-        text="Stems não configurados usam master; caminhos ficam salvos no projeto Preview.",
-    ).grid(row=len(BINDINGS), column=0, columnspan=4, sticky="w", pady=(5, 0))
-    refresh_audio_sources()
+        export_cancel.clear()
+        export_running["value"] = True
+        export_button.configure(state="disabled")
+        preview_button.configure(state="disabled")
+        cancel_button.configure(state="normal")
+        status.set("Exportando… a música do projeto será usada automaticamente")
 
-    footer = ttk.Frame(shell)
-    footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-    footer.columnconfigure(4, weight=1)
+        def worker() -> None:
+            try:
+                result = export_composer_auto(
+                    request,
+                    cancelled=export_cancel.is_set,
+                    log=lambda message: post(status.set, message),
+                )
+                post(finish_export, f"Vídeo pronto: {Path(result.output).name} • backend {result.backend}")
+            except InterruptedError:
+                post(finish_export, "", None, True)
+            except Exception as exc:
+                post(finish_export, "", str(exc), False)
+
+        threading.Thread(target=worker, name="cinepulse-composer-export", daemon=True).start()
 
     def save_state() -> None:
         default = _default_project_path(studio)
@@ -507,23 +908,14 @@ def show_overlay_composer(studio) -> None:
             return
         try:
             state.save(Path(path))
-            status.set(f"Salvo: {Path(path).name}")
+            status.set(f"Projeto salvo: {Path(path).name}")
         except (OSError, ValueError) as exc:
-            messagebox.showerror("Overlay Composer", str(exc), parent=window)
+            messagebox.showerror("Composer", str(exc), parent=window)
 
     def load_state() -> None:
-        if export_state["running"] or preview_state["running"]:
-            messagebox.showinfo(
-                "Overlay Composer",
-                "Aguarde o preview ou cancele o export antes de abrir outro projeto.",
-                parent=window,
-            )
+        if export_running["value"]:
             return
-        path = filedialog.askopenfilename(
-            parent=window,
-            title="Abrir Composer",
-            filetypes=(("CinePulse Composer", "*.json"),),
-        )
+        path = filedialog.askopenfilename(parent=window, title="Abrir Composer", filetypes=(("CinePulse Composer", "*.json"),))
         if not path:
             return
         try:
@@ -531,355 +923,32 @@ def show_overlay_composer(studio) -> None:
             state.items[:] = loaded.items
             state.audio_sources.clear()
             state.audio_sources.update(loaded.audio_sources)
+            state.background_source = loaded.background_source
+            media_info.clear()
             selected_id.set("")
-            refresh_audio_sources()
-            refresh()
-            status.set(f"Aberto: {Path(path).name}")
+            update_background_text()
+            refresh_layers()
+            sync_properties()
+            status.set(f"Projeto aberto: {Path(path).name}")
+            request_render("load")
         except ValueError as exc:
-            messagebox.showerror("Overlay Composer", str(exc), parent=window)
-
-    ttk.Button(footer, text="Abrir…", command=load_state).grid(row=0, column=0, sticky="w")
-    ttk.Button(footer, text="Salvar…", command=save_state).grid(
-        row=0, column=1, sticky="w", padx=(6, 10)
-    )
-    ttk.Label(footer, text="Preview s").grid(row=0, column=2, sticky="e")
-    ttk.Spinbox(
-        footer,
-        textvariable=preview_time,
-        from_=0.0,
-        to=86400.0,
-        increment=0.1,
-        width=8,
-    ).grid(row=0, column=3, sticky="w", padx=(5, 8))
-
-    preview_button: ttk.Button
-    export_button: ttk.Button
-    cancel_button: ttk.Button
-
-    def show_preview_result(result: ComposerPreviewResult) -> None:
-        preview_state["running"] = False
-        preview_button.configure(state="normal")
-        if not export_state["running"]:
-            export_button.configure(state="normal")
-        if preview_state["close_requested"] or export_state["close_requested"]:
-            studio._overlay_composer_window = None
-            try:
-                existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
-                if existing_preview is not None and existing_preview.winfo_exists():
-                    existing_preview.destroy()
-            except Exception:
-                pass
-            window.destroy()
-            return
-
-        existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
-        try:
-            if existing_preview is not None and existing_preview.winfo_exists():
-                existing_preview.destroy()
-        except Exception:
-            pass
-        preview_window = Toplevel(window)
-        studio._overlay_composer_preview_window = preview_window
-        preview_window.title("CinePulse Preview — Composer frame")
-        frame = ttk.Frame(preview_window, padding=8)
-        frame.pack(fill="both", expand=True)
-        photo = PhotoImage(
-            data=to_ppm_bytes(result.rgba[..., :3]),
-            format="PPM",
-        )
-        image = ttk.Label(frame, image=photo, anchor="center")
-        image.image = photo  # type: ignore[attr-defined]
-        image.pack(fill="both", expand=True)
-        ttk.Label(
-            frame,
-            text=(
-                f"{result.canvas_width}×{result.canvas_height} • frame {result.frame_index} • "
-                f"t={result.project_time:.3f}s • CPU reference"
-            ),
-        ).pack(anchor="e", pady=(5, 0))
-        preview_window.resizable(False, False)
-        status.set(
-            f"Preview fiel pronto • {result.canvas_width}×{result.canvas_height} • "
-            f"{result.media_layers} mídia(s) • {result.visualizers} visualizer(s)"
-        )
-
-    def finish_preview_error(message: str) -> None:
-        preview_state["running"] = False
-        preview_button.configure(state="normal")
-        if not export_state["running"]:
-            export_button.configure(state="normal")
-        if preview_state["close_requested"] or export_state["close_requested"]:
-            studio._overlay_composer_window = None
-            window.destroy()
-            return
-        status.set("Falha ao gerar preview do Composer")
-        messagebox.showerror("Overlay Composer", message, parent=window)
-
-    def start_preview() -> None:
-        if preview_state["running"] or export_state["running"]:
-            return
-        source = _studio_source_path(studio)
-        if source is None or not source.is_file():
-            messagebox.showerror(
-                "Overlay Composer",
-                "Selecione um vídeo fonte válido no CinePulse.",
-                parent=window,
-            )
-            return
-        if not FFMPEG or not FFPROBE:
-            messagebox.showerror(
-                "Overlay Composer",
-                "FFmpeg/FFprobe não estão disponíveis.",
-                parent=window,
-            )
-            return
-        snapshot = _snapshot_state(state)
-        if not snapshot.ordered():
-            messagebox.showerror(
-                "Overlay Composer",
-                "Ative pelo menos uma camada antes de gerar o preview.",
-                parent=window,
-            )
-            return
-        try:
-            requested_time = max(0.0, float(preview_time.get()))
-        except (TypeError, ValueError):
-            messagebox.showerror("Overlay Composer", "Tempo de preview inválido.", parent=window)
-            return
-
-        preview_state["running"] = True
-        preview_state["close_requested"] = False
-        preview_button.configure(state="disabled")
-        export_button.configure(state="disabled")
-        status.set("Gerando preview fiel • canvas limitado a 960×540…")
-
-        def worker() -> None:
-            try:
-                profile = probe_composer_base(str(FFPROBE), source)
-                result = render_composer_preview(
-                    source=source,
-                    profile=profile,
-                    state=snapshot,
-                    ffmpeg=str(FFMPEG),
-                    ffprobe=str(FFPROBE),
-                    project_time=requested_time,
-                    audio_sources=snapshot.resolved_audio_sources(source),
-                    max_width=960,
-                    max_height=540,
-                )
-                post(show_preview_result, result)
-            except Exception as exc:
-                post(finish_preview_error, str(exc))
-
-        threading.Thread(
-            target=worker,
-            name="cinepulse-composer-preview",
-            daemon=True,
-        ).start()
-
-    preview_button = ttk.Button(
-        footer,
-        text="Prévia fiel do frame",
-        command=start_preview,
-    )
-    preview_button.grid(row=0, column=4, sticky="w")
-
-    export_buttons = ttk.Frame(footer)
-    export_buttons.grid(row=0, column=5, sticky="e", padx=(10, 0))
-
-    ttk.Progressbar(
-        footer,
-        variable=export_progress,
-        maximum=100.0,
-        mode="determinate",
-        length=260,
-    ).grid(row=1, column=2, columnspan=4, sticky="ew", pady=(7, 0))
-
-    def finish_export(
-        message: str,
-        *,
-        error: str | None = None,
-        cancelled: bool = False,
-    ) -> None:
-        export_state["running"] = False
-        export_button.configure(state="normal")
-        cancel_button.configure(state="disabled")
-        if not preview_state["running"]:
-            preview_button.configure(state="normal")
-        if export_state["close_requested"]:
-            studio._overlay_composer_window = None
-            try:
-                existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
-                if existing_preview is not None and existing_preview.winfo_exists():
-                    existing_preview.destroy()
-            except Exception:
-                pass
-            window.destroy()
-            return
-        if cancelled:
-            status.set("Export do Composer cancelado • destino anterior preservado")
-            return
-        if error is not None:
-            status.set("Falha no export do Composer • destino anterior preservado")
-            messagebox.showerror("Overlay Composer", error, parent=window)
-            return
-        export_progress.set(100.0)
-        status.set(message)
-        messagebox.showinfo("Overlay Composer", message, parent=window)
-
-    def request_cancel() -> None:
-        if not export_state["running"]:
-            return
-        export_cancel.set()
-        cancel_button.configure(state="disabled")
-        status.set("Cancelando export do Composer…")
-
-    def start_export() -> None:
-        if export_state["running"] or preview_state["running"]:
-            return
-        source = _studio_source_path(studio)
-        if source is None or not source.is_file():
-            messagebox.showerror(
-                "Overlay Composer",
-                "Selecione um vídeo fonte válido no CinePulse.",
-                parent=window,
-            )
-            return
-        if not FFMPEG or not FFPROBE:
-            messagebox.showerror(
-                "Overlay Composer",
-                "FFmpeg/FFprobe não estão disponíveis.",
-                parent=window,
-            )
-            return
-        snapshot = _snapshot_state(state)
-        if not snapshot.ordered():
-            messagebox.showerror(
-                "Overlay Composer",
-                "Ative pelo menos uma camada antes de exportar.",
-                parent=window,
-            )
-            return
-
-        default = _default_export_path(source)
-        chosen = filedialog.asksaveasfilename(
-            parent=window,
-            title="Exportar Composer lossless",
-            initialdir=str(default.parent),
-            initialfile=default.name,
-            defaultextension=".mkv",
-            filetypes=(("Matroska lossless", "*.mkv"),),
-        )
-        if not chosen:
-            return
-        output = Path(chosen).expanduser()
-        if output.suffix.lower() != ".mkv":
-            messagebox.showerror(
-                "Overlay Composer",
-                "O export de referência lossless usa contêiner MKV.",
-                parent=window,
-            )
-            return
-        try:
-            if output.resolve() == source.resolve():
-                raise ValueError("O Composer nunca sobrescreve o vídeo fonte.")
-        except OSError:
-            pass
-        except ValueError as exc:
-            messagebox.showerror("Overlay Composer", str(exc), parent=window)
-            return
-
-        export_cancel.clear()
-        export_progress.set(0.0)
-        export_state["running"] = True
-        export_state["close_requested"] = False
-        export_button.configure(state="disabled")
-        preview_button.configure(state="disabled")
-        cancel_button.configure(state="normal")
-        status.set("Preparando export lossless • analisando timing exato das camadas…")
-
-        def worker() -> None:
-            try:
-                profile = probe_composer_base(str(FFPROBE), source)
-                request = ComposerExportRequest(
-                    source=source,
-                    output=output,
-                    profile=profile,
-                    state=snapshot,
-                    ffmpeg=str(FFMPEG),
-                    ffprobe=str(FFPROBE),
-                    audio_sources=snapshot.resolved_audio_sources(source),
-                )
-
-                def update_progress(done: int, total: int) -> None:
-                    percent = 100.0 * max(0, done) / max(1, total)
-                    post(export_progress.set, min(99.5, percent))
-                    post(
-                        status.set,
-                        f"Exportando Composer lossless… {done}/{total} frame(s) • {percent:.1f}%",
-                    )
-
-                result = export_composer_auto(
-                    request,
-                    cancelled=export_cancel.is_set,
-                    progress=update_progress,
-                )
-                post(
-                    finish_export,
-                    f"Composer exportado: {result.output.name} • {result.frames} frame(s) • {result.backend}",
-                )
-            except InterruptedError:
-                post(finish_export, "", cancelled=True)
-            except Exception as exc:
-                post(finish_export, "", error=str(exc))
-
-        threading.Thread(
-            target=worker,
-            name="cinepulse-composer-export",
-            daemon=True,
-        ).start()
-
-    export_button = ttk.Button(
-        export_buttons,
-        text="Exportar MKV lossless…",
-        command=start_export,
-    )
-    export_button.pack(side="left")
-    cancel_button = ttk.Button(
-        export_buttons,
-        text="Cancelar",
-        command=request_cancel,
-        state="disabled",
-    )
-    cancel_button.pack(side="left", padx=(6, 0))
-
-    ttk.Label(
-        shell,
-        text=(
-            "Prévia fiel limitada a 960×540; master/stems configurados dirigem a reação visual. "
-            "O áudio final preserva a fonte; Stable intacto."
-        ),
-    ).grid(row=3, column=0, columnspan=2, sticky="e", pady=(5, 0))
+            messagebox.showerror("Composer", str(exc), parent=window)
 
     def close_window() -> None:
-        if export_state["running"]:
-            export_state["close_requested"] = True
-            request_cancel()
-            status.set("Fechando após cancelar e limpar o export em andamento…")
-            return
-        if preview_state["running"]:
-            preview_state["close_requested"] = True
-            status.set("Fechando após concluir o preview em andamento…")
-            return
+        if export_running["value"]:
+            if not messagebox.askyesno("Composer", "Cancelar o export e fechar?", parent=window):
+                return
+            export_cancel.set()
+        stage["closing"] = True
         studio._overlay_composer_window = None
         try:
-            existing_preview = getattr(studio, "_overlay_composer_preview_window", None)
-            if existing_preview is not None and existing_preview.winfo_exists():
-                existing_preview.destroy()
+            window.destroy()
         except Exception:
             pass
-        window.destroy()
 
     window.protocol("WM_DELETE_WINDOW", close_window)
-    window.after(40, pump_ui_events)
-    refresh()
+    update_audio_status()
+    update_background_text()
+    refresh_layers()
+    pump_ui_events()
+    window.after(120, request_render)

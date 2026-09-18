@@ -65,6 +65,21 @@ class ComposerExportTests(unittest.TestCase):
         self.assertNotIn(" -r ", joined)
         self.assertIn("-pix_fmt rgba", joined)
 
+    def test_still_background_decode_loops_and_cover_fits_output_canvas(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request = self.request(
+                root,
+                self.profile(width=3840, height=2160, fps=60.0, duration=3.0, still_image=True),
+            )
+            command = _base_decode_command(request, 180)
+        joined = " ".join(command)
+        self.assertIn("-loop 1", joined)
+        self.assertIn("-framerate 60", joined)
+        self.assertIn("scale=w=3840:h=2160:force_original_aspect_ratio=increase", joined)
+        self.assertIn("crop=3840:2160", joined)
+        self.assertIn("-frames:v 180", joined)
+
     def test_reference_encoder_is_lossless_rgb_ffv1(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

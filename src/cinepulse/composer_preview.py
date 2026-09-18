@@ -87,10 +87,25 @@ def _base_preview_command(
     height = int(target_height if target_height is not None else profile.height)
     if width <= 0 or height <= 0:
         raise ValueError("composer preview target dimensions must be positive")
+
+    if profile.still_image:
+        vf = (
+            f"scale=w={width}:h={height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},format=rgba"
+        )
+        return [
+            str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error",
+            "-i", str(source), "-map", "0:v:0", "-an", "-sn",
+            "-vf", vf, "-frames:v", "1", "-pix_fmt", "rgba",
+            "-f", "rawvideo", "pipe:1",
+        ]
+
     select = f"select=eq(n\\,{index})"
     convert = (
-        f"scale=w={width}:h={height}:in_color_matrix=bt709:out_color_matrix=bt709:"
-        f"in_range={_range_token(profile.color_range)}:out_range=pc"
+        f"scale=w={width}:h={height}:force_original_aspect_ratio=increase:"
+        f"in_color_matrix=bt709:out_color_matrix=bt709:"
+        f"in_range={_range_token(profile.color_range)}:out_range=pc,"
+        f"crop={width}:{height}"
     )
     return [
         str(ffmpeg),

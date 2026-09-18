@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1 — 2026-09-18
+
+- redesenha o Overlay Composer como editor visual de manipulação direta: o usuário arrasta camadas no quadro e redimensiona pelos cantos preservando a proporção;
+- adiciona fundo de imagem/vídeo como elemento de primeira classe; PNG/JPG/WebP e outros formatos de imagem não exigem criar um vídeo artificial antes;
+- quando o fundo é uma imagem estática, a duração vem automaticamente da música do projeto e FPS/resolução vêm das configurações atuais do CinePulse;
+- GIFs, imagens e visualizadores entram com posição/tamanho inicial úteis e podem ser movidos diretamente no preview;
+- remove da experiência padrão a matriz técnica de master/stems e os campos X/Y normalizados; a música já escolhida no projeto passa a dirigir automaticamente os visualizadores;
+- mantém ajustes técnicos menos comuns em “Mais opções”, sem expor detalhes de implementação no fluxo principal;
+- preserva export atômico, cancelamento, referência CPU determinística e aceleração GPU somente quando houver evidência compatível;
+- atualiza o schema do projeto Composer para 3, mantendo leitura dos schemas 1 e 2.
+
 ## 1.1.3 — 2026-09-05
 
 - corrige a estimativa/materialização de armazenamento de loops longos distinguindo duração do clipe reutilizável da duração total do projeto;

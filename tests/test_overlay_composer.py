@@ -126,15 +126,19 @@ class OverlayComposerTests(unittest.TestCase):
     def test_preview_state_roundtrips_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "composer.json"
-            state = OverlayComposerState([
-                ComposerItem("logo", media=OverlayLayer("logo.png", "png", opacity=0.7, pulse=0.5)),
-                ComposerItem("viz", visualizer=VisualizerLayer("circular", binding="bass", spin_rpm=2.0)),
-                ComposerItem("hidden", media=OverlayLayer("hidden.webp", "webp"), enabled=False),
-            ])
+            state = OverlayComposerState(
+                [
+                    ComposerItem("logo", media=OverlayLayer("logo.png", "png", opacity=0.7, pulse=0.5)),
+                    ComposerItem("viz", visualizer=VisualizerLayer("circular", binding="bass", spin_rpm=2.0)),
+                    ComposerItem("hidden", media=OverlayLayer("hidden.webp", "webp"), enabled=False),
+                ],
+                background_source="background.png",
+            )
             state.save(path)
             restored = OverlayComposerState.load(path)
             self.assertEqual(state.as_dict(), restored.as_dict())
-            self.assertEqual(2, json.loads(path.read_text(encoding="utf-8"))["schema"])
+            self.assertEqual(3, json.loads(path.read_text(encoding="utf-8"))["schema"])
+            self.assertEqual("background.png", restored.background_source)
             self.assertFalse(any(child.suffix == ".tmp" for child in path.parent.iterdir()))
 
     def test_invalid_or_duplicate_persisted_state_fails_closed(self) -> None:

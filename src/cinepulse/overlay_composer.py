@@ -30,7 +30,8 @@ from .gpu_compositor import (
 from .visualizer_geometry import geometry_for
 
 
-COMPOSER_SCHEMA = 2
+COMPOSER_SCHEMA = 3
+PREVIOUS_COMPOSER_SCHEMA = 2
 LEGACY_COMPOSER_SCHEMA = 1
 AUDIO_SOURCE_BINDINGS = ("master", "vocals", "drums", "bass", "other")
 VisualizerKind = Literal["waveform", "spectrum", "circular"]
@@ -127,8 +128,10 @@ class ComposerRoute:
 class OverlayComposerState:
     items: list[ComposerItem] = field(default_factory=list)
     audio_sources: dict[str, str] = field(default_factory=dict)
+    background_source: str = ""
 
     def __post_init__(self) -> None:
+        self.background_source = str(self.background_source or "").strip()
         normalized: dict[str, str] = {}
         for binding, source in dict(self.audio_sources).items():
             key = self._audio_binding(binding)
@@ -206,11 +209,12 @@ class OverlayComposerState:
             "schema": COMPOSER_SCHEMA,
             "items": [asdict(item) for item in self.items],
             "audio_sources": dict(sorted(self.audio_sources.items())),
+            "background_source": self.background_source,
         }
 
     @classmethod
     def from_dict(cls, payload: object) -> "OverlayComposerState":
-        if not isinstance(payload, dict) or payload.get("schema") not in {LEGACY_COMPOSER_SCHEMA, COMPOSER_SCHEMA}:
+        if not isinstance(payload, dict) or payload.get("schema") not in {LEGACY_COMPOSER_SCHEMA, PREVIOUS_COMPOSER_SCHEMA, COMPOSER_SCHEMA}:
             raise ValueError("unsupported overlay composer schema")
         raw_items = payload.get("items")
         if not isinstance(raw_items, list):
@@ -223,7 +227,10 @@ class OverlayComposerState:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"composer audio source for {key!s} must be a non-empty path string")
             normalized_audio[str(key)] = value
-        state = cls(audio_sources=normalized_audio)
+        raw_background = payload.get("background_source", "")
+        if not isinstance(raw_background, str):
+            raise ValueError("overlay composer background_source must be a path string")
+        state = cls(audio_sources=normalized_audio, background_source=raw_background)
         for raw in raw_items:
             if not isinstance(raw, dict):
                 raise ValueError("overlay composer item must be an object")

@@ -40,6 +40,24 @@ class ComposerPreviewCommandTests(unittest.TestCase):
         self.assertIn("-frames:v 1", joined)
         self.assertNotIn(" -r ", joined)
 
+    def test_still_background_preview_uses_first_image_without_frame_select(self) -> None:
+        profile = ComposerBaseProfile(
+            3840, 2160, 60.0, 20.0, "rgb24", "unknown", "unknown", "unknown", "unknown", True
+        )
+        command = _base_preview_command(
+            "ffmpeg",
+            "background.png",
+            profile,
+            999,
+            target_width=960,
+            target_height=540,
+        )
+        joined = " ".join(command)
+        self.assertNotIn("select=eq", joined)
+        self.assertIn("scale=w=960:h=540:force_original_aspect_ratio=increase", joined)
+        self.assertIn("crop=960:540", joined)
+        self.assertIn("-frames:v 1", joined)
+
     def test_preview_canvas_never_allocates_final_8k_or_12k_rgba(self) -> None:
         self.assertEqual((960, 540, 0.125), fit_preview_canvas(7680, 4320))
         width, height, scale = fit_preview_canvas(11520, 6480)

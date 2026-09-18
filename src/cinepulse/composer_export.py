@@ -55,6 +55,21 @@ def _range_token(value: str) -> str:
 
 def _base_decode_command(request: ComposerExportRequest, frames: int) -> list[str]:
     p = request.profile
+    if p.still_image:
+        # Keep a still background alive for the exact project duration.  The
+        # image is cover-fitted to the selected output canvas; no temporary
+        # video needs to be created by the user.
+        vf = (
+            f"scale=w={p.width}:h={p.height}:force_original_aspect_ratio=increase,"
+            f"crop={p.width}:{p.height},format=rgba"
+        )
+        return [
+            str(request.ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error",
+            "-loop", "1", "-framerate", f"{p.fps:.12g}", "-i", str(request.source),
+            "-map", "0:v:0", "-an", "-sn", "-vf", vf,
+            "-frames:v", str(frames), "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1",
+        ]
+
     range_in = _range_token(p.color_range)
     vf = (
         f"scale=w=iw:h=ih:in_color_matrix=bt709:out_color_matrix=bt709:"
