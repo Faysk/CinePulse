@@ -54,6 +54,7 @@ from .loop_engine import (
 
 
 from .paths import PATHS
+from .component_identity import bootstrap_component_fingerprint
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
 from .performance_policy import (
@@ -5385,6 +5386,7 @@ class VideoOptimizerStudio:
             2,
             cpu_threads=cpu_threads,
             logical_threads=self._hardware.cpu_threads,
+            component_fingerprint=bootstrap_component_fingerprint("real_esrgan"),
         )
         tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
         tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
