@@ -128,6 +128,26 @@ class RifeSafeRunnerTests(unittest.TestCase):
             self.assertEqual(fingerprint, key.component_fingerprint)
             self.assertIsNotNone(store)
 
+    def test_hardware_snapshot_exposes_live_vram_without_second_probe(self) -> None:
+        hardware = HardwareProfile(
+            "CPU Test", 28, "RTX Test", 8192, "999.1", 1, 7000
+        )
+        self.assertEqual(hardware.gpu_index, 1)
+        self.assertEqual(hardware.vram_free_mb, 7000)
+        with patch(
+            "cinepulse.rife_safe_runner.vram_free_mb",
+            side_effect=AssertionError("unexpected initial VRAM re-probe"),
+        ):
+            selected, measured, reason = _limit_policy_by_live_vram(
+                RifePolicy("3:3:3", 1),
+                uhd=False,
+                free_vram_mb=float(hardware.vram_free_mb),
+                gpu_index=hardware.gpu_index,
+            )
+        self.assertEqual(selected, RifePolicy("3:3:3", 1))
+        self.assertTrue(measured)
+        self.assertIn("live VRAM", reason)
+
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
         self.assertEqual("1:2:2", policy.jobs)
