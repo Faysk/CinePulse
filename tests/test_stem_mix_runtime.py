@@ -4,9 +4,8 @@ import io
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+import unittest
 from unittest.mock import patch
-
-import pytest
 
 from cinepulse.studio import VideoOptimizerStudio
 
@@ -125,7 +124,7 @@ def test_demucs_invalid_stems_never_promote_partial_cache() -> None:
             patch("cinepulse.studio.stem_cache_key", return_value="fixed-key"),
             patch("cinepulse.studio.subprocess.Popen", side_effect=popen),
         ):
-            with pytest.raises(RuntimeError, match="stems WAV válidos"):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "stems WAV válidos"):
                 _studio()._prepare_reactive_audio(
                     str(source), "Graves", False, 4
                 )
@@ -179,7 +178,7 @@ def test_demucs_stem_mix_cancel_never_leaves_reusable_partial_cache() -> None:
             patch("cinepulse.studio.stem_cache_key", return_value="fixed-key"),
             patch("cinepulse.studio.BackgroundCommand", CancelledBackgroundCommand),
         ):
-            with pytest.raises(InterruptedError):
+            with unittest.TestCase().assertRaises(InterruptedError):
                 studio._prepare_reactive_audio(
                     str(source), "Graves e batidas", False, 4
                 )
