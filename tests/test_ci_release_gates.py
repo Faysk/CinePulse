@@ -95,6 +95,10 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.actor == 'Faysk'", text)
         self.assertIn("Recovery RIFE 8K UHD acceptance", text)
+        self.assertIn("Physical Real-ESRGAN autotune acceptance", text)
+        self.assertIn("scripts/realesrgan_autotune.py", text)
+        self.assertIn("cache/hardware/realesrgan-tuning.json", text)
+        self.assertIn("artifacts/gpu/realesrgan-autotune.json", text)
         for path in (
             "src/cinepulse/performance_policy.py",
             "src/cinepulse/pipeline_budget.py",
