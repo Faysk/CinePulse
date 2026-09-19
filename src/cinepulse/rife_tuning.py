@@ -38,6 +38,7 @@ class RifeTuningKey:
     model: str
     width: int
     height: int
+    component_fingerprint: str = ""
 
     def token(self) -> str:
         return "|".join(
@@ -47,6 +48,7 @@ class RifeTuningKey:
                 str(self.driver).strip().lower() or "unknown-driver",
                 str(self.model).strip().lower() or "unknown-model",
                 f"{max(1, int(self.width))}x{max(1, int(self.height))}",
+                str(self.component_fingerprint or "unknown-component").strip().lower(),
             )
         )
 
@@ -127,7 +129,7 @@ def downshift_policy(failed: RifePolicy, candidates: Iterable[RifePolicy], *, fa
 
 
 class RifeTuningStore:
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
