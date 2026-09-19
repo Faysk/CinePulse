@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from cinepulse.component_identity import bootstrap_component_fingerprint
 from cinepulse.hardware import detect_hardware
 from cinepulse.rife_benchmark import QUALITY_PSNR_FLOOR_DB, benchmark_and_record
 from cinepulse.rife_safe_runner import validate_png
@@ -49,6 +50,7 @@ def main() -> int:
         args.model.name or "rife-v4.6",
         width,
         height,
+        bootstrap_component_fingerprint("rife"),
     )
     store = RifeTuningStore(args.cache)
     winner, samples = benchmark_and_record(
