@@ -83,55 +83,36 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         self.assertIn("power_w", h8)
         self.assertIn("disk_write_mbps", h8)
 
-    def test_tuned_realesrgan_policy_is_capped_by_live_vram_headroom(self) -> None:
+    def test_realesrgan_full_utilization_has_no_live_vram_admission(self) -> None:
         studio = self.text("src/cinepulse/studio.py")
-        self.assertIn("tuned_limited_by_headroom", studio)
-        self.assertIn("realesrgan_live_process_cap(", studio)
-        self.assertIn("tuned_policy.process_jobs > live_process_cap", studio)
-        self.assertIn("tuning físico", studio)
-        self.assertIn("preservado no cache", studio)
-        self.assertIn("tile=max(32, min(256, active_policy.tile))", studio)
-        self.assertIn(
-            "process_jobs=max(1, min(2, fallback_policy.process_jobs, active_policy.process_jobs))",
-            studio,
-        )
-        self.assertIn(
-            "load_jobs=max(1, min(2, fallback_policy.load_jobs, active_policy.load_jobs))",
-            studio,
-        )
-        self.assertIn(
-            "save_jobs=max(1, min(2, fallback_policy.save_jobs, active_policy.save_jobs))",
-            studio,
-        )
+        policy = self.text("src/cinepulse/performance_policy.py")
+        self.assertIn("FULL Real-ESRGAN", studio)
+        self.assertIn("first attempt is the fixed maximum", studio)
+        self.assertNotIn("tuned_limited_by_headroom", studio)
+        self.assertNotIn("recovery_free_vram", studio)
+        self.assertNotIn("vram_free_mb(", studio)
+        self.assertIn("Live free-VRAM and geometry are intentionally ignored", policy)
+        self.assertIn("retry_policy = conservative_policy", studio)
+        self.assertIn("sem nova medição de recursos", studio)
 
-    def test_realesrgan_recovery_restores_only_physically_proven_policy(self) -> None:
+    def test_gpu_decode_falls_back_only_after_concrete_failure(self) -> None:
         studio = self.text("src/cinepulse/studio.py")
-        self.assertIn("recovery_policy = tuned_policy or fallback_policy", studio)
-        self.assertIn("recovery_free_vram = vram_free_mb(recovery_policy.gpu_index)", studio)
-        self.assertIn("recovery_policy.process_jobs <= recovery_cap", studio)
-        self.assertIn("active_policy = recovery_policy", studio)
-        self.assertIn("recovery_policy = fallback_policy", studio)
-        self.assertIn("H9 VRAM recovery", studio)
+        self.assertIn("gpu_media_runtime_disabled = False", studio)
+        self.assertIn("gpu_media_runtime_disabled = True", studio)
+        self.assertIn("fallback após OOM real", studio)
+        self.assertNotIn("gpu_media_headroom_suppressed", studio)
+        self.assertNotIn("decode_floor_mb", studio)
 
-    def test_adaptive_recovery_can_restore_only_the_proven_overlap_baseline(self) -> None:
+    def test_adaptive_runtime_is_compatibility_only_and_never_throttles(self) -> None:
         runtime = self.text("src/cinepulse/adaptive_runtime.py")
         studio = self.text("src/cinepulse/studio.py")
-        self.assertIn("self._recovery_window = max(3, min(12, int(recovery_window)))", runtime)
-        self.assertIn("ram_percent <= 82.0", runtime)
-        self.assertIn("vram_free >= 1536.0", runtime)
-        self.assertIn("self._level = max(requested, self._level - 1)", runtime)
-        self.assertIn("baseline_overlap_extract = bool(overlap_extract)", studio)
-        self.assertIn("baseline_overlap_pack = bool(overlap_pack)", studio)
-        self.assertIn(
-            "overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap",
-            studio,
-        )
-        self.assertIn(
-            "overlap_pack = baseline_overlap_pack and decision.allow_pack_overlap",
-            studio,
-        )
-        self.assertIn('"RECOVERY"', studio)
-
+        self.assertIn("del sample", runtime)
+        self.assertIn("self._level = 0", runtime)
+        self.assertIn("self._cpu_scale = 1.0", runtime)
+        self.assertNotIn("ram_percent <= 82.0", runtime)
+        self.assertNotIn("vram_free >= 1536.0", runtime)
+        self.assertIn("return controller.observe(None)", studio)
+        self.assertIn("FULL HEADROOM: probe de RAM/VRAM/scratch throughput ignorado", studio)
     def test_neural_minimum_workset_is_checked_in_preflight_and_runtime(self) -> None:
         studio = self.text("src/cinepulse/studio.py")
         self.assertIn("minimum_ai_gb = neural_chunk_workset_gb(", studio)
@@ -153,13 +134,13 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
             studio,
         )
 
-    def test_overnight_runtime_keeps_full_cpu_and_dedicated_memory_envelope(self) -> None:
+    def test_runtime_uses_all_logical_cpu_without_tuning(self) -> None:
         studio = self.text("src/cinepulse/studio.py")
-        scheduler = self.text("src/cinepulse/resource_scheduler.py")
-        self.assertIn('"overnight"', scheduler)
-        self.assertIn('machine_mode = (', studio)
-        self.assertIn('"overnight"', studio)
-        self.assertIn('dedicated=(machine_mode in {"dedicated", "overnight"})', studio)
+        self.assertIn("full_cpu_threads = max(1, int(cpu_topology.logical_cpus))", studio)
+        self.assertIn("return full_cpu_threads", studio)
+        self.assertNotIn("schedule_cpu_threads(", studio)
+        self.assertNotIn("CpuTuningStore(", studio)
+        self.assertNotIn("measure_resource_headroom(", studio)
 
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
