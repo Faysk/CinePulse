@@ -327,6 +327,7 @@ def run_safe_rife(
     selected_policy: RifePolicy | None = None
     selected_measured = False
     live_reason = ""
+    live_free: float | None = None
     if device == "gpu":
         tuned, tuning_key, tuning_store = _hardware_tuning_policy(width, height, model)
         live_free = vram_free_mb(0)
@@ -343,7 +344,7 @@ def run_safe_rife(
             flush=True,
         )
     fallback_spec = (
-        _limit_policy_by_live_vram(None, uhd=uhd, free_vram_mb=vram_free_mb(0), gpu_index=0)[0]
+        _limit_policy_by_live_vram(None, uhd=uhd, free_vram_mb=live_free, gpu_index=0)[0]
         if device == "gpu"
         else fallback_policy(uhd=uhd, gpu_index=0)
     )
