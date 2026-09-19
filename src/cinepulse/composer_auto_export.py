@@ -542,9 +542,11 @@ def export_composer_auto(
                 except InterruptedError:
                     raise
                 except Exception as exc:
+                    evidence_store.record_benchmark_failure(resident_key, exc)
                     logger(
-                        "H6 Composer NVDEC-resident: benchmark local rejeitado; "
-                        f"mantendo rota anterior. {type(exc).__name__}: {exc}"
+                        "H6 Composer NVDEC-resident: benchmark local falhou; "
+                        "cooldown aplicado e rota anterior mantida. "
+                        f"{type(exc).__name__}: {exc}"
                     )
             if resident_route.use_gpu:
                 route = resident_route
@@ -583,8 +585,10 @@ def export_composer_auto(
             except InterruptedError:
                 raise
             except Exception as exc:
+                evidence_store.record_benchmark_failure(route.key, exc)
                 logger(
-                    "H6 Composer: benchmark físico local falhou; CPU reference preservado. "
+                    "H6 Composer: benchmark físico local falhou; cooldown aplicado e "
+                    "CPU reference preservado. "
                     f"{type(exc).__name__}: {exc}"
                 )
 
