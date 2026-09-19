@@ -129,7 +129,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--aq-strength", type=int, default=8); p.add_argument("--multipass", default="fullres")
     p.add_argument("--b-ref-mode", default="middle"); p.add_argument("--gop", type=int, default=30,
         help="Must match max(12, delivery_fps//2) for the target runtime job.")
-    p.add_argument("--width", type=int, default=0); p.add_argument("--height", type=int, default=0); p.add_argument("--gpu-index", type=int, default=0)
+    p.add_argument("--width", type=int, default=0); p.add_argument("--height", type=int, default=0); p.add_argument("--gpu-index", type=int, default=None)
     p.add_argument("--seek-seconds", type=float, default=1.0); p.add_argument("--seek-clip-seconds", type=float, default=1.0)
     p.add_argument("--timeout", type=float, default=1800.0)
     return p
@@ -157,13 +157,15 @@ def main() -> int:
     )
     hardware = detect_hardware()
     if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
+    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
     key = ResidentEncodeKey(hardware.gpu, hardware.driver or "unknown-driver", caps.fingerprint, codec,
                             source_w, source_h, width, height, profile.pixel_format, profile.primaries,
-                            profile.transfer, profile.space, profile.range, scaler or "none", contract.token())
+                            profile.transfer, profile.space, profile.range, scaler or "none", contract.token(),
+                            gpu_index=gpu_index)
     with tempfile.TemporaryDirectory(prefix="cinepulse-h5-resident-") as tmp:
         root = Path(tmp); baseline = root/"baseline.mkv"; candidate = root/"candidate.mkv"
         bsec,_ = run(baseline_command(ffmpeg,args.input,baseline,contract=contract,profile=profile,width=width,height=height,seek=0,clip=0), args.timeout)
-        csec,_ = run(candidate_command(ffmpeg,args.input,candidate,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=0,clip=0,gpu_index=args.gpu_index), args.timeout)
+        csec,_ = run(candidate_command(ffmpeg,args.input,candidate,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=0,clip=0,gpu_index=gpu_index), args.timeout)
         bp,cp=probe(ffprobe,baseline),probe(ffprobe,candidate); bv,cv=video(bp),video(cp)
         frame_ok=frames(bv) is not None and frames(bv)==frames(cv); metadata_ok=signature(bv)==signature(cv)
         db,dc=duration(bp),duration(cp); audio_ok=db is not None and dc is not None and abs(db-dc)<=0.020 and bool(audio(source_probe))==bool(audio(bp))==bool(audio(cp))
