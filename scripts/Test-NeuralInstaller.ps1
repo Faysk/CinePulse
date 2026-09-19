@@ -66,8 +66,8 @@ try {
     if (-not $UvExe) { throw 'uv.exe not found in portable uv archive.' }
 
     $PythonVersion = (& $VenvPython -c 'import platform; print(platform.python_version())').Trim()
-    Write-Host "CINEPULSE_NEURAL_RESOLVE python=$PythonVersion torch=$TorchVersion index=$TorchIndex"
-    $Output = & $UvExe pip install --python $VenvPython --require-hashes --index $TorchIndex -r $LockPath --dry-run 2>&1
+    Write-Host "CINEPULSE_NEURAL_RESOLVE python=$PythonVersion torch=$TorchVersion index=$TorchIndex strategy=unsafe-first-match+require-hashes"
+    $Output = & $UvExe pip install --python $VenvPython --require-hashes --index-strategy unsafe-first-match --index $TorchIndex -r $LockPath --dry-run 2>&1
     $Exit = $LASTEXITCODE
     $Output | ForEach-Object { Write-Host $_ }
     if ($Exit -ne 0) { throw "Neural lock dry-run failed with exit code $Exit." }
