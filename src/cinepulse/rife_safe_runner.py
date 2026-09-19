@@ -200,9 +200,10 @@ def _hardware_tuning_policy(
         component_fingerprint,
         cpu_name=hardware.cpu,
         cpu_threads=hardware.cpu_threads,
+        gpu_index=hardware.gpu_index,
     )
     store = RifeTuningStore(PATHS.cache / "hardware" / "rife-tuning.json")
-    policy = store.lookup(key, gpu_index=0)
+    policy = store.lookup(key, gpu_index=hardware.gpu_index)
     return policy, key, store
 
 
@@ -423,16 +424,19 @@ def run_safe_rife(
     selected_measured = False
     live_reason = ""
     live_free: float | None = None
+    active_gpu_index = 0
     if device == "gpu":
+        runtime_hardware = detect_hardware()
+        active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
         tuned, tuning_key, tuning_store = _hardware_tuning_policy(
             width, height, model, rife_executable
         )
-        live_free = vram_free_mb(0)
+        live_free = vram_free_mb(active_gpu_index)
         selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
             tuned,
             uhd=uhd,
             free_vram_mb=live_free,
-            gpu_index=0,
+            gpu_index=active_gpu_index,
         )
         print(
             "CINEPULSE_RIFE_SAFE LIVE_VRAM "
@@ -441,9 +445,9 @@ def run_safe_rife(
             flush=True,
         )
     fallback_spec = (
-        _limit_policy_by_live_vram(None, uhd=uhd, free_vram_mb=live_free, gpu_index=0)[0]
+        _limit_policy_by_live_vram(None, uhd=uhd, free_vram_mb=live_free, gpu_index=active_gpu_index)[0]
         if device == "gpu"
-        else fallback_policy(uhd=uhd, gpu_index=0)
+        else fallback_policy(uhd=uhd, gpu_index=active_gpu_index)
     )
     fallback = execution_policy(
         len(input_frames), width, height, requested_target, device,
