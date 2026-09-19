@@ -6153,11 +6153,22 @@ class VideoOptimizerStudio:
         )
         separated = cache_root / "htdemucs_ft" / source.stem
 
+        def valid_cached_wav(path: Path) -> bool:
+            try:
+                return path.is_file() and path.stat().st_size > 44
+            except OSError:
+                return False
+
         def locate(name: str) -> Path | None:
             direct = separated / f"{name}.wav"
-            if direct.is_file():
+            if valid_cached_wav(direct):
                 return direct
-            return next(cache_root.rglob(f"{name}.wav"), None) if cache_root.exists() else None
+            if not cache_root.exists():
+                return None
+            return next(
+                (candidate for candidate in cache_root.rglob(f"{name}.wav") if valid_cached_wav(candidate)),
+                None,
+            )
 
         if not all(locate(name) for name in ("bass", "drums", "vocals", "other")):
             self._set_stage("Demucs", "Separando baixo, bateria, voz e instrumentos para dirigir os VFX.")
@@ -6214,7 +6225,7 @@ class VideoOptimizerStudio:
                 invalid = [
                     path.name
                     for path in required_stems
-                    if not path.is_file() or path.stat().st_size <= 44
+                    if not valid_cached_wav(path)
                 ]
                 if invalid:
                     raise RuntimeError(
@@ -6232,9 +6243,11 @@ class VideoOptimizerStudio:
         if len(stems) == 1:
             return str(stems[0])
         mixed = cache_root / ("reactive_" + "_".join(selected) + ".wav")
-        if not mixed.is_file():
-            partial_mixed = mixed.with_name(mixed.name + ".partial")
-            partial_mixed.unlink(missing_ok=True)
+        if not valid_cached_wav(mixed):
+            mixed.unlink(missing_ok=True)
+            partial_mixed = mixed.with_name(
+                f"{mixed.stem}.partial-{os.getpid()}-{time.time_ns()}{mixed.suffix}"
+            )
             command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
             for stem in stems:
                 command += ["-i", str(stem)]
@@ -6252,7 +6265,7 @@ class VideoOptimizerStudio:
                 result = task.wait()
                 if result.cancelled or self._cancelled:
                     raise InterruptedError
-                if not partial_mixed.is_file() or partial_mixed.stat().st_size <= 0:
+                if not valid_cached_wav(partial_mixed):
                     raise RuntimeError("Mistura reativa do Demucs não produziu WAV válido.")
                 os.replace(partial_mixed, mixed)
             finally:
