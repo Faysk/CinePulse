@@ -42,6 +42,38 @@ class ProcessControlTests(unittest.TestCase):
         self.assertIn(2000, killed)
         self.assertIn(3000, killed)
 
+    def test_windows_reap_expands_to_late_descendants_of_tracked_child(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.pid = 1234
+        process.poll.return_value = 0
+        tables = (
+            {1234: 1, 2000: 1234},
+            {2000: 999, 3000: 2000},
+            {},
+            {},
+        )
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with (
+            patch.object(process_control.os, "name", "nt"),
+            patch(
+                "cinepulse.process_control._windows_process_table",
+                side_effect=tables,
+            ),
+            patch(
+                "cinepulse.process_control._windows_taskkill",
+                return_value=result,
+            ) as taskkill,
+            patch("cinepulse.process_control.time.sleep"),
+        ):
+            process_control.terminate_process_tree(
+                process,
+                grace_seconds=0.5,
+            )
+
+        killed = [call.args[0] for call in taskkill.call_args_list]
+        self.assertIn(2000, killed)
+        self.assertIn(3000, killed)
+
     def test_windows_descendant_walk_is_recursive(self) -> None:
         table = {
             1234: 1,
