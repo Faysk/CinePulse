@@ -54,6 +54,9 @@ def test_realesrgan_8gb_can_use_third_gpu_worker_with_live_headroom() -> None:
 
 def test_realesrgan_live_vram_pressure_downshifts_total_vram_heuristic() -> None:
     assert realesrgan_pipeline_threads(
+        28, 28, 24_576, vram_free_mb=7000, width=1920, height=1080
+    ) == "4:3:4"
+    assert realesrgan_pipeline_threads(
         28, 28, 24_576, vram_free_mb=4500, width=1920, height=1080
     ) == "4:2:4"
     assert realesrgan_pipeline_threads(
