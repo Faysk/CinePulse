@@ -5420,6 +5420,7 @@ class VideoOptimizerStudio:
             tuned_policy is not None and tuned_policy.process_jobs > live_process_cap
         )
         active_policy = fallback_policy if tuned_limited_by_headroom else (tuned_policy or fallback_policy)
+        recovery_policy = tuned_policy or fallback_policy
         conservative_policy = RealEsrganPolicy(
             tile=max(32, min(256, active_policy.tile)),
             load_jobs=max(1, min(2, fallback_policy.load_jobs, active_policy.load_jobs)),
@@ -5600,6 +5601,22 @@ class VideoOptimizerStudio:
                             f"{conservative_policy.pipeline} antes de uma possível OOM."
                         )
                         active_policy = conservative_policy
+                    elif decision.level == 0 and active_policy != recovery_policy:
+                        recovery_free_vram = vram_free_mb(recovery_policy.gpu_index)
+                        recovery_cap = realesrgan_live_process_cap(
+                            self._hardware.vram_mb,
+                            vram_free_mb=recovery_free_vram,
+                            width=source_w,
+                            height=source_h,
+                        )
+                        if recovery_policy.process_jobs <= recovery_cap:
+                            self._log(
+                                "H9 VRAM recovery: headroom sustentado voltou; restaurando "
+                                f"Real-ESRGAN {active_policy.pipeline} -> {recovery_policy.pipeline} "
+                                f"(VRAM livre={recovery_free_vram if recovery_free_vram is not None else 'n/a'} MiB, "
+                                f"cap process={recovery_cap})."
+                            )
+                            active_policy = recovery_policy
                 else:
                     active_chunk_frames = chunk_frames
                     active_cpu_threads = cpu_threads
@@ -5800,6 +5817,7 @@ class VideoOptimizerStudio:
                                         "e foi invalidada para esta chave exata."
                                     )
                                 tuned_policy = None
+                                recovery_policy = fallback_policy
                             else:
                                 self._log(
                                     "H9 Real-ESRGAN: tuning físico preservado; falha atual não prova "
