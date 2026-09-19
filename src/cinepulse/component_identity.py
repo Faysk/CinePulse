@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -25,6 +26,7 @@ def bootstrap_component_fingerprint(
     *,
     root: Path | None = None,
     component_root: Path | None = None,
+    critical_files: tuple[Path, ...] = (),
 ) -> str:
     """Return the release-locked identity for one bootstrapped component.
 
@@ -49,7 +51,32 @@ def bootstrap_component_fingerprint(
         marker_key = _normalized_component(str(state.get("key") or ""))
         if marker_key != name:
             return ""
-        return _record_fingerprint(name, state)
+        base = _record_fingerprint(name, state)
+        if not base:
+            return ""
+        if critical_files:
+            root_path = Path(component_root)
+            identity: list[dict[str, object]] = []
+            for raw_path in critical_files:
+                path = Path(raw_path)
+                try:
+                    stat = path.stat()
+                except OSError:
+                    return ""
+                try:
+                    label = path.resolve().relative_to(root_path.resolve()).as_posix()
+                except (OSError, ValueError):
+                    label = path.name
+                identity.append({
+                    "path": label,
+                    "size": int(stat.st_size),
+                    "mtime": int(stat.st_mtime_ns),
+                })
+            digest = hashlib.sha256(
+                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            return f"{base}:{digest}"
+        return base
 
     manifest = (Path(root) if root is not None else PATHS.root) / "installer" / "bootstrap-manifest.json"
     try:
