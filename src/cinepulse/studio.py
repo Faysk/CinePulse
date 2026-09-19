@@ -5383,6 +5383,8 @@ class VideoOptimizerStudio:
             source_w,
             source_h,
             2,
+            cpu_threads=cpu_threads,
+            logical_threads=self._hardware.cpu_threads,
         )
         tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
         tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
