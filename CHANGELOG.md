@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.2 — 2026-09-19
+
+- corrige o export CPU do Overlay Composer para carregar a mesma análise musical da prévia; Spectrum/Wave/Circular e pulse/beat reaction deixam de cair silenciosamente para envelopes zerados no vídeo final;
+- torna o mux final do Composer cancelável e encerra árvores FFmpeg pelo mesmo controle seguro usado no restante do CinePulse;
+- integra o worker de export do Composer ao ciclo de vida da aplicação: fechar a janela ou o CinePulse sinaliza cancelamento e aguarda encerramento antes de destruir a UI;
+- adiciona preflight de RAM e scratch para o master FFV1 + mux atômico, falhando cedo quando 8K/10K/12K não cabem com segurança;
+- mantém fundos estáticos fora do fast-path H6 até existir evidência física específica para essa base, evitando reutilizar aprovação de vídeo;
+- amplia o GPU Acceptance para alterações do Composer/compositor e adiciona Python 3.12 à matriz declarada de compatibilidade;
+- atualiza o runtime neural para `certifi 2026.7.22` com hash lock;
+- fixa GitHub Actions por commit SHA e usa no publisher o FFmpeg exato/hash-locked do bootstrap manifest.
+
 ## 1.2.1 — 2026-09-18
 
 - redesenha o Overlay Composer como editor visual de manipulação direta: o usuário arrasta camadas no quadro e redimensiona pelos cantos preservando a proporção;

@@ -334,8 +334,9 @@ function Install-Demucs {
         if (-not (Test-Path -LiteralPath $NeuralLock)) { throw 'Lock neural ausente; recusando instalar dependências não reproduzíveis.' }
         $TorchIndex = [string]$BootstrapManifest.demucs.torch_index
         if (-not $TorchIndex.StartsWith('https://download.pytorch.org/whl/', [StringComparison]::OrdinalIgnoreCase)) { throw 'Índice oficial do PyTorch ausente ou inválido no manifesto de bootstrap.' }
-        Write-Host "Resolvendo PyTorch $($BootstrapManifest.demucs.torch_version) pelo índice oficial CUDA: $TorchIndex"
-        & $UvExe pip install --python $AiPython --require-hashes --index $TorchIndex -r $NeuralLock
+        Write-Host "Resolvendo runtime neural hash-locked; PyTorch CUDA vem de $TorchIndex e dependências incompatíveis nesse índice podem cair para PyPI."
+        # unsafe-first-match is bounded here by exact versions + --require-hashes: an alternate index cannot substitute an unpinned artifact.
+        & $UvExe pip install --python $AiPython --require-hashes --index-strategy unsafe-first-match --index $TorchIndex -r $NeuralLock
         if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar o runtime neural hash-locked do Demucs.' }
     }
     New-Item -ItemType Directory -Path $ModelRepo -Force | Out-Null

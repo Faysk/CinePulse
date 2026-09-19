@@ -38,11 +38,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.14.7'
 
@@ -68,11 +68,28 @@ jobs:
           "RELEASE_NOTES_FILE=$NotesFile" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "CINEPULSE_RELEASE_VERSION_OK $ProjectVersion notes=$NotesFile"
 
-      - name: Install FFmpeg
+      - name: Install hash-locked FFmpeg
         shell: pwsh
         run: |
-          choco install ffmpeg -y --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg install failed.' }
+          $Manifest = Get-Content -LiteralPath 'installer/bootstrap-manifest.json' -Raw | ConvertFrom-Json
+          $Spec = $Manifest.ffmpeg
+          if (-not $Spec.url -or -not $Spec.sha256 -or -not $Spec.version) { throw 'FFmpeg bootstrap contract is incomplete.' }
+          $Archive = Join-Path $env:RUNNER_TEMP "cinepulse-ffmpeg-$($Spec.version).zip"
+          $Root = Join-Path $env:RUNNER_TEMP "cinepulse-ffmpeg-$($Spec.version)"
+          Invoke-WebRequest -Uri $Spec.url -OutFile $Archive
+          $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+          if ($Actual -ne ([string]$Spec.sha256).ToLowerInvariant()) {
+            throw "FFmpeg hash mismatch: expected=$($Spec.sha256) actual=$Actual"
+          }
+          if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
+          Expand-Archive -LiteralPath $Archive -DestinationPath $Root -Force
+          $Ffmpeg = Get-ChildItem -LiteralPath $Root -Recurse -Filter 'ffmpeg.exe' -File | Select-Object -First 1
+          if (-not $Ffmpeg) { throw 'Hash-locked FFmpeg package did not contain ffmpeg.exe.' }
+          $Bin = $Ffmpeg.Directory.FullName
+          if (-not (Test-Path -LiteralPath (Join-Path $Bin 'ffprobe.exe'))) { throw 'Hash-locked FFmpeg package did not contain ffprobe.exe.' }
+          $Bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $Bin 'ffmpeg.exe') -version
+          if ($LASTEXITCODE -ne 0) { throw 'Hash-locked FFmpeg smoke test failed.' }
 
       - name: Install hash-locked project runtime
         shell: pwsh
@@ -127,7 +144,7 @@ jobs:
           Get-Content -LiteralPath 'dist/SHA256SUMS.txt'
 
       - name: Upload verified release evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cinepulse-${{ env.RELEASE_VERSION }}-verified-release
           path: |

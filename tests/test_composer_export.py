@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cinepulse.composer_export import (
     ComposerBaseProfile,
@@ -12,11 +13,12 @@ from cinepulse.composer_export import (
     _base_decode_command,
     _mux_command,
     _read_exact,
+    _resolve_audio_envelopes,
     _video_encode_command,
     export_composer_reference,
 )
 from cinepulse.gpu_compositor import OverlayLayer
-from cinepulse.overlay_composer import ComposerItem, OverlayComposerState
+from cinepulse.overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer
 
 
 class ShortReader:
@@ -128,6 +130,37 @@ class ComposerExportTests(unittest.TestCase):
         self.assertEqual(b"abcdef", _read_exact(ShortReader([b"a", b"bc", b"def"]), 6))
         self.assertEqual(b"ab", _read_exact(ShortReader([b"ab"]), 6))
 
+    def test_export_resolves_music_envelopes_from_request_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = self.request(root)
+            song = root / "song.flac"
+            vocals = root / "vocals.wav"
+            request = ComposerExportRequest(
+                base.source, base.output, base.profile, base.state, base.ffmpeg, base.ffprobe,
+                {"vocals": vocals}, output_audio=song,
+            )
+            expected = {"master": object()}
+            with patch(
+                "cinepulse.composer_export.load_bound_visualizer_envelopes",
+                return_value=expected,
+            ) as loader:
+                resolved = _resolve_audio_envelopes(request, None, lambda _message: None)
+            self.assertIs(resolved, expected)
+            kwargs = loader.call_args.kwargs
+            self.assertEqual(song, kwargs["sources"]["master"])
+            self.assertEqual(vocals, kwargs["sources"]["vocals"])
+            self.assertEqual(request.profile.duration, kwargs["duration"])
+
+    def test_injected_envelopes_skip_duplicate_audio_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            request = self.request(Path(temporary))
+            injected = {"master": object()}
+            with patch("cinepulse.composer_export.load_bound_visualizer_envelopes") as loader:
+                resolved = _resolve_audio_envelopes(request, injected, lambda _message: None)
+            self.assertEqual(injected, resolved)
+            loader.assert_not_called()
+
     def test_empty_project_and_hdr_reject_before_output_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -198,6 +231,54 @@ class ComposerExportFfmpegIntegrationTests(unittest.TestCase):
             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         self.assertEqual("4", probe.stdout.strip())
+
+    def test_audio_reactive_visualizer_is_not_flat_in_final_export(self) -> None:
+        source = self.root / "music-source.mkv"
+        output = self.root / "music-result.mkv"
+        subprocess.run(
+            [
+                self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=black:size=128x72:rate=4",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                "-t", "1", "-c:v", "ffv1", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le",
+                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+                str(source),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        state = OverlayComposerState([
+            ComposerItem(
+                "spectrum",
+                visualizer=VisualizerLayer("spectrum", x=0.5, y=0.5, scale=0.85, bars=16, reaction=1.0),
+            )
+        ])
+        request = ComposerExportRequest(
+            source,
+            output,
+            ComposerBaseProfile(128, 72, 4.0, 1.0, "yuv420p", "bt709", "bt709", "bt709", "tv"),
+            state,
+            self.ffmpeg,
+            self.ffprobe,
+            {"master": source},
+        )
+        export_composer_reference(request)
+        frame = subprocess.run(
+            [
+                self.ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(output),
+                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+        bright_pixels = sum(
+            1
+            for index in range(0, len(frame), 3)
+            if max(frame[index:index + 3]) >= 180
+        )
+        self.assertGreater(bright_pixels, 100)
 
     def test_cancel_preserves_existing_destination(self) -> None:
         output = self.root / "cancel.mkv"

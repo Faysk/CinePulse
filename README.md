@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.1`. Esta versão mantém o updater de um clique, Restauração Preview e Hardware H0–H8, e redesenha o Overlay Composer/Music Visualizer como editor visual direto: fundo de imagem/vídeo, GIFs e visualizadores podem ser posicionados e redimensionados no canvas sem depender de coordenadas técnicas. O fluxo Stable continua conservador: caminhos acelerados sem evidência física exata permanecem bloqueados ou caem para os fallbacks CPU/NCNN validados.
+> Estado Stable: `1.2.2`. Esta versão mantém o editor visual direto da 1.2.1 e corrige paridade Preview→Export dos visualizadores musicais, cancelamento/lifecycle do Composer e preflight de recursos. O fluxo Stable continua conservador: caminhos acelerados sem evidência física exata permanecem bloqueados ou caem para os fallbacks CPU/NCNN validados.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

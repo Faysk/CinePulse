@@ -373,6 +373,7 @@ def show_overlay_composer(studio) -> None:
         "rendering": False,
         "dirty": False,
         "closing": False,
+        "closing_after_export": False,
     }
     drag = {
         "mode": "",
@@ -384,7 +385,12 @@ def show_overlay_composer(studio) -> None:
         "start_distance": 1.0,
     }
     export_cancel = threading.Event()
+    export_done = threading.Event()
+    export_done.set()
     export_running = {"value": False}
+    studio._overlay_composer_export_cancel = export_cancel
+    studio._overlay_composer_export_done = export_done
+    studio._overlay_composer_export_thread = None
 
     def update_audio_status() -> None:
         audio = _studio_audio_path(studio)
@@ -825,6 +831,9 @@ def show_overlay_composer(studio) -> None:
 
     def finish_export(message: str, error: str | None = None, cancelled: bool = False) -> None:
         export_running["value"] = False
+        studio._overlay_composer_export_thread = None
+        if stage["closing"] or not window.winfo_exists():
+            return
         export_button.configure(state="normal")
         preview_button.configure(state="normal")
         cancel_button.configure(state="disabled")
@@ -836,6 +845,8 @@ def show_overlay_composer(studio) -> None:
         else:
             status.set(message)
             messagebox.showinfo("Composer", message, parent=window)
+        if stage["closing_after_export"]:
+            destroy_window()
 
     def start_export() -> None:
         if export_running["value"] or stage["rendering"]:
@@ -874,6 +885,7 @@ def show_overlay_composer(studio) -> None:
             output_audio=output_audio,
         )
         export_cancel.clear()
+        export_done.clear()
         export_running["value"] = True
         export_button.configure(state="disabled")
         preview_button.configure(state="disabled")
@@ -892,8 +904,12 @@ def show_overlay_composer(studio) -> None:
                 post(finish_export, "", None, True)
             except Exception as exc:
                 post(finish_export, "", str(exc), False)
+            finally:
+                export_done.set()
 
-        threading.Thread(target=worker, name="cinepulse-composer-export", daemon=True).start()
+        thread = threading.Thread(target=worker, name="cinepulse-composer-export", daemon=False)
+        studio._overlay_composer_export_thread = thread
+        thread.start()
 
     def save_state() -> None:
         default = _default_project_path(studio)
@@ -934,17 +950,24 @@ def show_overlay_composer(studio) -> None:
         except ValueError as exc:
             messagebox.showerror("Composer", str(exc), parent=window)
 
-    def close_window() -> None:
-        if export_running["value"]:
-            if not messagebox.askyesno("Composer", "Cancelar o export e fechar?", parent=window):
-                return
-            export_cancel.set()
+    def destroy_window() -> None:
         stage["closing"] = True
         studio._overlay_composer_window = None
         try:
             window.destroy()
         except Exception:
             pass
+
+    def close_window() -> None:
+        if export_running["value"]:
+            if not messagebox.askyesno("Composer", "Cancelar o export e fechar?", parent=window):
+                return
+            stage["closing_after_export"] = True
+            export_cancel.set()
+            cancel_button.configure(state="disabled")
+            status.set("Cancelando export antes de fechar…")
+            return
+        destroy_window()
 
     window.protocol("WM_DELETE_WINDOW", close_window)
     update_audio_status()

@@ -66,6 +66,9 @@ class ComposerViewHelpersTests(unittest.TestCase):
         self.assertIn("Arraste para mover", source)
         self.assertIn("<B1-Motion>", source)
         self.assertIn("Música automática", source)
+        self.assertIn("_overlay_composer_export_done", source)
+        self.assertIn("daemon=False", source)
+        self.assertIn("closing_after_export", source)
         self.assertNotIn('text="Áudio / stems"', source)
 
     def test_export_snapshot_is_detached_from_editor_mutations(self) -> None:
