@@ -16,6 +16,7 @@ def test_record_realesrgan_requires_runtime_exact_host_and_component_identity() 
         "--cpu-threads", "6",
         "--logical-threads", "28",
         "--cpu-name", "CPU Test",
+        "--gpu-index", "1",
         "--component-fingerprint", "real_esrgan:v1:" + "a" * 64,
         "--sample", "256:2:2:2:10:true:false:6:6",
     ])
@@ -23,8 +24,10 @@ def test_record_realesrgan_requires_runtime_exact_host_and_component_identity() 
     assert key.cpu_threads == 6
     assert key.logical_threads == 28
     assert key.cpu_name == "CPU Test"
+    assert key.gpu_index == 1
     assert key.component_fingerprint.endswith("a" * 64)
     assert "host6of28" in key.token()
+    assert "gpu1" in key.token()
 
 
 def test_realesrgan_candidates_receive_logical_machine_envelope() -> None:
