@@ -48,6 +48,14 @@ MEDIA_STEPS = (
 )
 
 GPU_STEPS = (
+    GateStep(
+        "gpu-contracts",
+        (
+            sys.executable, "-m", "unittest", "discover",
+            "-s", "tests", "-p", "test_gpu_*.py", "-v",
+        ),
+        False, False, 900,
+    ),
     GateStep("gpu-rife", (sys.executable, "tests/integration_smoke.py", "--mode", "rife"), True, True, 1800),
     GateStep("gpu-realesrgan", (sys.executable, "tests/integration_smoke.py", "--mode", "ai"), True, True, 1800),
     GateStep("gpu-demucs", (sys.executable, "tests/integration_smoke.py", "--mode", "stems"), True, True, 1800),
