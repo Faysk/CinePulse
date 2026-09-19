@@ -103,6 +103,31 @@ class RifeSafeRunnerTests(unittest.TestCase):
             self.assertEqual(1, key.gpu_index)
             self.assertEqual("RTX Test", key.gpu_name)
 
+    def test_precomputed_component_fingerprint_skips_rehash_in_tuning_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "rife-v4.6"
+            model.mkdir()
+            exe = root / "rife-ncnn-vulkan.exe"
+            exe.write_bytes(b"exe")
+            hardware = HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0)
+            fingerprint = "rife:v1:" + "a" * 64
+            with patch(
+                "cinepulse.rife_safe_runner.bootstrap_component_fingerprint",
+                side_effect=AssertionError("unexpected component rehash"),
+            ):
+                policy, key, store = _hardware_tuning_policy(
+                    1920,
+                    1080,
+                    model,
+                    exe,
+                    hardware,
+                    component_fingerprint=fingerprint,
+                )
+            self.assertIsNone(policy)
+            self.assertEqual(fingerprint, key.component_fingerprint)
+            self.assertIsNotNone(store)
+
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
         self.assertEqual("1:2:2", policy.jobs)
