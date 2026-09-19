@@ -239,6 +239,7 @@ def export_composer_auto(
         transfer=request.profile.transfer,
         matrix=request.profile.matrix,
         color_range=request.profile.color_range,
+        base_is_still=request.profile.still_image,
     )
     if route.use_gpu:
         try:
