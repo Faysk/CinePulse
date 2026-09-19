@@ -153,6 +153,7 @@ def _realesrgan_key(args: argparse.Namespace) -> RealEsrganTuningKey:
         logical_threads=max(1, int(args.logical_threads)),
         component_fingerprint=str(args.component_fingerprint).strip(),
         cpu_name=str(args.cpu_name).strip(),
+        gpu_index=max(0, int(args.gpu_index)),
     )
 
 
