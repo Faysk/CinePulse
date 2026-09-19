@@ -10,9 +10,9 @@ from .overnight_runtime import OvernightRuntimeController
 class RuntimePressureDecision:
     """Quality-neutral scheduling envelope for the remainder of one render.
 
-    Live control is intentionally downshift-only. A sample may reduce future
-    chunk size and overlap, but it can never increase concurrency beyond the
-    benchmark-proven policy selected before the render began.
+    Live control may reduce future chunk size and overlap, then cautiously
+    restore them after sustained healthy headroom. It can never increase
+    concurrency beyond the benchmark-proven policy selected before the render.
     """
 
     level: int
@@ -36,7 +36,7 @@ class RuntimePressureDecision:
 
 
 class AdaptiveRuntimeController:
-    """Monotonic per-render pressure controller.
+    """Hysteretic per-render pressure controller.
 
     The controller never changes models, scale, target FPS, color/HDR,
     interpolation, codec quality or verification. It only reduces future
@@ -45,8 +45,10 @@ class AdaptiveRuntimeController:
     in measured completed-work throughput.
 
     ``overnight=True`` adds H8's sustained window and learned neural-throughput
-    warm-up on top of the RAM/VRAM capacity guard. A render never auto-ramps back
-    above the policy it started with.
+    warm-up on top of the RAM/VRAM capacity guard. Capacity-only downshifts may
+    recover one level after several deeply healthy samples, but never above the
+    policy the render started with. Overnight instability/thermal decisions stay
+    monotonic because the H8 controller itself remains monotonic.
     """
 
     def __init__(
@@ -58,6 +60,7 @@ class AdaptiveRuntimeController:
         overnight: bool = False,
         scratch_sustainable_mbps: float | None = None,
         overnight_window: int = 4,
+        recovery_window: int = 4,
     ) -> None:
         self.gpu_index = max(0, int(gpu_index))
         self._baseline_extract = bool(allow_extract_overlap)
@@ -66,6 +69,8 @@ class AdaptiveRuntimeController:
         self._reasons: tuple[str, ...] = ()
         self._cpu_scale = 1.0
         self._cooldown_hint_seconds = 0.0
+        self._recovery_window = max(3, min(12, int(recovery_window)))
+        self._healthy_streak = 0
         overlap_depth = 3 if self._baseline_extract and self._baseline_pack else (
             2 if self._baseline_extract or self._baseline_pack else 1
         )
@@ -159,4 +164,25 @@ class AdaptiveRuntimeController:
         if requested > self._level:
             self._level = requested
             self._reasons = tuple(evidence)
+            self._healthy_streak = 0
+            return self._decision()
+
+        # Recover capacity-only downshifts slowly and with strong hysteresis.
+        # A sample is deeply healthy only well below the downshift thresholds,
+        # which avoids flapping around 88% RAM / 768 MiB free VRAM.
+        deeply_healthy = bool(
+            requested < self._level
+            and (ram_percent is None or ram_percent <= 82.0)
+            and (vram_free is None or vram_free >= 1536.0)
+        )
+        if deeply_healthy:
+            self._healthy_streak += 1
+            if self._healthy_streak >= self._recovery_window:
+                self._level = max(requested, self._level - 1)
+                self._reasons = (
+                    f"capacidade recuperada após {self._recovery_window} amostras saudáveis",
+                )
+                self._healthy_streak = 0
+        else:
+            self._healthy_streak = 0
         return self._decision()
