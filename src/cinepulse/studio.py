@@ -6191,17 +6191,30 @@ class VideoOptimizerStudio:
             return str(stems[0])
         mixed = cache_root / ("reactive_" + "_".join(selected) + ".wav")
         if not mixed.is_file():
+            partial_mixed = mixed.with_name(mixed.name + ".partial")
+            partial_mixed.unlink(missing_ok=True)
             command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
             for stem in stems:
                 command += ["-i", str(stem)]
             inputs = "".join(f"[{index}:a]" for index in range(len(stems)))
             command += [
                 "-filter_complex", f"{inputs}amix=inputs={len(stems)}:normalize=0,alimiter=limit=0.95[out]",
-                "-map", "[out]", "-c:a", "pcm_s24le", "-threads", str(cpu_threads), str(mixed),
+                "-map", "[out]", "-c:a", "pcm_s24le", "-threads", str(cpu_threads), str(partial_mixed),
             ]
-            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-            if result.returncode:
-                raise RuntimeError(result.stderr[-2000:])
+            task = BackgroundCommand(
+                command,
+                cancel_requested=lambda: self._cancelled,
+                log=self._log,
+            ).start()
+            try:
+                result = task.wait()
+                if result.cancelled or self._cancelled:
+                    raise InterruptedError
+                if not partial_mixed.is_file() or partial_mixed.stat().st_size <= 0:
+                    raise RuntimeError("Mistura reativa do Demucs não produziu WAV válido.")
+                os.replace(partial_mixed, mixed)
+            finally:
+                partial_mixed.unlink(missing_ok=True)
         self._log(f"VFX guiado por stems: {', '.join(selected)}")
         return str(mixed)
 
