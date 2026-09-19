@@ -291,10 +291,10 @@ def main() -> int:
     width = args.scale_width if do_scale else source_w
     height = args.scale_height if do_scale else source_h
 
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu:
         raise SystemExit("No NVIDIA GPU detected; no physical H5 evidence recorded")
-    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
+    gpu_index = hardware.gpu_index
     capabilities = detect_gpu_media_capabilities(ffmpeg)
     candidates = safe_candidate_policies(
         capabilities,
