@@ -5382,11 +5382,19 @@ class VideoOptimizerStudio:
         )
         tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
         tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
-        active_policy = tuned_policy or fallback_policy
-        if tuned_policy is not None:
+        tuned_limited_by_headroom = bool(
+            tuned_policy is not None and tuned_policy.process_jobs > fallback_policy.process_jobs
+        )
+        active_policy = fallback_policy if tuned_limited_by_headroom else (tuned_policy or fallback_policy)
+        if tuned_policy is not None and not tuned_limited_by_headroom:
             self._log(
                 f"H3 Real-ESRGAN: política física aprovada carregada tile={active_policy.tile} "
                 f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."
+            )
+        elif tuned_limited_by_headroom:
+            self._log(
+                f"H9 Real-ESRGAN: tuning físico {tuned_policy.pipeline} preservado no cache, "
+                f"mas VRAM livre atual limita este render a {fallback_policy.pipeline}."
             )
         else:
             self._log(
