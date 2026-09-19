@@ -20,7 +20,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cache", type=Path, required=True)
     result.add_argument("--work", type=Path, required=True)
     result.add_argument("--ffmpeg", default="ffmpeg")
-    result.add_argument("--gpu-index", type=int, default=0)
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--timeout", type=float, default=900.0)
     return result
 
@@ -35,6 +35,7 @@ def main() -> int:
     hardware = detect_hardware()
     if not hardware.gpu:
         raise SystemExit("No NVIDIA GPU was detected; physical RIFE GPU tuning was not recorded")
+    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     if not ffmpeg:
         raise SystemExit("FFmpeg is required for the RIFE black-frame and quality-parity gates")
@@ -52,7 +53,7 @@ def main() -> int:
     candidates = safe_candidates(
         uhd=uhd,
         vram_mb=hardware.vram_mb,
-        gpu_index=max(0, args.gpu_index),
+        gpu_index=gpu_index,
     )
     key = RifeTuningKey(
         hardware.gpu,
@@ -64,6 +65,7 @@ def main() -> int:
         component_fingerprint,
         cpu_name=hardware.cpu,
         cpu_threads=hardware.cpu_threads,
+        gpu_index=gpu_index,
     )
     store = RifeTuningStore(args.cache)
     winner, samples = benchmark_and_record(
