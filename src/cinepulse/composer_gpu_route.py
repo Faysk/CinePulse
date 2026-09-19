@@ -71,6 +71,9 @@ def build_compositor_stack_key(
         base_mode=base_mode,
         base_codec=base_codec,
         base_decoder=base_decoder,
+        vram_mb=int(hardware.vram_mb or 0),
+        cpu_name=hardware.cpu,
+        cpu_threads=int(hardware.cpu_threads or 0),
     )
 
 
