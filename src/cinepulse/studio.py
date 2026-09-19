@@ -145,6 +145,7 @@ from .storage_engine import (
     choose_chunk_frames,
     enforce_cache_quota,
     estimate_storage,
+    neural_chunk_workset_gb,
     probe_scratch,
     resolve_scratch_dir,
     safe_rmtree,
@@ -3593,6 +3594,46 @@ class VideoOptimizerStudio:
         )
         preflight_ai_budget = derive_pipeline_budget("realesrgan", **preflight_common)
         preflight_rife_budget = derive_pipeline_budget("rife", **preflight_common)
+        neural_ram_blockers: list[str] = []
+
+        enhancement_step = render_plan.step("enhancement")
+        if (
+            enhancement_step.attempts
+            and enhancement_step.input_spec is not None
+            and enhancement_step.output_spec is not None
+            and enhancement_step.materializes_frames
+        ):
+            minimum_ai_gb = neural_chunk_workset_gb(
+                enhancement_step.input_spec,
+                enhancement_step.output_spec,
+                1,
+            )
+            if minimum_ai_gb > preflight_ai_budget.chunk_budget_gb + 1e-6:
+                neural_ram_blockers.append(
+                    "Real-ESRGAN: nem 1 quadro cabe no envelope de RAM atual "
+                    f"({minimum_ai_gb:.2f} GiB necessários > {preflight_ai_budget.chunk_budget_gb:.2f} GiB permitidos)."
+                )
+
+        for rife_key in ("rife_base", "rife_final"):
+            rife_step = render_plan.step(rife_key)
+            if (
+                (rife_step.runs or rife_step.attempts)
+                and rife_step.input_spec is not None
+                and rife_step.output_spec is not None
+                and rife_step.materializes_frames
+            ):
+                rife_ratio = rife_step.output_spec.fps / max(1.0, rife_step.input_spec.fps)
+                minimum_rife_gb = neural_chunk_workset_gb(
+                    rife_step.input_spec,
+                    rife_step.output_spec,
+                    2,
+                    output_frames_per_input=rife_ratio,
+                )
+                if minimum_rife_gb > preflight_rife_budget.chunk_budget_gb + 1e-6:
+                    neural_ram_blockers.append(
+                        f"{rife_step.title}: o lote mínimo de 2 quadros exige {minimum_rife_gb:.2f} GiB, "
+                        f"acima do envelope atual de {preflight_rife_budget.chunk_budget_gb:.2f} GiB."
+                    )
 
         storage_estimate = estimate_storage(
             render_plan,
@@ -3643,6 +3684,7 @@ class VideoOptimizerStudio:
         if render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION and not RIFE_EXE.is_file():
             warnings.append("RIFE é necessário para atingir o FPS solicitado, mas não foi encontrado; o render usará fallback FFmpeg.")
         blocking_reasons = list(storage.blocking_reasons)
+        blocking_reasons.extend(neural_ram_blockers)
         blocking_reasons.extend(delivery_plan.errors)
         blocking = bool(blocking_reasons)
         lines = [
@@ -5378,10 +5420,23 @@ class VideoOptimizerStudio:
                 pass
 
         total_frames = max(1, round(duration * source_fps))
+        ai_input_spec = FrameSpec(source_w, source_h, source_fps, "RGBA/PNG")
+        ai_output_spec = FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG")
+        minimum_ai_workset_gb = neural_chunk_workset_gb(
+            ai_input_spec,
+            ai_output_spec,
+            1,
+        )
+        if minimum_ai_workset_gb > max(0.5, float(chunk_budget_gb)) + 1e-6:
+            raise RuntimeError(
+                "Real-ESRGAN: 1 quadro já excede o envelope de RAM seguro "
+                f"({minimum_ai_workset_gb:.2f} GiB > {float(chunk_budget_gb):.2f} GiB)."
+            )
         chunk_frames = choose_chunk_frames(
-            FrameSpec(source_w, source_h, source_fps, "RGBA/PNG"),
-            FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG"),
+            ai_input_spec,
+            ai_output_spec,
             budget_gb=max(0.5, float(chunk_budget_gb)),
+            minimum=1,
         )
         baseline_overlap_extract = bool(overlap_extract)
         baseline_overlap_pack = bool(overlap_pack)
@@ -6127,9 +6182,22 @@ class VideoOptimizerStudio:
         info = probe_media(video)
         frame_w, frame_h = first_video_size(info)
         ratio = target_fps / max(1.0, source_fps)
+        rife_input_spec = FrameSpec(frame_w, frame_h, source_fps, "RGBA/PNG")
+        rife_output_spec = FrameSpec(frame_w, frame_h, target_fps, "RGBA/PNG")
+        minimum_rife_workset_gb = neural_chunk_workset_gb(
+            rife_input_spec,
+            rife_output_spec,
+            2,
+            output_frames_per_input=ratio,
+        )
+        if minimum_rife_workset_gb > max(0.5, float(chunk_budget_gb)) + 1e-6:
+            raise RuntimeError(
+                "RIFE: o lote mínimo de 2 quadros excede o envelope de RAM seguro "
+                f"({minimum_rife_workset_gb:.2f} GiB > {float(chunk_budget_gb):.2f} GiB)."
+            )
         chunk_frames = choose_chunk_frames(
-            FrameSpec(frame_w, frame_h, source_fps, "RGBA/PNG"),
-            FrameSpec(frame_w, frame_h, target_fps, "RGBA/PNG"),
+            rife_input_spec,
+            rife_output_spec,
             budget_gb=max(0.5, float(chunk_budget_gb)),
             output_frames_per_input=ratio,
         )
