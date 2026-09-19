@@ -296,6 +296,26 @@ def _static_layer_supported(layer: OverlayLayer) -> bool:
     )
 
 
+def compositor_vram_floor_mb(
+    width: int,
+    height: int,
+    layer_count: int,
+) -> float:
+    """Estimate live VRAM required by the bounded SDR CUDA compositor.
+
+    This guard never authorizes H6 by itself; exact physical evidence is still
+    mandatory. It only avoids entering an approved path when current VRAM
+    cannot safely hold the base, overlay and intermediate CUDA surfaces.
+    """
+    pixels = max(1, int(width)) * max(1, int(height))
+    layers = max(1, min(COMPOSITOR_MAX_STACK_LAYERS, int(layer_count)))
+    yuv420_surface_mb = pixels * 1.5 / (1024.0 * 1024.0)
+    # Base decode/upload + per-layer upload + overlay intermediates + FFmpeg/
+    # driver reserve. This is deliberately conservative for the SDR envelope.
+    surface_factor = 8.0 + layers * 4.0
+    return max(512.0, yuv420_surface_mb * surface_factor + 384.0)
+
+
 def cuda_layer_eligible(layer: OverlayLayer, caps: GpuCompositorCapabilities) -> bool:
     """Return benchmark eligibility, not runtime permission."""
     return caps.media_layers_supported and _static_layer_supported(layer)
