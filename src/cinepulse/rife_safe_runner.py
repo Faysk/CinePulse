@@ -173,7 +173,10 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
     hardware = detect_hardware()
     if not hardware.gpu:
         return None, None, None
-    component_fingerprint = bootstrap_component_fingerprint("rife")
+    component_fingerprint = bootstrap_component_fingerprint(
+        "rife",
+        component_root=model.parent,
+    )
     if not component_fingerprint:
         return None, None, None
     key = RifeTuningKey(
