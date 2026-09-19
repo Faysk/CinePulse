@@ -83,6 +83,13 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         self.assertIn("power_w", h8)
         self.assertIn("disk_write_mbps", h8)
 
+    def test_tuned_realesrgan_policy_is_capped_by_live_vram_headroom(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn("tuned_limited_by_headroom", studio)
+        self.assertIn("tuned_policy.process_jobs > fallback_policy.process_jobs", studio)
+        self.assertIn("tuning físico", studio)
+        self.assertIn("preservado no cache", studio)
+
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
         for token in (
