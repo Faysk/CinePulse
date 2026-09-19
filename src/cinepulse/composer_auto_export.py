@@ -439,6 +439,8 @@ def _learn_exact_gpu_route(
             audio_sync_ok=audio_sync_ok,
         )
         recorded = store.record(route.key, evidence)
+        if not recorded:
+            store.record_rejection(route.key, evidence)
         log(
             "H6 Composer: benchmark físico local "
             f"{'aprovado' if recorded else 'rejeitado'} "
@@ -517,7 +519,12 @@ def export_composer_auto(
                 len(route.layers),
             )
             resident_vram = vram_free_mb(0)
-            if not resident_route.use_gpu and resident_vram is not None and resident_vram >= resident_floor:
+            if (
+                not resident_route.use_gpu
+                and evidence_store.benchmark_due(resident_key)
+                and resident_vram is not None
+                and resident_vram >= resident_floor
+            ):
                 try:
                     if _learn_exact_gpu_route(
                         request,
@@ -546,6 +553,8 @@ def export_composer_auto(
         not route.use_gpu
         and route.key is not None
         and route.layers
+        and route.key is not None
+        and evidence_store.benchmark_due(route.key)
         and "evidence is absent or stale" in route.reason
     ):
         learn_floor = compositor_vram_floor_mb(
