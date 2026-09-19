@@ -104,6 +104,15 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
             studio,
         )
 
+    def test_realesrgan_recovery_restores_only_physically_proven_policy(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn("recovery_policy = tuned_policy or fallback_policy", studio)
+        self.assertIn("recovery_free_vram = vram_free_mb(recovery_policy.gpu_index)", studio)
+        self.assertIn("recovery_policy.process_jobs <= recovery_cap", studio)
+        self.assertIn("active_policy = recovery_policy", studio)
+        self.assertIn("recovery_policy = fallback_policy", studio)
+        self.assertIn("H9 VRAM recovery", studio)
+
     def test_adaptive_recovery_can_restore_only_the_proven_overlap_baseline(self) -> None:
         runtime = self.text("src/cinepulse/adaptive_runtime.py")
         studio = self.text("src/cinepulse/studio.py")
