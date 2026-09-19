@@ -20,8 +20,6 @@ from cinepulse.rife_tuning import RifePolicy
 
 
 def _fake_png(width: int = 64, height: int = 36, *, complete: bool = True) -> bytes:
-    # The validator intentionally checks the same structural invariants used by
-    # the incident recovery: PNG signature, IHDR dimensions and terminal IEND.
     body = (
         b"\x89PNG\r\n\x1a\n"
         + struct.pack(">I", 13)
@@ -31,52 +29,48 @@ def _fake_png(width: int = 64, height: int = 36, *, complete: bool = True) -> by
         + b"\x00\x00\x00\x00"
     )
     if complete:
-        body += b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        body += b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
     return body
 
 
 class RifeSafeRunnerTests(unittest.TestCase):
-    def test_8k_gpu_policy_forces_uhd_serial_native_2x(self) -> None:
-        policy = execution_policy(8, 7680, 4320, 17, "gpu")
-        self.assertTrue(policy.uhd)
-        self.assertEqual("1:1:1", policy.jobs)
-        self.assertEqual(16, policy.native_target)
-        self.assertEqual(17, policy.requested_target)
+    def test_execution_policy_keeps_legacy_default_for_direct_callers(self) -> None:
+        uhd = execution_policy(8, 7680, 4320, 17, "gpu")
+        hd = execution_policy(8, 1920, 1080, 16, "gpu")
+        self.assertEqual("1:1:1", uhd.jobs)
+        self.assertEqual("2:2:2", hd.jobs)
 
-    def test_non_uhd_gpu_keeps_parallel_policy(self) -> None:
-        policy = execution_policy(8, 1920, 1080, 16, "gpu")
-        self.assertFalse(policy.uhd)
-        self.assertEqual("2:2:2", policy.jobs)
-
-    def test_tuned_policy_is_suppressed_when_live_vram_is_unknown(self) -> None:
-        tuned = RifePolicy("3:3:3", 0)
+    def test_full_selector_ignores_missing_live_vram(self) -> None:
         selected, measured, reason = _limit_policy_by_live_vram(
-            tuned, uhd=False, free_vram_mb=None, gpu_index=0
+            None, uhd=False, free_vram_mb=None, gpu_index=0
         )
-        self.assertEqual(selected, RifePolicy("2:2:2", 0))
+        self.assertEqual(selected, RifePolicy("3:3:3", 0))
         self.assertFalse(measured)
-        self.assertIn("unavailable", reason)
+        self.assertIn("full-utilization", reason)
 
-    def test_low_live_vram_forces_serial_policy(self) -> None:
-        tuned = RifePolicy("3:3:3", 0)
-        selected, measured, _reason = _limit_policy_by_live_vram(
-            tuned, uhd=False, free_vram_mb=2500, gpu_index=0
+    def test_full_selector_ignores_low_live_vram(self) -> None:
+        selected, measured, reason = _limit_policy_by_live_vram(
+            None, uhd=False, free_vram_mb=1.0, gpu_index=0
         )
-        self.assertEqual(selected, RifePolicy("1:1:1", 0))
+        self.assertEqual(selected, RifePolicy("3:3:3", 0))
+        self.assertFalse(measured)
+        self.assertIn("ignored", reason)
+
+    def test_uhd_full_selector_starts_parallel_without_live_probe(self) -> None:
+        selected, measured, _ = _limit_policy_by_live_vram(
+            None, uhd=True, free_vram_mb=1.0, gpu_index=2
+        )
+        self.assertEqual(selected, RifePolicy("2:2:2", 2))
         self.assertFalse(measured)
 
-    def test_three_process_tuning_requires_live_headroom(self) -> None:
-        tuned = RifePolicy("3:3:3", 0)
-        limited, measured_limited, _ = _limit_policy_by_live_vram(
-            tuned, uhd=False, free_vram_mb=6000, gpu_index=0
+    def test_existing_tuned_policy_is_not_live_vram_gated(self) -> None:
+        tuned = RifePolicy("3:3:3", 1)
+        selected, measured, reason = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=1.0, gpu_index=1
         )
-        admitted, measured_admitted, _ = _limit_policy_by_live_vram(
-            tuned, uhd=False, free_vram_mb=7000, gpu_index=0
-        )
-        self.assertEqual(limited, RifePolicy("2:2:2", 0))
-        self.assertFalse(measured_limited)
-        self.assertEqual(admitted, tuned)
-        self.assertTrue(measured_admitted)
+        self.assertEqual(selected, tuned)
+        self.assertTrue(measured)
+        self.assertIn("without live VRAM gating", reason)
 
     def test_tuning_lookup_reuses_already_detected_hardware_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -130,29 +124,17 @@ class RifeSafeRunnerTests(unittest.TestCase):
             self.assertEqual(fingerprint, key.component_fingerprint)
             self.assertIsNotNone(store)
 
-    def test_hardware_snapshot_exposes_live_vram_without_second_probe(self) -> None:
-        hardware = HardwareProfile(
-            "CPU Test", 28, "RTX Test", 8192, "999.1", 1, 7000
-        )
-        self.assertEqual(hardware.gpu_index, 1)
-        self.assertEqual(hardware.vram_free_mb, 7000)
-        with patch(
-            "cinepulse.rife_safe_runner.vram_free_mb",
-            side_effect=AssertionError("unexpected initial VRAM re-probe"),
-        ):
-            selected, measured, reason = _limit_policy_by_live_vram(
-                RifePolicy("3:3:3", 1),
-                uhd=False,
-                free_vram_mb=float(hardware.vram_free_mb),
-                gpu_index=hardware.gpu_index,
-            )
-        self.assertEqual(selected, RifePolicy("3:3:3", 1))
-        self.assertTrue(measured)
-        self.assertIn("live VRAM", reason)
-
-    def test_fallback_oom_can_downshift_to_serial_when_live_vram_drops(self) -> None:
+    def test_oom_retries_fixed_conservative_fallback_without_live_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             native_dir = Path(temporary) / "native"
+            aggressive = RifeExecutionPolicy(
+                uhd=False,
+                jobs="3:3:3",
+                native_target=8,
+                requested_target=8,
+                gpu_index=0,
+                measured=False,
+            )
             fallback = RifeExecutionPolicy(
                 uhd=False,
                 jobs="2:2:2",
@@ -171,20 +153,19 @@ class RifeSafeRunnerTests(unittest.TestCase):
             with (
                 patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
                 patch("cinepulse.rife_safe_runner.validate_png_sequence", return_value=[]),
-                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=2500.0),
             ):
                 applied = _run_native_with_rollback(
                     rife_executable=Path("rife-ncnn-vulkan.exe"),
                     model=Path("rife-v4.6"),
                     incoming=Path("incoming"),
                     native_dir=native_dir,
-                    policy=fallback,
+                    policy=aggressive,
                     fallback=fallback,
                     tuning_key=None,
                     tuning_store=None,
                 )
 
-            self.assertEqual("1:1:1", applied.jobs)
+            self.assertEqual("2:2:2", applied.jobs)
             self.assertEqual(2, calls["count"])
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
