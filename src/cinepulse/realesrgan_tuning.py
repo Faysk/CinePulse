@@ -34,6 +34,8 @@ class RealEsrganTuningKey:
     width: int
     height: int
     scale: int
+    cpu_threads: int = 0
+    logical_threads: int = 0
 
     def token(self) -> str:
         clean_gpu = " ".join(self.gpu_name.split()).lower() or "unknown-gpu"
@@ -46,6 +48,7 @@ class RealEsrganTuningKey:
                 self.model.strip().lower(),
                 f"{max(1, int(self.width))}x{max(1, int(self.height))}",
                 f"x{max(1, int(self.scale))}",
+                f"host{max(0, int(self.cpu_threads))}of{max(0, int(self.logical_threads))}",
             )
         )
 
@@ -72,6 +75,7 @@ def safe_candidates(
     *,
     vram_mb: int | None,
     cpu_threads: int,
+    logical_threads: int | None = None,
     gpu_index: int = 0,
     width: int = 1920,
     height: int = 1080,
@@ -84,6 +88,7 @@ def safe_candidates(
     """
     vram = max(0, int(vram_mb or 0))
     threads = max(1, int(cpu_threads))
+    logical = max(threads, int(logical_threads or threads))
     pixels = max(1, int(width)) * max(1, int(height))
 
     tiles = [256]
@@ -101,16 +106,22 @@ def safe_candidates(
     if threads >= 20:
         pipelines.append((4, 2, 4))
 
-    # H9 physical autotune must be able to discover real GPU concurrency,
-    # instead of benchmarking only variants whose Vulkan process count is 2.
-    # These remain candidates only: no runtime permission is granted unless the
-    # exact hardware/driver/model/geometry benchmark passes integrity gates.
-    if vram >= 7500 and threads >= 12 and pixels <= 2560 * 1440:
-        pipelines.append((3, 3, 3))
-    if vram >= 12000 and threads >= 16 and pixels <= 3840 * 2160:
-        pipelines.append((4, 3, 4))
-    if vram >= 20000 and threads >= 20 and pixels <= 2560 * 1440:
-        pipelines.append((4, 4, 4))
+    # H9 physical autotune must model Studio's bounded neural host feed. A
+    # 28-thread machine normally gives NCNN about six host feed threads, so GPU
+    # process concurrency is keyed to the machine envelope separately from
+    # load/save concurrency.
+    io_workers = 1 if threads <= 4 else 2
+    if threads >= 12:
+        io_workers = 3
+    if threads >= 20:
+        io_workers = 4
+    host_feed_ready = threads >= 4
+    if vram >= 7500 and logical >= 12 and host_feed_ready and pixels <= 2560 * 1440:
+        pipelines.append((io_workers, 3, io_workers))
+    if vram >= 12000 and logical >= 8 and host_feed_ready and pixels <= 3840 * 2160:
+        pipelines.append((io_workers, 3, io_workers))
+    if vram >= 20000 and logical >= 12 and host_feed_ready and pixels <= 2560 * 1440:
+        pipelines.append((io_workers, 4, io_workers))
 
     candidates: list[RealEsrganPolicy] = []
     for tile in tiles:
@@ -159,7 +170,7 @@ def downshift_policy(
 
 
 class RealEsrganTuningStore:
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
