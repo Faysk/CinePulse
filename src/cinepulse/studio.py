@@ -4472,9 +4472,14 @@ class VideoOptimizerStudio:
 
             cpu_topology = detect_cpu_topology()
             dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
-            machine_mode = "dedicated" if settings.cpu_threads >= dedicated_threshold else "balanced"
             machine_profile = profile_for_threads(settings.cpu_threads, cpu_topology.logical_cpus)
             overnight_mode = machine_profile == PROFILE_OVERNIGHT
+            machine_mode = (
+                "overnight"
+                if overnight_mode
+                else "dedicated" if settings.cpu_threads >= dedicated_threshold
+                else "balanced"
+            )
             if overnight_mode:
                 self._log("H8 Overnight: controlador sustentado ativo; somente downshift de recursos é permitido.")
             cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
