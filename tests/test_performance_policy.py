@@ -43,6 +43,24 @@ def test_realesrgan_keeps_8gb_gpu_workers_conservative_while_scaling_io() -> Non
     assert realesrgan_pipeline_threads(28, 28, 8192) == "4:2:4"
 
 
+def test_realesrgan_8gb_can_use_third_gpu_worker_with_live_headroom() -> None:
+    assert realesrgan_pipeline_threads(
+        26, 28, 8192, vram_free_mb=7000, width=1920, height=1080
+    ) == "3:3:3"
+    assert realesrgan_pipeline_threads(
+        26, 28, 8192, vram_free_mb=7000, width=3840, height=2160
+    ) == "3:2:3"
+
+
+def test_realesrgan_live_vram_pressure_downshifts_total_vram_heuristic() -> None:
+    assert realesrgan_pipeline_threads(
+        28, 28, 24_576, vram_free_mb=4500, width=1920, height=1080
+    ) == "4:2:4"
+    assert realesrgan_pipeline_threads(
+        28, 28, 24_576, vram_free_mb=2500, width=1920, height=1080
+    ) == "4:1:4"
+
+
 def test_realesrgan_can_scale_gpu_workers_on_larger_vram() -> None:
     assert realesrgan_pipeline_threads(28, 28, 12_288) == "4:3:4"
     assert realesrgan_pipeline_threads(28, 28, 24_576) == "4:4:4"
