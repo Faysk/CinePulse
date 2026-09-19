@@ -80,7 +80,7 @@ from .gpu_media import (
 )
 from .gpu_encode import ResidentEncodeStore
 from .gpu_delivery import select_resident_delivery_route
-from .pipeline_runtime import BackgroundCommand, measure_resource_headroom
+from .pipeline_runtime import BackgroundCommand, measure_resource_headroom, vram_free_mb
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
@@ -4886,7 +4886,9 @@ class VideoOptimizerStudio:
                         source_fps=visual_fps, target_width=target_w, target_height=target_h,
                         target_fps=target_fps, delivery_plan=delivery_plan,
                         bitrate_mbps=bitrate_mbps, use_cpu=settings.use_cpu,
-                        color_already_final=color_ready, gpu_index=0,
+                        color_already_final=color_ready,
+                        vram_free_mb=vram_free_mb(0),
+                        gpu_index=0,
                     )
                 except Exception as exc:
                     self._log(f"H5 resident delivery: probe/evidence indisponível; baseline preservado ({exc}).")
