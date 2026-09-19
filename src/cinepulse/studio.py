@@ -5535,7 +5535,7 @@ class VideoOptimizerStudio:
 
         processed = 0
         chunk_index = 0
-        prefetch: tuple[int, int, Path, Path, BackgroundCommand] | None = None
+        prefetch: tuple[int, int, Path, Path, BackgroundCommand, GpuMediaPolicy | None] | None = None
         pack: tuple[int, Path, Path, BackgroundCommand] | None = None
 
         # H5: CUDA decode is evidence-gated, never inferred from mere capability.
@@ -5544,6 +5544,8 @@ class VideoOptimizerStudio:
         gpu_media_key: GpuMediaKey | None = None
         gpu_media_policy: GpuMediaPolicy | None = None
         gpu_media_profile: ColorProfile | None = None
+        decode_floor_mb: float | None = None
+        gpu_media_headroom_suppressed = False
         try:
             gpu_probe = probe_media(video)
             gpu_stream = next(
@@ -5574,12 +5576,12 @@ class VideoOptimizerStudio:
                 decode_floor_mb = gpu_media_vram_floor_mb(gpu_media_key)
                 decode_free_mb = vram_free_mb(gpu_media_policy.gpu_index)
                 if decode_free_mb is None or decode_free_mb < decode_floor_mb:
+                    gpu_media_headroom_suppressed = True
                     self._log(
                         "H5 CUDA decode: evidência exata preservada, mas VRAM livre atual "
                         f"({decode_free_mb if decode_free_mb is not None else 'n/a'} MiB) não cobre "
-                        f"o piso de surfaces ({decode_floor_mb:.0f} MiB); CPU usada neste render."
+                        f"o piso de surfaces ({decode_floor_mb:.0f} MiB); CPU usada até o headroom recuperar."
                     )
-                    gpu_media_policy = None
         except Exception as exc:
             self._log(f"H5 CUDA decode: capability/evidence probe indisponível; CPU preservada ({exc}).")
             gpu_media_policy = None
@@ -5589,21 +5591,54 @@ class VideoOptimizerStudio:
                 f"na GPU {gpu_media_policy.gpu_index} para alimentar a extração neural."
             )
 
+        def current_gpu_extract_policy() -> GpuMediaPolicy | None:
+            nonlocal gpu_media_headroom_suppressed
+            policy = gpu_media_policy
+            if policy is None or decode_floor_mb is None:
+                return None
+            current_free = vram_free_mb(policy.gpu_index)
+            if current_free is None or current_free < decode_floor_mb:
+                if not gpu_media_headroom_suppressed:
+                    self._log(
+                        "H5 CUDA decode: VRAM caiu abaixo do piso; suspendendo CUDA por lote "
+                        f"({current_free if current_free is not None else 'n/a'} MiB < {decode_floor_mb:.0f} MiB)."
+                    )
+                gpu_media_headroom_suppressed = True
+                return None
+            if gpu_media_headroom_suppressed:
+                self._log(
+                    "H5 CUDA decode: headroom recuperado; restaurando NVDEC para os próximos lotes "
+                    f"({current_free:.0f} MiB livres)."
+                )
+                gpu_media_headroom_suppressed = False
+            return policy
+
         def invalidate_gpu_extract(reason: BaseException | str) -> None:
-            nonlocal gpu_media_policy
+            nonlocal gpu_media_policy, gpu_media_headroom_suppressed
             if gpu_media_policy is None or gpu_media_key is None:
                 return
             gpu_specific = looks_like_gpu_runtime_failure(reason)
-            if gpu_specific:
+            current_free = vram_free_mb(gpu_media_policy.gpu_index)
+            low_headroom = bool(
+                decode_floor_mb is not None
+                and (current_free is None or current_free < decode_floor_mb)
+            )
+            should_invalidate = gpu_specific and not low_headroom
+            if should_invalidate:
                 invalidate_gpu_media_policy(gpu_media_store, gpu_media_key)
                 evidence_text = "evidência invalidada"
+                gpu_media_policy = None
+                gpu_media_headroom_suppressed = False
             else:
-                evidence_text = "evidência preservada; falha não classificada como GPU"
+                evidence_text = (
+                    "evidência preservada; pressão transitória de VRAM"
+                    if low_headroom
+                    else "evidência preservada; falha não classificada como GPU"
+                )
             self._log(
                 "H5 CUDA decode: fast path falhou em produção; "
                 f"{evidence_text}. Este lote será repetido uma vez pela CPU. Motivo: {reason}"
             )
-            gpu_media_policy = None
 
         def extraction_command(
             frame_offset: int,
@@ -5642,8 +5677,8 @@ class VideoOptimizerStudio:
             expected_duration: float,
             stage_progress_base: float,
             stage_progress_weight: float,
-        ) -> None:
-            policy = gpu_media_policy
+        ) -> bool:
+            policy = current_gpu_extract_policy()
             command = extraction_command(
                 frame_offset, frame_count, destination, progress=progress, policy=policy
             )
@@ -5663,6 +5698,8 @@ class VideoOptimizerStudio:
                 self._run_ffmpeg(
                     retry, expected_duration, stage_progress_base, stage_progress_weight
                 )
+                return False
+            return policy is not None
 
         try:
             while processed < total_frames:
@@ -5721,7 +5758,7 @@ class VideoOptimizerStudio:
 
                 prefetched = prefetch is not None and prefetch[0] == processed and prefetch[1] == count
                 if prefetched:
-                    _offset, _count, prefetched_dir, prefetched_incoming, task = prefetch
+                    _offset, _count, prefetched_dir, prefetched_incoming, task, prefetched_policy = prefetch
                     if prefetched_dir != chunk_dir or prefetched_incoming != incoming:
                         task.cancel()
                         raise RuntimeError("H4 prefetch perdeu sincronismo com o lote atual.")
@@ -5732,7 +5769,7 @@ class VideoOptimizerStudio:
                     try:
                         result = task.wait()
                     except RuntimeError as exc:
-                        if gpu_media_policy is None:
+                        if prefetched_policy is None:
                             raise
                         invalidate_gpu_extract(exc)
                         safe_rmtree(incoming)
@@ -5746,11 +5783,13 @@ class VideoOptimizerStudio:
                             stage_progress_base=stage_base,
                             stage_progress_weight=weight * fraction_chunk * 0.18,
                         )
+                        prefetched_policy = None
                         result = None
                     prefetch = None
                     if result is not None and (result.cancelled or self._cancelled):
                         raise InterruptedError
                     self._log(f"H4 PREFETCH Real-ESRGAN: lote {chunk_index} pronto sem ocupar o processo foreground.")
+                    extraction_used_gpu = prefetched_policy is not None
                     outgoing.mkdir(parents=True, exist_ok=True)
                 else:
                     incoming.mkdir(parents=True, exist_ok=True)
@@ -5759,7 +5798,7 @@ class VideoOptimizerStudio:
                         "IA 1/3",
                         f"Lote {chunk_index}: extraindo {count} quadro(s) ({processed + 1}–{processed + count}/{total_frames}).",
                     )
-                    run_extraction(
+                    extraction_used_gpu = run_extraction(
                         processed,
                         count,
                         incoming,
@@ -5770,7 +5809,7 @@ class VideoOptimizerStudio:
                     )
 
                 frames = len(list(incoming.glob("frame*.png")))
-                if frames != count and gpu_media_policy is not None:
+                if frames != count and extraction_used_gpu:
                     # Exact H5 decode evidence includes frame-count parity. A
                     # short successful CUDA extraction is therefore a runtime
                     # integrity failure even when FFmpeg exits with code zero.
@@ -5820,19 +5859,20 @@ class VideoOptimizerStudio:
                     next_dir = chunk_root / f"chunk_{next_index:05d}"
                     next_incoming = next_dir / "entrada"
                     next_incoming.mkdir(parents=True, exist_ok=True)
+                    next_policy = current_gpu_extract_policy()
                     next_command = extraction_command(
                         next_processed,
                         next_count,
                         next_incoming,
                         progress=False,
-                        policy=gpu_media_policy,
+                        policy=next_policy,
                     )
                     task = BackgroundCommand(
                         next_command,
                         cancel_requested=lambda: self._cancelled,
                         log=self._log,
                     ).start()
-                    prefetch = (next_processed, next_count, next_dir, next_incoming, task)
+                    prefetch = (next_processed, next_count, next_dir, next_incoming, task, next_policy)
                     self._log(
                         f"H4 PREFETCH Real-ESRGAN: extração do lote {next_index} iniciada em paralelo; "
                         "fila rígida=1 lote futuro / máximo 2 worksets ativos nesta etapa."
