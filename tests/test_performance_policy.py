@@ -43,6 +43,20 @@ def test_realesrgan_keeps_8gb_gpu_workers_conservative_while_scaling_io() -> Non
     assert realesrgan_pipeline_threads(28, 28, 8192) == "4:2:4"
 
 
+def test_realesrgan_gpu_workers_scale_even_with_bounded_neural_host_threads() -> None:
+    # Studio's neural_gpu scheduler intentionally feeds NCNN with about six host
+    # threads. GPU process concurrency must still scale from adapter headroom.
+    assert realesrgan_pipeline_threads(
+        6, 28, 8192, vram_free_mb=7000, width=1920, height=1080
+    ) == "2:3:2"
+    assert realesrgan_pipeline_threads(
+        6, 28, 12_288, vram_free_mb=11000, width=1920, height=1080
+    ) == "2:3:2"
+    assert realesrgan_pipeline_threads(
+        6, 28, 24_576, vram_free_mb=22000, width=1920, height=1080
+    ) == "2:4:2"
+
+
 def test_realesrgan_8gb_can_use_third_gpu_worker_with_live_headroom() -> None:
     assert realesrgan_pipeline_threads(
         26, 28, 8192, vram_free_mb=7000, width=1920, height=1080
