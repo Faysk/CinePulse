@@ -434,7 +434,11 @@ def run_safe_rife(
             width, height, model, rife_executable, runtime_hardware,
             component_fingerprint=component_fingerprint,
         )
-        live_free = vram_free_mb(active_gpu_index)
+        live_free = (
+            float(runtime_hardware.vram_free_mb)
+            if runtime_hardware.vram_free_mb is not None
+            else None
+        )
         selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
             tuned,
             uhd=uhd,
