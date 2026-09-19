@@ -105,7 +105,7 @@ def parser() -> argparse.ArgumentParser:
     cpu_candidates.add_argument("--stage", required=True, choices=("decode", "color", "scale", "encode", "audio", "vfx_cpu", "neural_gpu", "neural_cpu", "verification", "other"))
     cpu_candidates.add_argument("--logical", type=int, required=True)
     cpu_candidates.add_argument("--physical", type=int, required=True)
-    cpu_candidates.add_argument("--mode", choices=("balanced", "dedicated"), default="balanced")
+    cpu_candidates.add_argument("--mode", choices=("balanced", "dedicated", "overnight"), default="balanced")
     cpu_candidates.add_argument("--gpu-active", action="store_true")
     cpu_candidates.add_argument("--max-threads", type=int)
 
