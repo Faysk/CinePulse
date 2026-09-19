@@ -38,6 +38,9 @@ def main() -> int:
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     if not ffmpeg:
         raise SystemExit("FFmpeg is required for the RIFE black-frame and quality-parity gates")
+    component_fingerprint = bootstrap_component_fingerprint("rife")
+    if not component_fingerprint:
+        raise SystemExit("RIFE component fingerprint is unavailable; refusing to record tuning evidence")
     candidates = safe_candidates(
         uhd=uhd,
         vram_mb=hardware.vram_mb,
@@ -50,7 +53,7 @@ def main() -> int:
         args.model.name or "rife-v4.6",
         width,
         height,
-        bootstrap_component_fingerprint("rife"),
+        component_fingerprint,
     )
     store = RifeTuningStore(args.cache)
     winner, samples = benchmark_and_record(
