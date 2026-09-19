@@ -22,7 +22,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--scale", type=int, default=2)
     result.add_argument("--work-dir", type=Path, required=True)
     result.add_argument("--cpu-threads", type=int)
-    result.add_argument("--gpu-index", type=int, default=0)
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--gpu-name")
     result.add_argument("--vram-mb", type=int)
     result.add_argument("--driver")
@@ -46,6 +46,7 @@ def main() -> int:
     gpu_name = args.gpu_name or hardware.gpu or "unknown-gpu"
     vram_mb = int(args.vram_mb if args.vram_mb is not None else (hardware.vram_mb or 0))
     driver = args.driver or hardware.driver or "unknown-driver"
+    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
     topology = detect_cpu_topology()
     default_feed = schedule_cpu_threads(
         "neural_gpu", topology=topology, mode="balanced", gpu_active=True
@@ -67,7 +68,7 @@ def main() -> int:
         vram_mb=vram_mb,
         cpu_threads=cpu_threads,
         logical_threads=logical_threads,
-        gpu_index=max(0, int(args.gpu_index)),
+        gpu_index=gpu_index,
         width=source_size[0],
         height=source_size[1],
     )
@@ -83,6 +84,7 @@ def main() -> int:
         logical_threads=logical_threads,
         component_fingerprint=component_fingerprint,
         cpu_name=hardware.cpu,
+        gpu_index=gpu_index,
     )
     store = RealEsrganTuningStore(args.cache)
     try:
