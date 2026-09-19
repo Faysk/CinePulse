@@ -101,14 +101,13 @@ class GpuDeliveryTests(unittest.TestCase):
         self.assertEqual(1, len(store.keys))
         self.assertEqual(route.contract.token(), store.keys[0].encode_contract)
 
-    def test_unknown_live_vram_blocks_resident_route_before_store_lookup(self) -> None:
+    def test_unknown_live_vram_does_not_block_approved_resident_route(self) -> None:
         store = Store(True)
         route = select(store=store, vram_free=None)
-        self.assertFalse(route.approved)
-        self.assertIn("VRAM", route.reason)
-        self.assertEqual([], store.keys)
+        self.assertTrue(route.approved)
+        self.assertEqual(1, len(store.keys))
 
-    def test_low_live_vram_blocks_resident_route_before_store_lookup(self) -> None:
+    def test_low_live_vram_does_not_prethrottle_approved_resident_route(self) -> None:
         store = Store(True)
         floor = resident_vram_floor_mb(
             source_width=1920,
@@ -118,9 +117,8 @@ class GpuDeliveryTests(unittest.TestCase):
             pixel_format="yuv420p",
         )
         route = select(store=store, vram_free=floor - 1)
-        self.assertFalse(route.approved)
-        self.assertIn("resident floor", route.reason)
-        self.assertEqual([], store.keys)
+        self.assertTrue(route.approved)
+        self.assertEqual(1, len(store.keys))
 
     def test_resident_vram_floor_scales_with_geometry_and_bit_depth(self) -> None:
         hd = resident_vram_floor_mb(

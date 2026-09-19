@@ -140,8 +140,10 @@ def select_resident_delivery_route(
         return ResidentDeliveryRoute(False, "resident H5 route currently proves HEVC/NVENC only")
     if not hardware.gpu:
         return ResidentDeliveryRoute(False, "no NVIDIA GPU detected")
-    if vram_free_mb is None:
-        return ResidentDeliveryRoute(False, "live VRAM headroom is unavailable")
+    # Full-utilization mode deliberately ignores live VRAM headroom here.
+    # Exact route/capability/color evidence still protects correctness; a real
+    # GPU failure is handled by the caller's existing CPU rollback.
+    del vram_free_mb
     if not color_already_final or not _known_sdr_bt709(source_profile):
         return ResidentDeliveryRoute(False, "color/HDR conversion is not equivalent to the resident CUDA envelope")
     if abs(float(source_fps) - float(target_fps)) > 0.01:
@@ -158,23 +160,6 @@ def select_resident_delivery_route(
     scaler = caps.cuda_scale if do_scale else None
     if do_scale and not scaler:
         return ResidentDeliveryRoute(False, "CUDA scaler unavailable for requested geometry")
-
-    required_vram = resident_vram_floor_mb(
-        source_width=source_w,
-        source_height=source_h,
-        target_width=target_width,
-        target_height=target_height,
-        pixel_format=delivery_plan.pixel_format,
-    )
-    try:
-        live_vram = max(0.0, float(vram_free_mb))
-    except (TypeError, ValueError):
-        return ResidentDeliveryRoute(False, "live VRAM headroom is invalid")
-    if live_vram < required_vram:
-        return ResidentDeliveryRoute(
-            False,
-            f"live VRAM headroom {live_vram:.0f} MiB is below resident floor {required_vram:.0f} MiB",
-        )
 
     contract = cinepulse_hevc_nvenc_contract(
         pixel_format=delivery_plan.pixel_format,

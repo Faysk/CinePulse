@@ -10,9 +10,9 @@ from .overnight_runtime import OvernightRuntimeController
 class RuntimePressureDecision:
     """Quality-neutral scheduling envelope for the remainder of one render.
 
-    Live control may reduce future chunk size and overlap, then cautiously
-    restore them after sustained healthy headroom. It can never increase
-    concurrency beyond the benchmark-proven policy selected before the render.
+    CinePulse 1.2.4 keeps this object for API/history compatibility, but live
+    telemetry no longer reduces chunk size, CPU threads or overlap. The render
+    stays at its full-utilization baseline until a concrete operation fails.
     """
 
     level: int
@@ -121,70 +121,11 @@ class AdaptiveRuntimeController:
         )
 
     def observe(self, sample: HardwareSample | None) -> RuntimePressureDecision:
-        if sample is None:
-            return self._decision()
-
-        selected_gpu = next((gpu for gpu in sample.gpus if int(gpu.index) == self.gpu_index), None)
-        vram_free = selected_gpu.vram_free_mb if selected_gpu is not None else None
-        ram_percent = sample.ram_percent
-
-        critical: list[str] = []
-        caution: list[str] = []
-
-        # Capacity guards protect against paging/OOM and are allowed to act
-        # immediately. Temperature is intentionally absent here.
-        if ram_percent is not None:
-            if ram_percent >= 94.0:
-                critical.append(f"RAM {ram_percent:.1f}%")
-            elif ram_percent >= 88.0:
-                caution.append(f"RAM {ram_percent:.1f}%")
-        if vram_free is not None:
-            if vram_free < 384.0:
-                critical.append(f"VRAM livre {vram_free:.0f} MB")
-            elif vram_free < 768.0:
-                caution.append(f"VRAM livre {vram_free:.0f} MB")
-
-        requested = 2 if critical else (1 if caution else 0)
-        evidence = critical if requested == 2 else caution
-
-        if self._overnight is not None:
-            sustained = self._overnight.observe(sample)
-            mapped_level = 2 if sustained.pressure_level >= 2 else sustained.pressure_level
-            if mapped_level > requested:
-                requested = mapped_level
-                evidence = list(sustained.reasons)
-            # H8 limits remain monotonic in OvernightRuntimeController. Merge
-            # them conservatively with the H4 pressure envelope.
-            self._cpu_scale = min(self._cpu_scale, sustained.cpu_scale)
-            self._cooldown_hint_seconds = max(
-                self._cooldown_hint_seconds,
-                sustained.cooldown_hint_seconds,
-            )
-
-        if requested > self._level:
-            self._level = requested
-            self._reasons = tuple(evidence)
-            self._healthy_streak = 0
-            return self._decision()
-
-        # Recover capacity-only downshifts slowly and with strong hysteresis.
-        # A sample is deeply healthy only well below the downshift thresholds,
-        # which avoids flapping around 88% RAM / 768 MiB free VRAM.
-        deeply_healthy = bool(
-            requested < self._level
-            and ram_percent is not None
-            and vram_free is not None
-            and ram_percent <= 82.0
-            and vram_free >= 1536.0
-        )
-        if deeply_healthy:
-            self._healthy_streak += 1
-            if self._healthy_streak >= self._recovery_window:
-                self._level = max(requested, self._level - 1)
-                self._reasons = (
-                    f"capacidade recuperada após {self._recovery_window} amostras saudáveis",
-                )
-                self._healthy_streak = 0
-        else:
-            self._healthy_streak = 0
+        """Keep the baseline envelope regardless of live resource telemetry."""
+        del sample
+        self._level = 0
+        self._reasons = ()
+        self._cpu_scale = 1.0
+        self._cooldown_hint_seconds = 0.0
+        self._healthy_streak = 0
         return self._decision()

@@ -25,12 +25,12 @@ class RealEsrganTuningTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_legacy_fallback_is_always_first_candidate(self) -> None:
+    def test_full_utilization_runtime_baseline_is_first_candidate(self) -> None:
         candidates = safe_candidates(
             vram_mb=8192, cpu_threads=20, logical_threads=28,
             gpu_index=1, width=1920, height=1080,
         )
-        self.assertEqual(candidates[0], RealEsrganPolicy(256, 2, 2, 2, 1))
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 4, 3, 4, 1))
 
     def test_first_candidate_matches_runtime_baseline_for_large_gpu(self) -> None:
         candidates = safe_candidates(
@@ -40,7 +40,7 @@ class RealEsrganTuningTests(unittest.TestCase):
             width=1920,
             height=1080,
         )
-        self.assertEqual(candidates[0], RealEsrganPolicy(256, 2, 4, 2, 0))
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 4, 4, 4, 0))
 
     def test_first_candidate_matches_runtime_baseline_for_small_host_feed(self) -> None:
         candidates = safe_candidates(
@@ -50,7 +50,7 @@ class RealEsrganTuningTests(unittest.TestCase):
             width=1920,
             height=1080,
         )
-        self.assertEqual(candidates[0], RealEsrganPolicy(256, 1, 2, 1, 0))
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 4, 3, 4, 0))
 
     def test_high_resolution_does_not_offer_512_tile(self) -> None:
         candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=7680, height=4320)
@@ -60,9 +60,9 @@ class RealEsrganTuningTests(unittest.TestCase):
         candidates = safe_candidates(vram_mb=8192, cpu_threads=20, width=1920, height=1080)
         self.assertTrue(any(item.process_jobs == 3 for item in candidates))
 
-    def test_physical_candidates_keep_8gb_4k_process_concurrency_conservative(self) -> None:
+    def test_full_runtime_baseline_keeps_three_gpu_workers_on_8gb_4k(self) -> None:
         candidates = safe_candidates(vram_mb=8192, cpu_threads=20, width=3840, height=2160)
-        self.assertFalse(any(item.process_jobs > 2 for item in candidates))
+        self.assertEqual(candidates[0].process_jobs, 3)
 
     def test_physical_candidates_can_probe_four_gpu_workers_on_24gb(self) -> None:
         candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=1920, height=1080)
@@ -72,12 +72,12 @@ class RealEsrganTuningTests(unittest.TestCase):
         rtx4070 = safe_candidates(
             vram_mb=8192, cpu_threads=6, logical_threads=28, width=1920, height=1080
         )
-        self.assertEqual(rtx4070[0], RealEsrganPolicy(256, 2, 2, 2, 0))
+        self.assertEqual(rtx4070[0], RealEsrganPolicy(256, 4, 3, 4, 0))
         self.assertIn(RealEsrganPolicy(256, 3, 3, 3, 0), rtx4070)
         rtx3090 = safe_candidates(
             vram_mb=24576, cpu_threads=6, logical_threads=28, width=1920, height=1080
         )
-        self.assertEqual(rtx3090[0], RealEsrganPolicy(256, 2, 4, 2, 0))
+        self.assertEqual(rtx3090[0], RealEsrganPolicy(256, 4, 4, 4, 0))
         self.assertIn(RealEsrganPolicy(256, 3, 4, 3, 0), rtx3090)
 
     def test_six_thread_host_feed_can_probe_three_load_and_save_workers(self) -> None:
@@ -91,9 +91,7 @@ class RealEsrganTuningTests(unittest.TestCase):
         self.assertTrue(
             any(item.load_jobs == 3 and item.save_jobs == 3 for item in candidates)
         )
-        self.assertFalse(
-            any(item.load_jobs > 3 or item.save_jobs > 3 for item in candidates)
-        )
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 4, 3, 4, 0))
 
     def test_tuning_key_changes_with_host_feed_budget(self) -> None:
         six = RealEsrganTuningKey(

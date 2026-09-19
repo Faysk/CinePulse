@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.3`. Esta versão mantém o hardening do Composer da 1.2.2 e amplia o uso seguro de GPU/VRAM/RAM com budgets dinâmicos, tuning físico evidence-gated, telemetria NVIDIA ampliada e fallbacks de menor pressão. Também endurece o cache/estágio do Demucs e o rollback do RIFE sob queda de VRAM. O fluxo Stable continua conservador: caminhos acelerados sem evidência física exata permanecem bloqueados ou caem para os fallbacks CPU/NCNN validados.
+> Estado Stable: `1.2.4`. Esta versão prioriza utilização total: todos os threads lógicos de CPU ficam disponíveis ao render, Real-ESRGAN usa concorrência GPU estática agressiva pelo porte do adaptador, os budgets neurais usam o teto estrutural do pipeline e a telemetria deixa de reduzir carga preventivamente. RIFE também inicia com política agressiva fixa e só recua depois de uma falha/OOM real. Verificações de integridade, cancelamento e promoção atômica continuam ativas.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

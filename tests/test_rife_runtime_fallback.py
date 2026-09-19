@@ -25,7 +25,7 @@ def fake_png(width: int = 64, height: int = 36) -> bytes:
 
 
 class RifeRuntimeFallbackTests(unittest.TestCase):
-    def test_measured_failure_invalidates_and_retries_baseline_once(self) -> None:
+    def test_measured_oom_preserves_evidence_and_retries_fixed_fallback_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             incoming = root / "in"
@@ -63,10 +63,7 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
                 for index in range(4):
                     (native / f"{index:08d}.png").write_bytes(fake_png())
 
-            with (
-                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
-                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=7000.0),
-            ):
+            with patch("cinepulse.rife_safe_runner._run", side_effect=fake_run):
                 applied = _run_native_with_rollback(
                     rife_executable=root / "rife.exe",
                     model=root / "rife-v4.6",
@@ -79,7 +76,7 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
                 )
             self.assertEqual(applied.jobs, "1:1:1")
             self.assertEqual(calls, ["1:2:1", "1:1:1"])
-            self.assertIsNone(store.lookup(key))
+            self.assertEqual(store.lookup(key), tuned)
 
     def test_studio_rife_aborts_on_short_source_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -166,10 +163,7 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
                 for index in range(4):
                     (native / f"{index:08d}.png").write_bytes(fake_png())
 
-            with (
-                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
-                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=2500.0),
-            ):
+            with patch("cinepulse.rife_safe_runner._run", side_effect=fake_run):
                 applied = _run_native_with_rollback(
                     rife_executable=root / "rife.exe",
                     model=root / "rife-v4.6",
@@ -180,8 +174,8 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
                     tuning_key=key,
                     tuning_store=store,
                 )
-            self.assertEqual(applied.jobs, "1:1:1")
-            self.assertEqual(calls, ["3:3:3", "1:1:1"])
+            self.assertEqual(applied.jobs, "2:2:2")
+            self.assertEqual(calls, ["3:3:3", "2:2:2"])
             self.assertEqual(store.lookup(key), tuned)
 
     def test_unrelated_io_failure_does_not_delete_measured_tuning(self) -> None:

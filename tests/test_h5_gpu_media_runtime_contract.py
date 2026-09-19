@@ -23,11 +23,11 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
         self.assertIn("driver=self._hardware.driver", self.block)
         self.assertIn("operation=\"decode\"", self.block)
 
-    def test_cuda_decode_requires_live_vram_headroom_without_deleting_evidence(self) -> None:
-        self.assertIn("gpu_media_vram_floor_mb(gpu_media_key)", self.block)
-        self.assertIn("decode_free_mb = vram_free_mb(gpu_media_policy.gpu_index)", self.block)
-        self.assertIn("evidência exata preservada", self.block)
-        self.assertIn("gpu_media_policy = None", self.block)
+    def test_cuda_decode_is_not_prethrottled_by_live_vram(self) -> None:
+        self.assertNotIn("gpu_media_vram_floor_mb(gpu_media_key)", self.block)
+        self.assertNotIn("vram_free_mb(", self.block)
+        self.assertIn("gpu_media_runtime_disabled = False", self.block)
+        self.assertIn("return gpu_media_policy", self.block)
 
     def test_cuda_frames_are_downloaded_without_gpu_color_conversion(self) -> None:
         self.assertIn("policy.input_args()", self.block)
@@ -35,10 +35,12 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("colorspace_cuda", self.block)
         self.assertNotIn("tonemap_cuda", self.block)
 
-    def test_production_failure_invalidates_exact_evidence(self) -> None:
+    def test_production_failure_disables_fast_path_and_preserves_oom_evidence(self) -> None:
+        self.assertIn("gpu_media_runtime_disabled = True", self.block)
         self.assertIn("invalidate_gpu_media_policy(gpu_media_store, gpu_media_key)", self.block)
         self.assertIn("gpu_media_policy = None", self.block)
-        self.assertIn("será repetido uma vez pela CPU", self.block)
+        self.assertIn("fallback após OOM real", self.block)
+        self.assertIn("CPU usada no restante deste render", self.block)
 
     def test_foreground_failure_retries_cpu_after_clearing_partial_frames(self) -> None:
         self.assertIn("safe_rmtree(destination)", self.block)

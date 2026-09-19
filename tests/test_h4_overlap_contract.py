@@ -15,7 +15,7 @@ class H4OverlapContractTests(unittest.TestCase):
         self.assertFalse(upscale.parameters["overlap_pack"].default)
         self.assertFalse(rife.parameters["overlap_extract"].default)
 
-    def test_unknown_vram_never_enables_pack_overlap(self) -> None:
+    def test_unknown_vram_keeps_full_overlap(self) -> None:
         budget = derive_pipeline_budget(
             "realesrgan",
             ram_available_gb=32.0,
@@ -24,11 +24,12 @@ class H4OverlapContractTests(unittest.TestCase):
             scratch_write_mbps=1800.0,
             dedicated=True,
         )
-        self.assertFalse(budget.overlap_pack)
-        self.assertLessEqual(budget.chunk_budget_gb, 4.0)
-        self.assertLessEqual(budget.max_inflight_chunks, 2)
+        self.assertTrue(budget.overlap_extract)
+        self.assertTrue(budget.overlap_pack)
+        self.assertEqual(16.0, budget.chunk_budget_gb)
+        self.assertEqual(3, budget.max_inflight_chunks)
 
-    def test_slow_scratch_keeps_pipeline_sequential(self) -> None:
+    def test_slow_scratch_does_not_throttle_pipeline(self) -> None:
         budget = derive_pipeline_budget(
             "realesrgan",
             ram_available_gb=32.0,
@@ -37,9 +38,9 @@ class H4OverlapContractTests(unittest.TestCase):
             scratch_write_mbps=120.0,
             dedicated=True,
         )
-        self.assertFalse(budget.overlap_extract)
-        self.assertFalse(budget.overlap_pack)
-        self.assertEqual(1, budget.max_inflight_chunks)
+        self.assertTrue(budget.overlap_extract)
+        self.assertTrue(budget.overlap_pack)
+        self.assertEqual(3, budget.max_inflight_chunks)
 
     def test_healthy_dedicated_budget_has_hard_three_workset_ceiling(self) -> None:
         budget = derive_pipeline_budget(
