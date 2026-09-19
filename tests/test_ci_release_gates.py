@@ -95,6 +95,18 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.actor == 'Faysk'", text)
         self.assertIn("Recovery RIFE 8K UHD acceptance", text)
+        for path in (
+            "src/cinepulse/performance_policy.py",
+            "src/cinepulse/pipeline_budget.py",
+            "src/cinepulse/realesrgan_tuning.py",
+            "src/cinepulse/rife_tuning.py",
+            "src/cinepulse/studio.py",
+            "tests/test_performance_policy.py",
+            "tests/test_pipeline_budget.py",
+            "tests/test_realesrgan_tuning.py",
+            "tests/test_rife_tuning.py",
+        ):
+            self.assertIn(path, text, f"GPU acceptance must trigger for {path}")
 
     def test_release_gate_documents_phase9_contract(self) -> None:
         text = (ROOT / "scripts/release_gate.py").read_text(encoding="utf-8")
