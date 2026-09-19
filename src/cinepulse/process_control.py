@@ -77,6 +77,24 @@ def _windows_descendants(table: dict[int, int], root_pid: int) -> set[int]:
     return descendants
 
 
+def _windows_tracked_descendants(table: dict[int, int], tracked: set[int]) -> set[int]:
+    """Expand a tracked Windows process family from every known ancestor.
+
+    Launchers can exit/reparent while one of their already-known descendants
+    continues spawning FFmpeg/helper children. Walking only from the original
+    root PID would miss those late descendants once the root disappears.
+    """
+    expanded = set(int(pid) for pid in tracked)
+    while True:
+        discovered: set[int] = set()
+        for ancestor in tuple(expanded):
+            discovered.update(_windows_descendants(table, ancestor))
+        updated = expanded | discovered
+        if updated == expanded:
+            return expanded
+        expanded = updated
+
+
 def _windows_taskkill(pid: int) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
@@ -114,7 +132,8 @@ def _terminate_windows_tree(
     while time.monotonic() < deadline:
         table = _windows_process_table()
         if table:
-            remaining = ({pid for pid in tracked if pid in table} | _windows_descendants(table, root_pid))
+            tracked = _windows_tracked_descendants(table, tracked)
+            remaining = {pid for pid in tracked if pid in table}
             remaining.discard(os.getpid())
         else:
             # CIM may be unavailable on stripped-down Windows images. Fall back
@@ -143,7 +162,8 @@ def _terminate_windows_tree(
 
     final_table = _windows_process_table()
     if final_table:
-        survivors = ({pid for pid in tracked if pid in final_table} | _windows_descendants(final_table, root_pid))
+        tracked = _windows_tracked_descendants(final_table, tracked)
+        survivors = {pid for pid in tracked if pid in final_table}
         survivors.discard(os.getpid())
         if survivors:
             logger(
