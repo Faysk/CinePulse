@@ -185,15 +185,21 @@ jobs:
           $Layer = Join-Path $Root 'layer.png'
           $Cache = Join-Path $PWD 'cache/hardware/gpu-compositor.json'
           $Evidence = Join-Path $PWD 'artifacts/gpu/composer-h6.json'
+          $ResidentEvidence = Join-Path $PWD 'artifacts/gpu/composer-h6-resident.json'
           New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
-          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'format=yuv420p' -c:v ffv1 -level 3 -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 base sample.' }
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'format=yuv420p' -c:v libx264 -preset fast -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 H.264 base sample.' }
           & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'color=c=red@0.55:s=512x288:d=1' -frames:v 1 -vf 'format=rgba' $Layer
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 alpha layer.' }
           python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --timeout 300 | Tee-Object -FilePath $Evidence
-          if ($LASTEXITCODE -ne 0) { throw 'Physical Composer CUDA acceptance failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Physical Composer CUDA upload-path acceptance failed.' }
+          python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --resident-base --timeout 300 | Tee-Object -FilePath $ResidentEvidence
+          $ResidentExit = $LASTEXITCODE
+          if ($ResidentExit -ne 0 -and $ResidentExit -ne 2) { throw "Physical Composer NVDEC-resident benchmark failed with code $ResidentExit." }
+          if ($ResidentExit -eq 2) { Write-Host 'CINEPULSE_COMPOSER_RESIDENT_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
           if (-not (Test-Path -LiteralPath $Cache)) { throw 'Composer GPU evidence cache was not created.' }
           if (-not (Test-Path -LiteralPath $Evidence)) { throw 'Composer GPU evidence report was not created.' }
+          if (-not (Test-Path -LiteralPath $ResidentEvidence)) { throw 'Composer resident GPU evidence report was not created.' }
       - name: GPU gate
         run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
       - name: Recovery RIFE 8K UHD acceptance
