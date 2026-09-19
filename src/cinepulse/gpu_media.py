@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -113,6 +114,10 @@ def _names_from_listing(text: str) -> frozenset[str]:
 
 def _ffmpeg_binary_identity(ffmpeg: str) -> str:
     path = Path(str(ffmpeg))
+    if not path.is_file():
+        discovered = shutil.which(str(ffmpeg))
+        if discovered:
+            path = Path(discovered)
     try:
         resolved = path.resolve(strict=True)
         stat = resolved.stat()
