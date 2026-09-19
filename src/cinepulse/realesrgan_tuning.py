@@ -43,6 +43,7 @@ class RealEsrganTuningKey:
     logical_threads: int = 0
     component_fingerprint: str = ""
     cpu_name: str = ""
+    gpu_index: int = 0
 
     def token(self) -> str:
         clean_gpu = " ".join(self.gpu_name.split()).lower() or "unknown-gpu"
@@ -58,6 +59,7 @@ class RealEsrganTuningKey:
                 f"host{max(0, int(self.cpu_threads))}of{max(0, int(self.logical_threads))}",
                 str(self.component_fingerprint or "unknown-component").strip().lower(),
                 " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
+                f"gpu{max(0, int(self.gpu_index))}",
             )
         )
 
@@ -201,7 +203,7 @@ def downshift_policy(
 
 
 class RealEsrganTuningStore:
-    VERSION = 4
+    VERSION = 5
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
