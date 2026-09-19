@@ -5407,7 +5407,7 @@ class VideoOptimizerStudio:
                 f"H3/H9 Real-ESRGAN: sem evidência física exata; política dinâmica "
                 f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index} "
                 f"(VRAM livre inicial={vram_free_mb if vram_free_mb is not None else 'n/a'} MiB; "
-                "fallback 2:2:2 permanece ativo)."
+                f"rollback conservador={conservative_policy.pipeline})."
             )
         chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))
         temp_dirs.append(chunk_root)
