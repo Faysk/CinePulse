@@ -268,6 +268,17 @@ def main() -> int:
         and "required_free_disk_bytes" in composer_preflight_text
         and "estimated_peak_ram_bytes" in composer_preflight_text
     )
+    resident_delivery_physical_gate_present = all(token in gpu_workflow for token in (
+        "Physical resident NVDEC CUDA NVENC acceptance",
+        "scripts/gpu_resident_encode_benchmark.py",
+        "cache/hardware/resident-encode.json",
+        "artifacts/gpu/resident-encode-1080p60.json",
+        "artifacts/gpu/resident-encode-4k60.json",
+        "'src/cinepulse/gpu_encode.py'",
+        "'src/cinepulse/gpu_delivery.py'",
+        "'tests/test_gpu_encode.py'",
+        "'tests/test_gpu_delivery.py'",
+    ))
     composer_still_gpu_fail_closed = all(token in composer_gpu_route_text for token in (
         "base_is_still",
         "still-image base has no dedicated H6 physical parity evidence",
@@ -322,6 +333,7 @@ def main() -> int:
         "temporary_branch_writer_workflows_absent": temporary_writer_workflows_absent,
         "permanent_write_workflow_allowlist_safe": permanent_writer_allowlist_safe,
         "h5_resident_runtime_has_exact_evidence_rollback": h5_resident_runtime_safe,
+        "h5_resident_delivery_has_physical_acceptance_gate": resident_delivery_physical_gate_present,
         "h7_tensorrt_not_stable_dependency": tensorrt_not_stable_dependency,
         "h7_preview_permission_bound_to_ncnn_baseline": h7_preview_isolated,
         "h8_no_realtime_or_silent_global_mutation": h8_no_global_or_realtime_mutations,
@@ -338,7 +350,7 @@ def main() -> int:
     }
 
     payload = {
-        "schema": 7,
+        "schema": 8,
         "project_version": project_version,
         "declared_versions": declared_versions,
         "studio_lines": _line_count(studio_path),
