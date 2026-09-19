@@ -6166,7 +6166,12 @@ class VideoOptimizerStudio:
             if not cache_root.exists():
                 return None
             return next(
-                (candidate for candidate in cache_root.rglob(f"{name}.wav") if valid_cached_wav(candidate)),
+                (
+                    candidate
+                    for candidate in cache_root.rglob(f"{name}.wav")
+                    if valid_cached_wav(candidate)
+                    and not any(part.startswith(".demucs-partial-") for part in candidate.parts)
+                ),
                 None,
             )
 
