@@ -10,6 +10,7 @@ from cinepulse.gpu_media import (
     GpuMediaKey,
     GpuMediaPolicy,
     GpuMediaTuningStore,
+    gpu_media_vram_floor_mb,
     safe_candidate_policies,
     select_proven_policy,
 )
@@ -81,6 +82,23 @@ class GpuMediaTests(unittest.TestCase):
     def test_unknown_color_never_generates_candidate(self) -> None:
         unknown = ColorProfile("unknown", "bt709", "bt709", "tv", "yuv420p", 8, False)
         self.assertEqual((), safe_candidate_policies(capabilities(), codec="h264", profile=unknown))
+
+    def test_cuda_surface_vram_floor_scales_with_geometry_and_bit_depth(self) -> None:
+        hd = key()
+        uhd10 = GpuMediaKey.from_profile(
+            gpu_name="RTX Test",
+            driver="999.1",
+            ffmpeg_fingerprint="ffmpeg-test",
+            codec="hevc",
+            width=3840,
+            height=2160,
+            target_width=7680,
+            target_height=4320,
+            profile=ColorProfile("bt709", "bt709", "bt709", "tv", "yuv420p10le", 10, False),
+            operation="decode-scale",
+        )
+        self.assertGreaterEqual(gpu_media_vram_floor_mb(hd), 384.0)
+        self.assertGreater(gpu_media_vram_floor_mb(uhd10), gpu_media_vram_floor_mb(hd))
 
     def test_unproven_gpu_path_fails_closed_to_cpu(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
