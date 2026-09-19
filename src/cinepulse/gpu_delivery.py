@@ -44,7 +44,9 @@ class ResidentDeliveryRoute:
         return f"{self.scaler}=w={max(1, int(width))}:h={max(1, int(height))}:format={self.contract.pixel_format}"
 
 
-def cinepulse_hevc_nvenc_contract(*, pixel_format: str, bitrate_mbps: int, fps: int) -> NvencContract:
+def cinepulse_hevc_nvenc_contract(
+    *, pixel_format: str, bitrate_mbps: int, fps: int, gpu_index: int = 0
+) -> NvencContract:
     """Mirror DeliveryPlan.video_args HEVC/NVENC without lossy translation."""
     target = max(4, int(bitrate_mbps))
     cadence = max(1, int(fps))
@@ -66,6 +68,7 @@ def cinepulse_hevc_nvenc_contract(*, pixel_format: str, bitrate_mbps: int, fps: 
         b_ref_mode="middle",
         gop=max(12, cadence // 2),
         bframes=2,
+        gpu_index=max(0, int(gpu_index)),
     )
 
 
@@ -177,6 +180,7 @@ def select_resident_delivery_route(
         pixel_format=delivery_plan.pixel_format,
         bitrate_mbps=bitrate_mbps,
         fps=target_fps,
+        gpu_index=gpu_index,
     )
     key = ResidentEncodeKey(
         gpu_name=hardware.gpu,
