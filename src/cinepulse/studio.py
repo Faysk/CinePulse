@@ -6328,8 +6328,10 @@ class VideoOptimizerStudio:
                         prefetch = None
                     overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap
                     active_chunk_frames = decision.limit_chunk_frames(chunk_frames, minimum=2)
+                    active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
                 else:
                     active_chunk_frames = chunk_frames
+                    active_cpu_threads = cpu_threads
                 count = source_chunk_count(processed_source, active_chunk_frames)
                 if count < 2:
                     # A one-frame tail cannot be interpolated independently;
@@ -6464,7 +6466,7 @@ class VideoOptimizerStudio:
                     "-frames:v", str(len(frames)),
                     "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1", "-g", "1", "-slicecrc", "1",
                     "-pix_fmt", color_plan.working_pix_fmt if color_plan.working_pix_fmt in {"yuv420p", "yuv420p10le"} else "yuv420p",
-                    "-threads", str(cpu_threads), "-progress", "pipe:1", "-nostats", str(chunk_video),
+                    "-threads", str(active_cpu_threads), "-progress", "pipe:1", "-nostats", str(chunk_video),
                 ]
                 self._run_ffmpeg(
                     merge, max(0.01, len(frames) / target_fps),
