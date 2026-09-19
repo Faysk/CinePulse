@@ -67,10 +67,17 @@ def bootstrap_component_fingerprint(
                     label = path.resolve().relative_to(root_path.resolve()).as_posix()
                 except (OSError, ValueError):
                     label = path.name
+                digest = hashlib.sha256()
+                try:
+                    with path.open("rb") as handle:
+                        for block in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(block)
+                except OSError:
+                    return ""
                 identity.append({
                     "path": label,
                     "size": int(stat.st_size),
-                    "mtime": int(stat.st_mtime_ns),
+                    "sha256": digest.hexdigest(),
                 })
             digest = hashlib.sha256(
                 json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
