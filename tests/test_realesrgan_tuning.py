@@ -33,6 +33,18 @@ class RealEsrganTuningTests(unittest.TestCase):
         candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=7680, height=4320)
         self.assertFalse(any(item.tile == 512 for item in candidates))
 
+    def test_physical_candidates_can_probe_more_gpu_workers_on_8gb_1080p(self) -> None:
+        candidates = safe_candidates(vram_mb=8192, cpu_threads=20, width=1920, height=1080)
+        self.assertTrue(any(item.process_jobs == 3 for item in candidates))
+
+    def test_physical_candidates_keep_8gb_4k_process_concurrency_conservative(self) -> None:
+        candidates = safe_candidates(vram_mb=8192, cpu_threads=20, width=3840, height=2160)
+        self.assertFalse(any(item.process_jobs > 2 for item in candidates))
+
+    def test_physical_candidates_can_probe_four_gpu_workers_on_24gb(self) -> None:
+        candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=1920, height=1080)
+        self.assertTrue(any(item.process_jobs == 4 for item in candidates))
+
     def test_command_args_select_gpu_explicitly(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3, 2)
         self.assertEqual(policy.command_args(), ["-t", "320", "-j", "3:2:3", "-g", "2"])
