@@ -63,6 +63,18 @@ def accepted_decode(policy: GpuMediaPolicy | None = None) -> GpuMediaEvidence:
 
 
 class GpuMediaTests(unittest.TestCase):
+    def test_ffmpeg_fingerprint_resolves_command_name_from_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"path-build")
+            with (
+                patch("cinepulse.gpu_media.shutil.which", return_value=str(ffmpeg)),
+                patch("cinepulse.gpu_media._run_probe", return_value="ffmpeg version path-test"),
+            ):
+                capabilities_value = detect_gpu_media_capabilities("ffmpeg")
+            self.assertNotEqual(capabilities_value.fingerprint, "")
+            self.assertNotEqual(capabilities_value.fingerprint, "unresolved")
+
     def test_ffmpeg_fingerprint_changes_when_binary_changes_even_if_version_text_matches(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             ffmpeg = Path(temporary) / "ffmpeg.exe"
