@@ -57,7 +57,8 @@ from .paths import PATHS
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
 from .performance_policy import (
-    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads, realesrgan_pipeline_threads,
+    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads,
+    realesrgan_live_process_cap, realesrgan_pipeline_threads,
 )
 from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 from .cpu_tuning import CpuTuningKey, CpuTuningStore
@@ -5385,8 +5386,14 @@ class VideoOptimizerStudio:
         )
         tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
         tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
+        live_process_cap = realesrgan_live_process_cap(
+            self._hardware.vram_mb,
+            vram_free_mb=vram_free_mb,
+            width=source_w,
+            height=source_h,
+        )
         tuned_limited_by_headroom = bool(
-            tuned_policy is not None and tuned_policy.process_jobs > fallback_policy.process_jobs
+            tuned_policy is not None and tuned_policy.process_jobs > live_process_cap
         )
         active_policy = fallback_policy if tuned_limited_by_headroom else (tuned_policy or fallback_policy)
         conservative_policy = RealEsrganPolicy(
@@ -5404,7 +5411,8 @@ class VideoOptimizerStudio:
         elif tuned_limited_by_headroom:
             self._log(
                 f"H9 Real-ESRGAN: tuning físico {tuned_policy.pipeline} preservado no cache, "
-                f"mas VRAM livre atual limita este render a {fallback_policy.pipeline}."
+                f"mas o teto de VRAM livre atual é process={live_process_cap}; "
+                f"este render usa {fallback_policy.pipeline}."
             )
         else:
             self._log(
