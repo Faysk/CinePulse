@@ -79,6 +79,7 @@ def main() -> int:
         cpu_threads=cpu_threads,
         logical_threads=logical_threads,
         component_fingerprint=component_fingerprint,
+        cpu_name=hardware.cpu,
     )
     store = RealEsrganTuningStore(args.cache)
     try:
