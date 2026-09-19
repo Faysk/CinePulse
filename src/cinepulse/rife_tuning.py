@@ -44,6 +44,7 @@ class RifeTuningKey:
     component_fingerprint: str = ""
     cpu_name: str = ""
     cpu_threads: int = 0
+    gpu_index: int = 0
 
     def token(self) -> str:
         return "|".join(
@@ -56,6 +57,7 @@ class RifeTuningKey:
                 str(self.component_fingerprint or "unknown-component").strip().lower(),
                 " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
                 f"cpu{max(0, int(self.cpu_threads))}",
+                f"gpu{max(0, int(self.gpu_index))}",
             )
         )
 
@@ -136,7 +138,7 @@ def downshift_policy(failed: RifePolicy, candidates: Iterable[RifePolicy], *, fa
 
 
 class RifeTuningStore:
-    VERSION = 4
+    VERSION = 5
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
