@@ -78,6 +78,28 @@ def derive_pipeline_budget(
     if overlap_extract and overlap_pack and dedicated and ram >= 16.0 and scratch >= chunk_budget * 6.0:
         max_inflight = 3
 
+    # Make the per-workset budget concurrency-aware. Three individually safe
+    # chunks must not collectively consume nearly all currently available RAM.
+    # This still lets large-memory machines grow beyond the legacy 4 GiB chunk,
+    # while reserving capacity for the OS, driver, encoder and filesystem.
+    ram_share = 0.72 if dedicated else 0.60
+    concurrent_ram_cap = max(0.5, ram_usable * ram_share / max(1, max_inflight))
+    chunk_budget = min(chunk_budget, concurrent_ram_cap)
+
+    # A smaller concurrency-aware chunk may make a third bounded workset safe
+    # on scratch. Re-evaluate once, then recompute the host-memory cap.
+    if (
+        max_inflight < 3
+        and overlap_extract
+        and overlap_pack
+        and dedicated
+        and ram >= 16.0
+        and scratch >= chunk_budget * 6.0
+    ):
+        max_inflight = 3
+        concurrent_ram_cap = max(0.5, ram_usable * ram_share / max_inflight)
+        chunk_budget = min(chunk_budget, concurrent_ram_cap)
+
     # The runtime represents extract/pack overlap as independent booleans.
     # Allowing both while claiming inflight=2 would actually materialize the
     # current neural chunk + one prefetched chunk + one background pack = 3.
@@ -89,7 +111,7 @@ def derive_pipeline_budget(
     max_inflight = max(1, min(3, max_inflight))
 
     reasons = [
-        f"chunk={chunk_budget:.2f}GiB host workset from RAM/page-cache + scratch headroom",
+        f"chunk={chunk_budget:.2f}GiB host workset from RAM/page-cache + scratch headroom (inflight-aware)",
         f"scratch={'unknown' if speed is None else f'{speed:.0f}MB/s'}",
         f"inflight={max_inflight}",
     ]
