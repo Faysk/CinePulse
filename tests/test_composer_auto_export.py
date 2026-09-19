@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,6 +55,20 @@ def route(request: ComposerExportRequest, *, use_gpu: bool) -> ComposerGpuRoute:
 
 
 class ComposerAutoExportTests(unittest.TestCase):
+    def test_still_background_stays_cpu_without_gpu_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            request = replace(request, profile=replace(request.profile, still_image=True))
+            with (
+                patch("cinepulse.composer_auto_export._export_gpu") as gpu,
+                patch("cinepulse.composer_auto_export.export_composer_reference", return_value=ComposerExportResult(request.output, 24)) as cpu,
+            ):
+                result = export_composer_auto(request, hardware=GPU, capabilities=CAPS, store=Store())
+            self.assertEqual("cpu-reference", result.backend)
+            self.assertFalse(result.gpu_attempted)
+            gpu.assert_not_called()
+            cpu.assert_called_once()
+
     def test_unapproved_route_uses_cpu_without_gpu_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
