@@ -49,7 +49,7 @@ def test_installed_component_marker_is_preferred_over_release_manifest(tmp_path:
     ) == f"real_esrgan:installed-version:{installed_digest}"
 
 
-def test_wrong_component_marker_key_falls_back_to_manifest(tmp_path: Path) -> None:
+def test_wrong_component_marker_key_fails_closed_even_if_manifest_exists(tmp_path: Path) -> None:
     manifest_digest = "a" * 64
     _write_manifest(
         tmp_path,
@@ -70,7 +70,21 @@ def test_wrong_component_marker_key_falls_back_to_manifest(tmp_path: Path) -> No
         "rife",
         root=tmp_path,
         component_root=component,
-    ) == f"rife:manifest-version:{manifest_digest}"
+    ) == ""
+
+
+def test_missing_installed_marker_fails_closed_in_runtime_mode(tmp_path: Path) -> None:
+    _write_manifest(
+        tmp_path,
+        {"rife": {"version": "manifest-version", "sha256": "a" * 64}},
+    )
+    component = tmp_path / "components" / "rife"
+    component.mkdir(parents=True)
+    assert bootstrap_component_fingerprint(
+        "rife",
+        root=tmp_path,
+        component_root=component,
+    ) == ""
 
 
 def test_component_fingerprint_fails_closed_on_invalid_manifest(tmp_path: Path) -> None:
