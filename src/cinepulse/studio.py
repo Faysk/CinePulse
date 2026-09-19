@@ -4530,7 +4530,11 @@ class VideoOptimizerStudio:
                     max_threads=settings.cpu_threads,
                 )
                 tuning_key = CpuTuningKey.from_topology(
-                    stage, cpu_topology, mode=machine_mode, gpu_active=gpu_active,
+                    stage,
+                    cpu_topology,
+                    mode=machine_mode,
+                    gpu_active=gpu_active,
+                    cpu_name=self._hardware.cpu,
                 )
                 proven = cpu_tuning.lookup(tuning_key, max_threads=settings.cpu_threads)
                 if proven is not None:
