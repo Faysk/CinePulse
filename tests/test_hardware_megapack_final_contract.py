@@ -153,6 +153,14 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
             studio,
         )
 
+    def test_overnight_runtime_keeps_full_cpu_and_dedicated_memory_envelope(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        scheduler = self.text("src/cinepulse/resource_scheduler.py")
+        self.assertIn('"overnight"', scheduler)
+        self.assertIn('machine_mode = (', studio)
+        self.assertIn('"overnight"', studio)
+        self.assertIn('dedicated=(machine_mode in {"dedicated", "overnight"})', studio)
+
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
         for token in (
