@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from cinepulse.component_identity import bootstrap_component_fingerprint
 from cinepulse.hardware import detect_hardware
 from cinepulse.realesrgan_benchmark import benchmark_and_record, evidence_payload, png_dimensions
 from cinepulse.realesrgan_tuning import RealEsrganTuningKey, RealEsrganTuningStore, safe_candidates
@@ -71,6 +72,7 @@ def main() -> int:
         scale,
         cpu_threads=cpu_threads,
         logical_threads=logical_threads,
+        component_fingerprint=bootstrap_component_fingerprint("real_esrgan"),
     )
     store = RealEsrganTuningStore(args.cache)
     try:
