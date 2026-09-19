@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Iterable
 
 
+MIN_TUNING_SPEEDUP = 1.03
+
+
 @dataclass(frozen=True, order=True)
 class RifePolicy:
     jobs: str
@@ -187,6 +190,12 @@ class RifeTuningStore:
             return None
         winner = choose_proven_policy(values, fallback=fallback)
         winner_sample = min((sample for sample in accepted if sample.policy == winner), key=lambda sample: sample.wall_seconds)
+        if winner != fallback:
+            baseline_sample = values[0]
+            speedup = baseline_sample.wall_seconds / winner_sample.wall_seconds
+            if speedup < MIN_TUNING_SPEEDUP:
+                winner = fallback
+                winner_sample = baseline_sample
         payload = self._load()
         records = payload.setdefault("records", {})
         if not isinstance(records, dict):
