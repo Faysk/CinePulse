@@ -118,6 +118,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Environment isolation failed.' }
           ./scripts/Test-NeuralInstaller.ps1 -Python (Get-Command python).Source
           if ($LASTEXITCODE -ne 0) { throw 'Neural runtime resolver failed.' }
+      - name: Physical NVDEC decode acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Ffprobe = Join-Path $PWD 'components/ffmpeg/bin/ffprobe.exe'
+          $Root = Join-Path $PWD 'artifacts/gpu/nvdec'
+          $Source = Join-Path $Root 'source.mp4'
+          $Cache = Join-Path $PWD 'cache/hardware/gpu-media-tuning.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/nvdec-benchmark.json'
+          New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -c:v libx264 -preset fast -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create bounded NVDEC physical sample.' }
+          python scripts/gpu_media_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --seek-seconds 1 --seek-clip-seconds 1 --timeout 300 | Tee-Object -FilePath $Evidence
+          $NvdecExit = $LASTEXITCODE
+          if ($NvdecExit -ne 0 -and $NvdecExit -ne 2) { throw "Physical NVDEC benchmark failed with code $NvdecExit." }
+          if ($NvdecExit -eq 2) { Write-Host 'CINEPULSE_NVDEC_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'NVDEC physical evidence report was not created.' }
       - name: Physical Real-ESRGAN autotune acceptance
         shell: pwsh
         run: |
@@ -189,6 +207,7 @@ jobs:
             artifacts/ci/*.json
             artifacts/gpu/*.json
             cache/hardware/realesrgan-tuning.json
+            cache/hardware/gpu-media-tuning.json
             cache/hardware/rife-tuning.json
             cache/hardware/gpu-compositor.json
             data/test-runs/**/report.json
