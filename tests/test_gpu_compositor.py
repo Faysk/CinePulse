@@ -169,8 +169,10 @@ class GpuCompositorTests(unittest.TestCase):
         machine = replace(base, vram_mb=8192, cpu_name="CPU A", cpu_threads=28)
         more_vram = replace(machine, vram_mb=24576)
         other_cpu = replace(machine, cpu_name="CPU B")
+        other_gpu = replace(machine, gpu_index=1)
         self.assertNotEqual(machine.token(), more_vram.token())
         self.assertNotEqual(machine.token(), other_cpu.token())
+        self.assertNotEqual(machine.token(), other_gpu.token())
 
     def test_ffmpeg_fingerprint_changes_when_binary_changes_same_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
