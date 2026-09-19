@@ -111,6 +111,11 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("scripts/gpu_media_benchmark.py", text)
         self.assertIn("cache/hardware/gpu-media-tuning.json", text)
         self.assertIn("artifacts/gpu/nvdec-benchmark.json", text)
+        self.assertIn("Physical resident NVDEC CUDA NVENC acceptance", text)
+        self.assertIn("scripts/gpu_resident_encode_benchmark.py", text)
+        self.assertIn("cache/hardware/resident-encode.json", text)
+        self.assertIn("artifacts/gpu/resident-encode-1080p60.json", text)
+        self.assertIn("artifacts/gpu/resident-encode-4k60.json", text)
         self.assertIn("--resident-base", text)
         self.assertIn("artifacts/gpu/composer-h6-resident.json", text)
         for path in (
@@ -131,6 +136,7 @@ class CiReleaseGateTests(unittest.TestCase):
             "tests/test_rife_tuning.py",
             "tests/test_gpu_media.py",
             "tests/test_gpu_delivery.py",
+            "tests/test_gpu_encode.py",
             "tests/test_process_control.py",
             "tests/test_hardware_benchmark_cli.py",
             "tests/test_storage_engine.py",
