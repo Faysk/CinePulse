@@ -31,6 +31,33 @@ def test_detect_hardware_selects_nvidia_adapter_with_largest_vram() -> None:
     assert profile.cpu_threads == 28
 
 
+def test_detect_hardware_honors_explicit_adapter_index() -> None:
+    result = SimpleNamespace(
+        returncode=0,
+        stdout=(
+            "0, RTX 4070, 999.1, 8192\n"
+            "1, RTX 3090, 999.1, 24576\n"
+        ),
+    )
+    with patch("cinepulse.hardware.subprocess.run", return_value=result):
+        profile = detect_hardware(0)
+    assert profile.gpu == "RTX 4070"
+    assert profile.vram_mb == 8192
+    assert profile.gpu_index == 0
+
+
+def test_detect_hardware_fails_closed_for_missing_explicit_adapter() -> None:
+    result = SimpleNamespace(
+        returncode=0,
+        stdout="0, RTX 4070, 999.1, 8192\n",
+    )
+    with patch("cinepulse.hardware.subprocess.run", return_value=result):
+        profile = detect_hardware(7)
+    assert profile.gpu is None
+    assert profile.vram_mb is None
+    assert profile.gpu_index == 7
+
+
 def test_detect_hardware_prefers_lower_index_when_vram_ties() -> None:
     result = SimpleNamespace(
         returncode=0,
