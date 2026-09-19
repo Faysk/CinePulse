@@ -74,6 +74,23 @@ class StorageEngineTests(unittest.TestCase):
         self.assertGreater(small, large)
         self.assertGreaterEqual(large, 2)
 
+    def test_large_ram_budget_can_exceed_legacy_240_frame_cap(self):
+        ai = choose_chunk_frames(
+            FrameSpec(1280, 720, 30),
+            FrameSpec(2560, 1440, 30),
+            budget_gb=16.0,
+        )
+        rife = choose_chunk_frames(
+            FrameSpec(1920, 1080, 30),
+            FrameSpec(1920, 1080, 60),
+            budget_gb=12.0,
+            output_frames_per_input=2.0,
+        )
+        self.assertGreater(ai, 240)
+        self.assertLessEqual(ai, 480)
+        self.assertGreater(rife, 240)
+        self.assertLessEqual(rife, 480)
+
     def test_rife_ratio_is_part_of_chunk_budget(self):
         one_x = choose_chunk_frames(FrameSpec(1920, 1080, 24), FrameSpec(1920, 1080, 24), budget_gb=1)
         four_x = choose_chunk_frames(
@@ -89,7 +106,7 @@ class StorageEngineTests(unittest.TestCase):
         self.assertIn("rife_base", keys)
         self.assertNotIn("rife_final", keys)
         self.assertGreater(estimate.peak_scratch_gb, 0)
-        self.assertLessEqual(estimate.ai_chunk_frames, 240)
+        self.assertLessEqual(estimate.ai_chunk_frames, 480)
 
     def test_separate_dynamic_ai_and_rife_budgets_are_reflected_in_preflight(self):
         plan = self._plan(
