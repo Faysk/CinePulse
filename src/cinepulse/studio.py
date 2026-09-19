@@ -5301,8 +5301,20 @@ class VideoOptimizerStudio:
     ) -> str:
         source = Path(video)
         stat = source.stat()
-        model = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.bin"
-        model_stat = model.stat() if model.is_file() else None
+        model_bin = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.bin"
+        model_param = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.param"
+        component_fingerprint = bootstrap_component_fingerprint(
+            "real_esrgan",
+            component_root=REAL_ESRGAN.parent,
+        )
+
+        def file_identity(path: Path) -> dict[str, int]:
+            try:
+                value = path.stat()
+            except OSError:
+                return {"size": 0, "mtime": 0}
+            return {"size": int(value.st_size), "mtime": int(value.st_mtime_ns)}
+
         identity = {
             "path": str(source.resolve()),
             "size": stat.st_size,
@@ -5312,8 +5324,10 @@ class VideoOptimizerStudio:
             "fps": round(source_fps, 5),
             "width": source_w,
             "height": source_h,
-            "model_size": model_stat.st_size if model_stat else 0,
-            "model_mtime": model_stat.st_mtime_ns if model_stat else 0,
+            "component": component_fingerprint or "unverified-component",
+            "executable": file_identity(REAL_ESRGAN),
+            "model_bin": file_identity(model_bin),
+            "model_param": file_identity(model_param),
             "scale": 2,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
