@@ -63,6 +63,23 @@ def accepted_decode(policy: GpuMediaPolicy | None = None) -> GpuMediaEvidence:
 
 
 class GpuMediaTests(unittest.TestCase):
+    def test_exact_key_changes_with_adapter_index(self) -> None:
+        first = key()
+        second = GpuMediaKey.from_profile(
+            gpu_name="RTX Test",
+            driver="999.1",
+            ffmpeg_fingerprint="ffmpeg-test",
+            codec="h264",
+            width=1920,
+            height=1080,
+            profile=sdr_profile(),
+            operation="decode",
+            gpu_index=1,
+        )
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(0, first.gpu_index)
+        self.assertEqual(1, second.gpu_index)
+
     def test_ffmpeg_fingerprint_resolves_command_name_from_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             ffmpeg = Path(temporary) / "ffmpeg.exe"
