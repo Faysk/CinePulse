@@ -100,6 +100,7 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("cache/hardware/realesrgan-tuning.json", text)
         self.assertIn("artifacts/gpu/realesrgan-autotune.json", text)
         for path in (
+            "scripts/hardware_benchmark.py",
             "src/cinepulse/performance_policy.py",
             "src/cinepulse/pipeline_budget.py",
             "src/cinepulse/realesrgan_tuning.py",
@@ -117,6 +118,7 @@ class CiReleaseGateTests(unittest.TestCase):
             "tests/test_gpu_media.py",
             "tests/test_gpu_delivery.py",
             "tests/test_process_control.py",
+            "tests/test_hardware_benchmark_cli.py",
             "tests/test_storage_engine.py",
             "tests/test_component_identity.py",
             "tests/test_ai_cache_identity.py",
