@@ -67,7 +67,7 @@ class PipelineBudgetTests(unittest.TestCase):
         )
         self.assertEqual(low, high)
 
-    def test_unknown_stage_is_rejected() -> None:
+    def test_unknown_stage_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             derive_pipeline_budget(
                 "invalid",  # type: ignore[arg-type]
