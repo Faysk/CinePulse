@@ -10,25 +10,23 @@ GPU acceleration may replace this path only after H6 physical parity evidence.
 """
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 
 import numpy as np
 
 from .composer_audio import VisualizerAudioEnvelope
-from .composer_audio_binding import composer_audio_features
+from .composer_audio_binding import composer_audio_features, load_bound_visualizer_envelopes
 from .composer_base_probe import ComposerBaseProfile
 from .composer_decode_stream import ComposerMediaDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
 from .composer_runtime import ComposerFrameInputs, render_composer_frame
 from .overlay_composer import OverlayComposerState
+from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
-
-
-CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 @dataclass(frozen=True)
@@ -119,6 +117,61 @@ def _read_exact(stream, size: int) -> bytes:
     return b"".join(chunks)
 
 
+def _resolve_audio_envelopes(
+    request: ComposerExportRequest,
+    envelopes: Mapping[str, VisualizerAudioEnvelope] | None,
+    logger: Callable[[str], None],
+) -> dict[str, VisualizerAudioEnvelope]:
+    """Mirror Preview audio analysis when export did not receive precomputed envelopes."""
+    if envelopes is not None:
+        return dict(envelopes)
+    sources = dict(request.audio_sources)
+    if "master" not in sources:
+        sources["master"] = request.output_audio or request.source
+    return load_bound_visualizer_envelopes(
+        request.state,
+        ffmpeg=str(request.ffmpeg),
+        sources=sources,
+        duration=request.profile.duration,
+        log=logger,
+    )
+
+
+def _run_cancellable_command(
+    command: list[str],
+    *,
+    cancelled: Callable[[], bool],
+    logger: Callable[[str], None],
+    stderr_path: Path,
+    cancel_message: str,
+) -> None:
+    """Run one FFmpeg stage without making cancellation wait for subprocess.run()."""
+    with stderr_path.open("wb") as stderr_handle:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_handle,
+            **popen_group_kwargs(),
+        )
+        try:
+            while process.poll() is None:
+                if cancelled():
+                    terminate_process_tree(process, logger)
+                    raise InterruptedError(cancel_message)
+                time.sleep(0.05)
+            code = int(process.returncode or 0)
+        finally:
+            if process.poll() is None:
+                terminate_process_tree(process, logger)
+    if code:
+        try:
+            details = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:].strip()
+        except OSError:
+            details = ""
+        raise RuntimeError(details or f"composer process exited with {code}")
+
+
 def _validate_media(request: ComposerExportRequest) -> dict[str, ComposerMediaInfo]:
     infos: dict[str, ComposerMediaInfo] = {}
     for item in request.state.ordered():
@@ -164,6 +217,7 @@ def export_composer_reference(
         for item in ordered
         if item.media is not None
     }
+    bound_envelopes = _resolve_audio_envelopes(request, envelopes, logger)
 
     with tempfile.TemporaryDirectory(prefix="cinepulse-composer-", dir=output.parent) as temporary:
         temp_root = Path(temporary)
@@ -172,21 +226,20 @@ def export_composer_reference(
             _base_decode_command(request, frames),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            creationflags=CREATE_NO_WINDOW,
+            **popen_group_kwargs(),
         )
         encoder = subprocess.Popen(
             _video_encode_command(request, visual),
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            creationflags=CREATE_NO_WINDOW,
+            **popen_group_kwargs(),
         )
         logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
         decoders = ComposerMediaDecoderPool(request.ffmpeg, decoder_layers, log=logger)
         try:
             assert base.stdout is not None
             assert encoder.stdin is not None
-            bound_envelopes = envelopes or {}
             for frame_index in range(frames):
                 if cancel():
                     raise InterruptedError("composer export cancelled")
@@ -246,16 +299,13 @@ def export_composer_reference(
             atomic = AtomicOutput.for_path(output)
             atomic.prepare()
             try:
-                mux = subprocess.run(
+                _run_cancellable_command(
                     _mux_command(request, visual, atomic.partial),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False,
-                    creationflags=CREATE_NO_WINDOW,
+                    cancelled=cancel,
+                    logger=logger,
+                    stderr_path=temp_root / "composer-mux.stderr.log",
+                    cancel_message="composer export cancelled",
                 )
-                if mux.returncode:
-                    details = (mux.stderr or b"").decode("utf-8", errors="replace").strip()
-                    raise RuntimeError(details or f"composer mux exited with {mux.returncode}")
                 if cancel():
                     raise InterruptedError("composer export cancelled")
                 atomic.commit()
@@ -265,14 +315,7 @@ def export_composer_reference(
             decoders.close()
             for process in (base, encoder):
                 if process.poll() is None:
-                    try:
-                        process.terminate()
-                        process.wait(timeout=3)
-                    except (OSError, subprocess.SubprocessError):
-                        try:
-                            process.kill()
-                        except OSError:
-                            pass
+                    terminate_process_tree(process, logger)
             # Popen does not close user-visible pipe objects just because the
             # child exited. Close every stream explicitly so repeated Preview
             # exports/cancellations cannot accumulate Windows handles or leak
