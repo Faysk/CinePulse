@@ -16,6 +16,7 @@ class HardwareProfile:
     gpu: str | None
     vram_mb: int | None
     driver: str | None
+    gpu_index: int = 0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -32,9 +33,10 @@ class HardwareProfile:
 def detect_hardware() -> HardwareProfile:
     gpu = driver = None
     vram_mb = None
+    gpu_index = 0
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=index,name,driver_version,memory.total", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -43,8 +45,24 @@ def detect_hardware() -> HardwareProfile:
             creationflags=CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and result.stdout.strip():
-            name, driver_value, memory = [part.strip() for part in result.stdout.splitlines()[0].split(",", 2)]
-            gpu, driver, vram_mb = name, driver_value, int(float(memory))
+            adapters: list[tuple[int, str, str, int]] = []
+            for raw in result.stdout.splitlines():
+                parts = [part.strip() for part in raw.split(",", 3)]
+                if len(parts) != 4:
+                    continue
+                try:
+                    index = max(0, int(parts[0]))
+                    memory = max(0, int(float(parts[3])))
+                except ValueError:
+                    continue
+                adapters.append((index, parts[1], parts[2], memory))
+            if adapters:
+                # Prefer the adapter with the largest physical VRAM envelope.
+                # Live headroom gates still decide per-operation admission.
+                gpu_index, gpu, driver, vram_mb = max(
+                    adapters,
+                    key=lambda item: (item[3], -item[0]),
+                )
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return HardwareProfile(
@@ -53,5 +71,6 @@ def detect_hardware() -> HardwareProfile:
         gpu=gpu,
         vram_mb=vram_mb,
         driver=driver,
+        gpu_index=gpu_index,
     )
 
