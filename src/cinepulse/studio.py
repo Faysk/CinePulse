@@ -5999,8 +5999,13 @@ class VideoOptimizerStudio:
         if not selected:
             return audio
         source = Path(audio)
-        cache_root = PATHS.cache / "stems" / stem_cache_key(source)
         model_repo = ai_suite.MODELS / "demucs" / "local_repo"
+        demucs_state = ai_suite.AI_ROOT / "demucs-install-state.json"
+        cache_root = PATHS.cache / "stems" / stem_cache_key(
+            source,
+            model_repo=model_repo,
+            state_file=demucs_state,
+        )
         separated = cache_root / "htdemucs_ft" / source.stem
 
         def locate(name: str) -> Path | None:
