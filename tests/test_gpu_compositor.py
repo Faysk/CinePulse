@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from cinepulse.gpu_compositor import (
     COMPOSITOR_MAX_STACK_LAYERS,
@@ -16,6 +18,7 @@ from cinepulse.gpu_compositor import (
     build_cuda_overlay_stack_filter,
     canonical_overlay_stack,
     compositor_vram_floor_mb,
+    detect_gpu_compositor_capabilities,
     cuda_layer_eligible,
     cuda_stack_eligible,
     overlay_cuda_position,
@@ -159,6 +162,33 @@ class GpuCompositorTests(unittest.TestCase):
         x, y = overlay_cuda_position(OverlayLayer("a.png", "png", x=0.25, y=0.75), 1920, 1080)
         self.assertIn("0.25000000", x)
         self.assertIn("0.75000000", y)
+
+    def test_exact_key_changes_with_vram_or_cpu_baseline(self) -> None:
+        layer = OverlayLayer("logo.png", "png")
+        base = key(layer)
+        machine = replace(base, vram_mb=8192, cpu_name="CPU A", cpu_threads=28)
+        more_vram = replace(machine, vram_mb=24576)
+        other_cpu = replace(machine, cpu_name="CPU B")
+        self.assertNotEqual(machine.token(), more_vram.token())
+        self.assertNotEqual(machine.token(), other_cpu.token())
+
+    def test_ffmpeg_fingerprint_changes_when_binary_changes_same_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"binary-v1")
+            def fake_probe(_ffmpeg, *args):
+                if "-version" in args:
+                    return "ffmpeg version SAME"
+                if "-filters" in args:
+                    return "overlay_cuda scale_cuda hwupload_cuda"
+                if "-hwaccels" in args:
+                    return "cuda"
+                return ""
+            with patch("cinepulse.gpu_compositor._probe", side_effect=fake_probe):
+                first = detect_gpu_compositor_capabilities(str(ffmpeg)).fingerprint
+                ffmpeg.write_bytes(b"binary-v2-with-different-size")
+                second = detect_gpu_compositor_capabilities(str(ffmpeg)).fingerprint
+            self.assertNotEqual(first, second)
 
     def test_evidence_must_be_near_identical_faster_and_from_real_reference(self) -> None:
         good = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
