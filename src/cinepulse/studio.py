@@ -61,8 +61,7 @@ from .performance_policy import (
     PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads,
     realesrgan_pipeline_threads,
 )
-from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
-from .cpu_tuning import CpuTuningKey, CpuTuningStore
+from .resource_scheduler import detect_cpu_topology
 from .realesrgan_tuning import RealEsrganPolicy
 from .media_profile import ColorProfile
 from .delivery import (
@@ -83,7 +82,7 @@ from .gpu_media import (
 from .gpu_encode import ResidentEncodeStore
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_delivery import select_resident_delivery_route
-from .pipeline_runtime import BackgroundCommand, measure_resource_headroom
+from .pipeline_runtime import BackgroundCommand
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
@@ -3571,26 +3570,18 @@ class VideoOptimizerStudio:
         bitrate = self._estimated_bitrate_mbps(target_w, target_h, target_fps)
         output_gb = bitrate * project_duration / 8 / 1024 * 1.08
         scratch_path = resolve_scratch_dir(settings.scratch_dir, WORK_DIR)
-        scratch_probe = probe_scratch(scratch_path)
+        scratch_probe = probe_scratch(scratch_path, measure_speed=False)
         cache_current_gb = cache_usage_bytes(PATHS.cache) / (1024 ** 3)
 
-        # H9 preflight must use the same live hardware envelope as the render.
-        # Otherwise a 64 GB machine could pass a legacy 4 GiB storage estimate
-        # and then legitimately select a 16 GiB neural workset at runtime.
-        preflight_topology = detect_cpu_topology()
-        preflight_dedicated_threshold = max(
-            1, preflight_topology.logical_cpus - (2 if preflight_topology.logical_cpus >= 8 else 1)
-        )
-        preflight_mode = "dedicated" if settings.cpu_threads >= preflight_dedicated_threshold else "balanced"
-        preflight_headroom = measure_resource_headroom(
-            scratch_path, gpu_index=self._hardware.gpu_index, probe_write=False
-        )
+        # 1.2.4 full-utilization uses fixed structural budgets. Capacity of the
+        # destination/scratch filesystem is still checked separately, but RAM,
+        # VRAM and disk throughput are not sampled to reduce the work envelope.
         preflight_common = dict(
-            ram_available_gb=preflight_headroom.ram_available_gb,
-            vram_free_mb=preflight_headroom.vram_free_mb,
+            ram_available_gb=None,
+            vram_free_mb=None,
             scratch_free_gb=scratch_probe.free_gb,
-            scratch_write_mbps=scratch_probe.write_mbps,
-            dedicated=(preflight_mode == "dedicated"),
+            scratch_write_mbps=None,
+            dedicated=True,
         )
         preflight_ai_budget = derive_pipeline_budget("realesrgan", **preflight_common)
         preflight_rife_budget = derive_pipeline_budget("rife", **preflight_common)
@@ -3705,7 +3696,7 @@ class VideoOptimizerStudio:
             f"Espaço livre no scratch: {storage.temporary_free_gb:.2f} GB • reserva: {settings.minimum_free_gb:.0f} GB",
             f"Cache: {cache_current_gb:.2f}/{settings.cache_quota_gb:.0f} GB • crescimento previsto até ~{storage_estimate.cache_growth_gb:.2f} GB",
             f"Lotes neurais: Real-ESRGAN até {storage_estimate.ai_chunk_frames} frames • RIFE até {storage_estimate.rife_chunk_frames} frames",
-            f"Processamento: {'Somente CPU' if settings.use_cpu else 'Aceleração automática'} • até {settings.cpu_threads} threads de CPU",
+            f"Processamento: {'Somente CPU' if settings.use_cpu else 'Aceleração automática'} • CPU em utilização total",
             f"Hardware: {self._hardware.gpu or self._hardware.cpu} • perfil sugerido {self._hardware.quality_tier}",
             "",
             f"PLANO REAL DO PIPELINE • {render_plan.fingerprint}",
@@ -4471,49 +4462,27 @@ class VideoOptimizerStudio:
             estimated_output_gb = estimated_bitrate * project_duration / 8 / 1024 * 1.08
 
             cpu_topology = detect_cpu_topology()
-            dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
-            machine_profile = profile_for_threads(settings.cpu_threads, cpu_topology.logical_cpus)
-            overnight_mode = machine_profile == PROFILE_OVERNIGHT
-            machine_mode = (
-                "overnight"
-                if overnight_mode
-                else "dedicated" if settings.cpu_threads >= dedicated_threshold
-                else "balanced"
+            full_cpu_threads = max(1, int(cpu_topology.logical_cpus))
+            overnight_mode = False
+            machine_mode = "full"
+            self._log(
+                f"FULL CPU: {full_cpu_threads}/{full_cpu_threads} threads lógicos disponíveis; "
+                "tuning/perfil do usuário não reduz o render nesta versão."
             )
-            if overnight_mode:
-                self._log("H8 Overnight: controlador sustentado ativo; somente downshift de recursos é permitido.")
-            cpu_tuning = CpuTuningStore(PATHS.cache / "hardware" / "cpu-tuning.json")
 
-            neural_steps_active = bool(
-                render_plan.step("enhancement").attempts
-                or render_plan.step("rife_base").runs
-                or render_plan.step("rife_final").attempts
-            )
-            neural_headroom = measure_resource_headroom(
-                job_dir, gpu_index=self._hardware.gpu_index, probe_write=neural_steps_active, probe_size_mb=32
-            )
             h4_common = dict(
-                ram_available_gb=neural_headroom.ram_available_gb,
-                vram_free_mb=neural_headroom.vram_free_mb,
-                scratch_free_gb=neural_headroom.scratch_free_gb,
-                scratch_write_mbps=neural_headroom.scratch_write_mbps,
-                dedicated=(machine_mode in {"dedicated", "overnight"}),
+                ram_available_gb=None,
+                vram_free_mb=None,
+                scratch_free_gb=0.0,
+                scratch_write_mbps=None,
+                dedicated=True,
             )
             realesrgan_budget = derive_pipeline_budget("realesrgan", **h4_common)
             rife_budget = derive_pipeline_budget("rife", **h4_common)
-            self._log(
-                "H4 HEADROOM: "
-                f"RAM={neural_headroom.ram_available_gb if neural_headroom.ram_available_gb is not None else 'n/a'} GiB • "
-                f"VRAM livre={neural_headroom.vram_free_mb if neural_headroom.vram_free_mb is not None else 'n/a'} MiB • "
-                f"scratch livre={neural_headroom.scratch_free_gb:.2f} GiB • "
-                f"write={neural_headroom.scratch_write_mbps if neural_headroom.scratch_write_mbps is not None else 'n/a'} MB/s • "
-                f"probe={neural_headroom.probe_bytes / (1024 ** 2):.0f} MiB"
-            )
+            self._log("FULL HEADROOM: probe de RAM/VRAM/scratch throughput ignorado para scheduling.")
             self._log(f"H4 Real-ESRGAN budget: {realesrgan_budget.reason}")
             self._log(f"H4 RIFE budget: {rife_budget.reason}")
 
-            # Persist the exact storage contract selected for this render, not
-            # the legacy 4 GiB default used by older versions.
             storage_contract = estimate_storage(
                 render_plan, clip_duration=video_duration, project_duration=project_duration,
                 output_gb=estimated_output_gb,
@@ -4540,61 +4509,29 @@ class VideoOptimizerStudio:
                 gpu_index=self._hardware.gpu_index,
                 allow_extract_overlap=realesrgan_budget.overlap_extract,
                 allow_pack_overlap=realesrgan_budget.overlap_pack,
-                overnight=overnight_mode,
-                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
+                overnight=False,
+                scratch_sustainable_mbps=None,
             )
             h5_rife_controller = AdaptiveRuntimeController(
                 gpu_index=self._hardware.gpu_index,
                 allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
                 allow_pack_overlap=False,
-                overnight=overnight_mode,
-                scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
+                overnight=False,
+                scratch_sustainable_mbps=None,
             )
 
             def h5_guard(controller: AdaptiveRuntimeController) -> Callable[[], RuntimePressureDecision]:
                 def observe() -> RuntimePressureDecision:
-                    previous = controller.level
-                    sample = history.latest_hardware_sample() if history is not None else None
-                    decision = controller.observe(sample)
-                    if decision.level != previous:
-                        reason = ", ".join(decision.reasons) or "pressão observada"
-                        direction = "DOWNSHIFT" if decision.level > previous else "RECOVERY"
-                        self._log(
-                            f"H5 {direction} level={decision.level}: {reason}; "
-                            f"chunk={decision.chunk_scale:.2f}x, cpu={decision.cpu_scale:.2f}x, "
-                            f"extract_overlap={decision.allow_extract_overlap}, pack_overlap={decision.allow_pack_overlap}, "
-                            f"cooldown_hint={decision.cooldown_hint_seconds:.0f}s. Qualidade/modelo/FPS permanecem inalterados."
-                        )
-                    return decision
+                    return controller.observe(None)
                 return observe
 
             h5_ai_guard = h5_guard(h5_ai_controller)
             h5_rife_guard = h5_guard(h5_rife_controller)
 
             def stage_threads(stage: str, *, gpu_active: bool = False) -> int:
-                plan = schedule_cpu_threads(
-                    stage, topology=cpu_topology, mode=machine_mode, gpu_active=gpu_active,
-                    max_threads=settings.cpu_threads,
-                )
-                tuning_key = CpuTuningKey.from_topology(
-                    stage,
-                    cpu_topology,
-                    mode=machine_mode,
-                    gpu_active=gpu_active,
-                    cpu_name=self._hardware.cpu,
-                )
-                proven = cpu_tuning.lookup(tuning_key, max_threads=settings.cpu_threads)
-                if proven is not None:
-                    self._log(
-                        f"H1 CPU {stage}: usando política medida {proven}/{plan.logical_cpus} threads "
-                        f"(cap {settings.cpu_threads}, {machine_mode}; integridade aprovada)."
-                    )
-                    return proven
-                self._log(
-                    f"H1 CPU {stage}: {plan.threads}/{plan.logical_cpus} threads "
-                    f"(cap {settings.cpu_threads}, {machine_mode}; sem evidência medida aplicável; {plan.reason})"
-                )
-                return plan.threads
+                del gpu_active
+                self._log(f"FULL CPU {stage}: {full_cpu_threads}/{full_cpu_threads} threads.")
+                return full_cpu_threads
 
             working_video = settings.video
             working_w, working_h = source_w, source_h
@@ -6650,7 +6587,7 @@ class VideoOptimizerStudio:
             f"Tratamento do áudio: {settings.audio_mode}",
             f"Direção musical: {settings.visual_direction}",
             f"VFX: {', '.join(sorted(settings.effects)) if settings.effects else 'nenhum'}",
-            f"Processamento: {'Somente CPU' if settings.use_cpu else 'Aceleração automática'} • {settings.cpu_threads} threads de CPU",
+            f"Processamento: {'Somente CPU' if settings.use_cpu else 'Aceleração automática'} • CPU em utilização total",
             f"Scratch: {resolve_scratch_dir(settings.scratch_dir, WORK_DIR)}",
             f"Quota de cache: {settings.cache_quota_gb:.0f} GB • política LRU automática",
         ]
