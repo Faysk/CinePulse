@@ -26,10 +26,13 @@ from .gpu_compositor import (
     GpuCompositorStore,
     OverlayLayer,
     build_cuda_overlay_stack_filter,
+    compositor_vram_floor_mb,
     detect_gpu_compositor_capabilities,
 )
+from .gpu_failure import looks_like_gpu_runtime_failure
 from .hardware import HardwareProfile, detect_hardware
 from .paths import PATHS
+from .pipeline_runtime import vram_free_mb
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
 from .verification import VerifyExpectation, quick_verify
@@ -242,6 +245,32 @@ def export_composer_auto(
         base_is_still=request.profile.still_image,
     )
     if route.use_gpu:
+        vram_floor = compositor_vram_floor_mb(
+            request.profile.width,
+            request.profile.height,
+            len(route.layers),
+        )
+        live_vram = vram_free_mb(0)
+        if live_vram is None or live_vram < vram_floor:
+            logger(
+                "H6 Composer: evidência CUDA preservada, mas VRAM livre atual "
+                f"({live_vram if live_vram is not None else 'n/a'} MiB) não cobre "
+                f"o piso do stack ({vram_floor:.0f} MiB); CPU reference neste export."
+            )
+            result = export_composer_reference(
+                request,
+                cancelled=cancel,
+                progress=progress,
+                log=logger,
+                envelopes=envelopes,
+            )
+            return ComposerAutoExportResult(
+                result.output,
+                result.frames,
+                "cpu-reference",
+                False,
+                "insufficient-live-vram",
+            )
         try:
             result = _export_gpu(request, route, cancelled=cancel, log=logger)
             if progress:
@@ -251,9 +280,20 @@ def export_composer_auto(
             raise
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
-            if route.key is not None:
+            current_vram = vram_free_mb(0)
+            integrity_failure = "composer gpu verification failed" in str(exc).lower()
+            gpu_failure = looks_like_gpu_runtime_failure(exc)
+            enough_headroom = current_vram is not None and current_vram >= vram_floor
+            should_invalidate = integrity_failure or (gpu_failure and enough_headroom)
+            if route.key is not None and should_invalidate:
                 evidence_store.invalidate(route.key)
-            logger(f"H6 Composer: fast-path CUDA invalidado após falha de produção; rollback CPU. {reason}")
+                evidence_text = "evidência exata invalidada"
+            else:
+                evidence_text = "evidência preservada"
+            logger(
+                "H6 Composer: fast-path CUDA falhou; "
+                f"{evidence_text}. rollback CPU. {reason}"
+            )
             if cancel():
                 raise InterruptedError("composer export cancelled")
             result = export_composer_reference(
