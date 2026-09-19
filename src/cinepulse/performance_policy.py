@@ -128,12 +128,12 @@ def realesrgan_pipeline_threads(
 ) -> str:
     """Build the Real-ESRGAN NCNN ``-j load:proc:save`` budget.
 
-    Host load/save workers scale with the CPU envelope. GPU workers normally
-    preserve the historical total-VRAM thresholds, but a render may pass live
-    free-VRAM evidence to opportunistically use a third worker on an 8 GB card
-    for <=1440p sources. Runtime OOM/integrity handling still falls back to a
-    lower-or-equal pressure policy, so utilization can rise without changing
-    model or output-quality contracts.
+    Host load/save workers scale with the CPU envelope. GPU workers preserve
+    the historical total-VRAM baseline; live free-VRAM evidence may only lower
+    that baseline. Extra process concurrency (for example 3 workers on an 8 GB
+    card) is admitted separately from an exact physically-proven tuning record.
+    Runtime OOM/integrity handling still falls back to a lower-or-equal pressure
+    policy, so utilization can rise without changing model or output contracts.
     """
     logical = _logical_threads(logical_threads)
     threads = clamp_cpu_threads(cpu_threads, logical)
@@ -153,8 +153,6 @@ def realesrgan_pipeline_threads(
         free_memory = max(0, int(float(vram_free_mb))) if vram_free_mb is not None else 0
     except (TypeError, ValueError):
         free_memory = 0
-    pixels = max(1, int(width)) * max(1, int(height))
-
     # The bounded host feed/extraction budget intentionally stays modest; it
     # must not be mistaken for the adapter's safe Vulkan process concurrency.
     # Use the machine logical envelope to establish that enough host capacity
