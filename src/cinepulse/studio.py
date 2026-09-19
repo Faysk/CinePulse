@@ -5407,6 +5407,11 @@ class VideoOptimizerStudio:
         real_component_fingerprint = bootstrap_component_fingerprint(
             "real_esrgan",
             component_root=REAL_ESRGAN.parent,
+            critical_files=(
+                REAL_ESRGAN,
+                REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.bin",
+                REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.param",
+            ),
         )
         tuning_key = RealEsrganTuningKey(
             self._hardware.gpu or "unknown-gpu",
