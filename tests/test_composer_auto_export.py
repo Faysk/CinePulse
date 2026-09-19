@@ -30,6 +30,12 @@ class Store:
         self.invalidated.append(key)
         return True
 
+    def benchmark_due(self, key, *, cooldown_seconds=21600.0) -> bool:
+        return True
+
+    def record_rejection(self, key, evidence) -> None:
+        return None
+
 
 def make_request(root: Path) -> ComposerExportRequest:
     source = root / "base.mp4"
