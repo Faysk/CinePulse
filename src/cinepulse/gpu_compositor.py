@@ -307,6 +307,22 @@ class GpuCompositorStore:
             return True
         return (time.time() - updated) >= max(0.0, float(cooldown_seconds))
 
+    def record_benchmark_failure(self, key: GpuCompositorKey, reason: BaseException | str) -> None:
+        """Cooldown one failed local benchmark without creating GPU evidence."""
+        payload = self._load()
+        records = payload.setdefault("records", {})
+        if not isinstance(records, dict):
+            records = {}
+            payload["records"] = records
+        records[key.token()] = {
+            "key": asdict(key),
+            "accepted": False,
+            "benchmark_failure": str(reason),
+            "updated_unix": time.time(),
+        }
+        payload["version"] = self.VERSION
+        self._atomic_write(payload)
+
     def record_rejection(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> None:
         payload = self._load()
         records = payload.setdefault("records", {})
