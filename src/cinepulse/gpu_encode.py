@@ -26,7 +26,7 @@ from typing import Literal
 
 # Schema 2 invalidates H5 records created before the complete encoder-quality
 # contract included tune/AQ/multipass/B-ref/GOP identity.
-GPU_ENCODE_SCHEMA = 2
+GPU_ENCODE_SCHEMA = 3
 Codec = Literal["h264_nvenc", "hevc_nvenc", "av1_nvenc"]
 RateControl = Literal["constqp", "vbr", "cbr"]
 
@@ -143,6 +143,7 @@ class ResidentEncodeKey:
     color_range: str
     scaler: str
     encode_contract: str
+    gpu_index: int = 0
 
     def token(self) -> str:
         return "|".join((
@@ -156,6 +157,7 @@ class ResidentEncodeKey:
             self.primaries.strip().lower(), self.transfer.strip().lower(), self.space.strip().lower(), self.color_range.strip().lower(),
             self.scaler.strip().lower() or "none",
             self.encode_contract.strip().lower(),
+            f"gpu{max(0, int(self.gpu_index))}",
         ))
 
 
