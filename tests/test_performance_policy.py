@@ -9,6 +9,7 @@ from cinepulse.performance_policy import (
     machine_budget,
     profile_cpu_threads,
     profile_for_threads,
+    realesrgan_live_process_cap,
     realesrgan_pipeline_threads,
 )
 
@@ -48,7 +49,7 @@ def test_realesrgan_gpu_workers_scale_even_with_bounded_neural_host_threads() ->
     # threads. GPU process concurrency must still scale from adapter headroom.
     assert realesrgan_pipeline_threads(
         6, 28, 8192, vram_free_mb=7000, width=1920, height=1080
-    ) == "2:3:2"
+    ) == "2:2:2"
     assert realesrgan_pipeline_threads(
         6, 28, 12_288, vram_free_mb=11000, width=1920, height=1080
     ) == "2:3:2"
@@ -57,13 +58,25 @@ def test_realesrgan_gpu_workers_scale_even_with_bounded_neural_host_threads() ->
     ) == "2:4:2"
 
 
-def test_realesrgan_8gb_can_use_third_gpu_worker_with_live_headroom() -> None:
+def test_realesrgan_live_headroom_never_promotes_unproven_baseline() -> None:
     assert realesrgan_pipeline_threads(
         26, 28, 8192, vram_free_mb=7000, width=1920, height=1080
-    ) == "3:3:3"
+    ) == "3:2:3"
     assert realesrgan_pipeline_threads(
         26, 28, 8192, vram_free_mb=7000, width=3840, height=2160
     ) == "3:2:3"
+
+
+def test_realesrgan_live_cap_can_admit_physically_proven_extra_worker() -> None:
+    assert realesrgan_live_process_cap(
+        8192, vram_free_mb=7000, width=1920, height=1080
+    ) == 3
+    assert realesrgan_live_process_cap(
+        8192, vram_free_mb=6000, width=1920, height=1080
+    ) == 2
+    assert realesrgan_live_process_cap(
+        8192, vram_free_mb=7000, width=3840, height=2160
+    ) == 2
 
 
 def test_realesrgan_live_vram_pressure_downshifts_total_vram_heuristic() -> None:
