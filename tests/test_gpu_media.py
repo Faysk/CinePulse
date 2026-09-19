@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cinepulse.gpu_media import (
     GpuMediaCapabilities,
@@ -10,6 +11,7 @@ from cinepulse.gpu_media import (
     GpuMediaKey,
     GpuMediaPolicy,
     GpuMediaTuningStore,
+    detect_gpu_media_capabilities,
     gpu_media_vram_floor_mb,
     safe_candidate_policies,
     select_proven_policy,
@@ -61,6 +63,28 @@ def accepted_decode(policy: GpuMediaPolicy | None = None) -> GpuMediaEvidence:
 
 
 class GpuMediaTests(unittest.TestCase):
+    def test_ffmpeg_fingerprint_changes_when_binary_changes_even_if_version_text_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"build-one")
+            probe_outputs = {
+                "-version": "ffmpeg version same-version",
+                "-hwaccels": "cuda",
+                "-decoders": " V..... h264_cuvid",
+                "-filters": " ... scale_cuda",
+                "-encoders": " V..... h264_nvenc",
+            }
+
+            def fake_probe(_ffmpeg: str, *args: str, **_kwargs) -> str:
+                return probe_outputs.get(args[-1], "")
+
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe):
+                first = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            ffmpeg.write_bytes(b"build-two-with-different-size")
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe):
+                second = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            self.assertNotEqual(first, second)
+
     def test_sdr_known_color_can_generate_benchmark_candidate(self) -> None:
         values = safe_candidate_policies(capabilities(), codec="h264", profile=sdr_profile())
         self.assertEqual(1, len(values))
