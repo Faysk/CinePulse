@@ -71,7 +71,12 @@ def derive_pipeline_budget(
     healthy_ram = ram >= 8.0
     healthy_vram = vram_gb >= (4.0 if stage == "realesrgan" else 5.0)
     overlap_extract = bool(fast_scratch and healthy_ram)
-    overlap_pack = bool(fast_scratch and healthy_ram and healthy_vram)
+    # Studio overlaps a background pack only for Real-ESRGAN. RIFE has current
+    # + one prefetched input chunk, so budgeting a third workset there would
+    # shrink chunks for concurrency that never actually exists.
+    overlap_pack = bool(
+        stage == "realesrgan" and fast_scratch and healthy_ram and healthy_vram
+    )
     max_inflight = 1
     if overlap_extract:
         max_inflight = 2
