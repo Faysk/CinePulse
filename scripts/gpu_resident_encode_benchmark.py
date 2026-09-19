@@ -155,9 +155,9 @@ def main() -> int:
         spatial_aq=args.spatial_aq, temporal_aq=args.temporal_aq, aq_strength=args.aq_strength,
         multipass=args.multipass, b_ref_mode=args.b_ref_mode, gop=args.gop,
     )
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
-    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
+    gpu_index = hardware.gpu_index
     key = ResidentEncodeKey(hardware.gpu, hardware.driver or "unknown-driver", caps.fingerprint, codec,
                             source_w, source_h, width, height, profile.pixel_format, profile.primaries,
                             profile.transfer, profile.space, profile.range, scaler or "none", contract.token(),
