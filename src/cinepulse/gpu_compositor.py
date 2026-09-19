@@ -26,7 +26,7 @@ from typing import Iterable, Literal
 from .gpu_media import CREATE_NO_WINDOW
 
 
-COMPOSITOR_SCHEMA = 6
+COMPOSITOR_SCHEMA = 7
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 80.0
 COMPOSITOR_SSIM_FLOOR = 0.999999
@@ -207,6 +207,7 @@ class GpuCompositorKey:
     vram_mb: int = 0
     cpu_name: str = ""
     cpu_threads: int = 0
+    gpu_index: int = 0
 
     def token(self) -> str:
         return "|".join(
@@ -228,6 +229,7 @@ class GpuCompositorKey:
                 str(max(0, int(self.vram_mb))),
                 " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
                 f"cpu{max(0, int(self.cpu_threads))}",
+                f"gpu{max(0, int(self.gpu_index))}",
             )
         )
 
