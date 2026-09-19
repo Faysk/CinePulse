@@ -4508,10 +4508,11 @@ class VideoOptimizerStudio:
                     previous = controller.level
                     sample = history.latest_hardware_sample() if history is not None else None
                     decision = controller.observe(sample)
-                    if decision.level > previous:
+                    if decision.level != previous:
                         reason = ", ".join(decision.reasons) or "pressão observada"
+                        direction = "DOWNSHIFT" if decision.level > previous else "RECOVERY"
                         self._log(
-                            f"H5 DOWNSHIFT level={decision.level}: {reason}; "
+                            f"H5 {direction} level={decision.level}: {reason}; "
                             f"chunk={decision.chunk_scale:.2f}x, cpu={decision.cpu_scale:.2f}x, "
                             f"extract_overlap={decision.allow_extract_overlap}, pack_overlap={decision.allow_pack_overlap}, "
                             f"cooldown_hint={decision.cooldown_hint_seconds:.0f}s. Qualidade/modelo/FPS permanecem inalterados."
@@ -5363,6 +5364,8 @@ class VideoOptimizerStudio:
             FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG"),
             budget_gb=max(0.5, float(chunk_budget_gb)),
         )
+        baseline_overlap_extract = bool(overlap_extract)
+        baseline_overlap_pack = bool(overlap_pack)
         pipeline_parts = realesrgan_pipeline_threads(
             cpu_threads,
             self._hardware.cpu_threads,
@@ -5587,8 +5590,8 @@ class VideoOptimizerStudio:
                             pass
                         safe_rmtree(prefetched_dir)
                         prefetch = None
-                    overlap_extract = overlap_extract and decision.allow_extract_overlap
-                    overlap_pack = overlap_pack and decision.allow_pack_overlap
+                    overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap
+                    overlap_pack = baseline_overlap_pack and decision.allow_pack_overlap
                     active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
                     active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
                     if decision.level > 0 and active_policy.process_jobs > conservative_policy.process_jobs:
@@ -6079,6 +6082,7 @@ class VideoOptimizerStudio:
         produced_target = 0
         chunk_index = 0
         prefetch: tuple[int, int, Path, BackgroundCommand] | None = None
+        baseline_overlap_extract = bool(overlap_extract)
         self._log(
             f"STORAGE RIFE: {source_count}→{total_target_count} frames em lotes de até {chunk_frames} frames fonte; "
             "PNGs são liberados após cada lote."
@@ -6122,7 +6126,7 @@ class VideoOptimizerStudio:
                             pass
                         safe_rmtree(prefetched_incoming)
                         prefetch = None
-                    overlap_extract = overlap_extract and decision.allow_extract_overlap
+                    overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap
                     active_chunk_frames = decision.limit_chunk_frames(chunk_frames, minimum=2)
                 else:
                     active_chunk_frames = chunk_frames
