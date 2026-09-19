@@ -22,7 +22,8 @@ class FakeBackgroundCommand:
     def wait(self):
         output = Path(self.command[-1])
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"RIFF-test-wav")
+        assert output.suffix.lower() == ".wav"
+        output.write_bytes(b"RIFF" + (b"\\x00" * 64))
         return SimpleNamespace(cancelled=bool(self.cancelled))
 
 
@@ -155,8 +156,9 @@ def test_demucs_stem_mix_promotes_partial_atomically() -> None:
             )
         mixed = Path(result)
         assert mixed.is_file()
-        assert mixed.read_bytes() == b"RIFF-test-wav"
-        assert not mixed.with_name(mixed.name + ".partial").exists()
+        assert mixed.read_bytes().startswith(b"RIFF")
+        assert mixed.stat().st_size > 44
+        assert not list(mixed.parent.glob(mixed.stem + ".partial-*.wav"))
 
 
 def test_demucs_stem_mix_cancel_never_leaves_reusable_partial_cache() -> None:
@@ -184,4 +186,33 @@ def test_demucs_stem_mix_cancel_never_leaves_reusable_partial_cache() -> None:
                 )
         mixed = cache / "stems" / "fixed-key" / "reactive_bass_drums.wav"
         assert not mixed.exists()
-        assert not mixed.with_name(mixed.name + ".partial").exists()
+        assert not list(mixed.parent.glob(mixed.stem + ".partial-*.wav"))
+
+
+
+def test_invalid_cached_mix_is_rebuilt_instead_of_reused() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "music.wav"
+        source.write_bytes(b"audio")
+        cache = _prepare_tree(root, source)
+        models = root / "models"
+        ai_root = root / "ai"
+        mixed = cache / "stems" / "fixed-key" / "reactive_bass_drums.wav"
+        mixed.write_bytes(b"broken")
+
+        with (
+            patch("cinepulse.studio.PATHS", SimpleNamespace(cache=cache)),
+            patch("cinepulse.studio.ai_suite.MODELS", models),
+            patch("cinepulse.studio.ai_suite.AI_ROOT", ai_root),
+            patch("cinepulse.studio.stem_cache_key", return_value="fixed-key"),
+            patch("cinepulse.studio.BackgroundCommand", FakeBackgroundCommand),
+        ):
+            result = _studio()._prepare_reactive_audio(
+                str(source), "Graves e batidas", False, 4
+            )
+
+        rebuilt = Path(result)
+        assert rebuilt == mixed
+        assert rebuilt.stat().st_size > 44
+        assert rebuilt.read_bytes().startswith(b"RIFF")
