@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +33,12 @@ def good() -> ResidentEncodeEvidence:
 
 
 class GpuEncodeTests(unittest.TestCase):
+    def test_exact_key_changes_with_adapter_index(self) -> None:
+        first = key()
+        second = replace(first, gpu_index=1)
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(1, second.gpu_index)
+
     def test_contract_hash_changes_with_every_quality_relevant_option(self) -> None:
         original = contract()
         variants = [
