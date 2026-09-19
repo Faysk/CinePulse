@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .component_identity import bootstrap_component_fingerprint
+from .gpu_failure import looks_like_gpu_runtime_failure
 from .hardware import detect_hardware
 from .paths import PATHS
 from .pipeline_runtime import vram_free_mb
@@ -257,6 +258,44 @@ def _native_command(
     return command
 
 
+def _should_invalidate_measured_tuning(
+    exc: BaseException,
+    current: RifeExecutionPolicy,
+) -> tuple[bool, str]:
+    """Decide whether one failure proves the measured policy stale/unsafe."""
+    text = str(exc).lower()
+    integrity_failure = any(
+        token in text
+        for token in (
+            "sequência produziu",
+            "dimensões inconsistentes",
+            "png truncado",
+            "assinatura png inválida",
+            "ihdr ausente",
+        )
+    )
+    gpu_failure = looks_like_gpu_runtime_failure(exc)
+    oom = any(token in text for token in OOM_TOKENS)
+    if oom:
+        live_free = vram_free_mb(current.gpu_index)
+        tuned = RifePolicy(current.jobs, current.gpu_index)
+        admitted, measured, _reason = _limit_policy_by_live_vram(
+            tuned,
+            uhd=current.uhd,
+            free_vram_mb=live_free,
+            gpu_index=current.gpu_index,
+        )
+        if not measured or admitted != tuned:
+            return False, (
+                "OOM coincided with reduced live VRAM headroom; physical evidence preserved"
+            )
+    if integrity_failure:
+        return True, "output integrity failure"
+    if gpu_failure:
+        return True, "GPU runtime failure with sufficient live headroom"
+    return False, "failure is not specific to GPU concurrency/integrity"
+
+
 def _run_native_with_rollback(
     *,
     rife_executable: Path,
@@ -294,12 +333,20 @@ def _run_native_with_rollback(
             return current
         except Exception as exc:
             if current.measured and tuning_key is not None and tuning_store is not None:
-                tuning_store.invalidate(tuning_key)
-                print(
-                    "CINEPULSE_RIFE_SAFE TUNING_INVALIDATED "
-                    f"jobs={current.jobs} reason={type(exc).__name__}",
-                    flush=True,
-                )
+                invalidate, tuning_reason = _should_invalidate_measured_tuning(exc, current)
+                if invalidate:
+                    tuning_store.invalidate(tuning_key)
+                    print(
+                        "CINEPULSE_RIFE_SAFE TUNING_INVALIDATED "
+                        f"jobs={current.jobs} reason={tuning_reason}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "CINEPULSE_RIFE_SAFE TUNING_PRESERVED "
+                        f"jobs={current.jobs} reason={tuning_reason}",
+                        flush=True,
+                    )
             if attempted_fallback or (current.jobs == fallback.jobs and current.gpu_index == fallback.gpu_index):
                 raise
             text = str(exc).lower()
