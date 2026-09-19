@@ -85,7 +85,15 @@ class DeliveryPlan:
     def errors(self) -> tuple[str, ...]:
         return tuple(issue.message for issue in self.issues if issue.severity == "error")
 
-    def video_args(self, *, use_cpu: bool, nvenc_available: bool, bitrate_mbps: int, fps: int) -> list[str]:
+    def video_args(
+        self,
+        *,
+        use_cpu: bool,
+        nvenc_available: bool,
+        bitrate_mbps: int,
+        fps: int,
+        gpu_index: int = 0,
+    ) -> list[str]:
         """Return final FFmpeg video encoder args for this delivery contract."""
 
         bitrate_mbps = max(4, int(bitrate_mbps))
@@ -93,7 +101,8 @@ class DeliveryPlan:
         if self.video_codec == "HEVC":
             if not use_cpu and nvenc_available:
                 return [
-                    "-c:v", "hevc_nvenc", "-preset", "p7", "-tune", "hq",
+                    "-c:v", "hevc_nvenc", "-gpu", str(max(0, int(gpu_index))),
+                    "-preset", "p7", "-tune", "hq",
                     "-profile:v", "main10" if self.bit_depth > 8 else "main",
                     "-rc", "vbr", "-cq", "14", "-b:v", f"{bitrate_mbps}M",
                     "-maxrate", f"{bitrate_mbps * 2}M", "-bufsize", f"{bitrate_mbps * 4}M",
