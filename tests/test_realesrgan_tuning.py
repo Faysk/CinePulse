@@ -131,6 +131,34 @@ class RealEsrganTuningTests(unittest.TestCase):
         )
         self.assertEqual(downshift_policy(failed, candidates), RealEsrganPolicy(256, 2, 2, 2))
 
+    def test_recording_keeps_baseline_when_candidate_gain_is_only_noise(self) -> None:
+        fallback = RealEsrganPolicy(256, 2, 2, 2)
+        barely_faster = RealEsrganPolicy(320, 3, 2, 3)
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RealEsrganSample(fallback, 10.0, True, output_frames=10, expected_frames=10),
+                RealEsrganSample(barely_faster, 9.85, True, output_frames=10, expected_frames=10),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, fallback)
+        self.assertEqual(self.store.lookup(self.key), fallback)
+
+    def test_recording_promotes_candidate_after_meaningful_speedup(self) -> None:
+        fallback = RealEsrganPolicy(256, 2, 2, 2)
+        faster = RealEsrganPolicy(320, 3, 2, 3)
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RealEsrganSample(fallback, 10.0, True, output_frames=10, expected_frames=10),
+                RealEsrganSample(faster, 9.0, True, output_frames=10, expected_frames=10),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, faster)
+        self.assertEqual(self.store.lookup(self.key), faster)
+
     def test_store_only_records_accepted_policy(self) -> None:
         winner = RealEsrganPolicy(320, 3, 2, 3)
         recorded = self.store.record_samples(
