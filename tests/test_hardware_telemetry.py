@@ -79,6 +79,29 @@ def test_nvidia_sampler_falls_back_when_video_engine_fields_are_unsupported() ->
     assert run.call_count == 2
 
 
+def test_active_gpu_selection_counts_nvenc_nvdec_activity() -> None:
+    payload = HardwareSample(
+        timestamp=1.0,
+        monotonic=1.0,
+        stage="Encode",
+        cpu_total_percent=10.0,
+        cpu_per_logical_percent=(),
+        ram_total_mb=64000.0,
+        ram_used_mb=10000.0,
+        ram_available_mb=54000.0,
+        ram_percent=16.0,
+        disk_read_mbps=10.0,
+        disk_write_mbps=20.0,
+        gpus=(
+            GpuSample(index=0, name="GPU0", utilization_percent=25.0, encoder_utilization_percent=2.0),
+            GpuSample(index=1, name="GPU1", utilization_percent=5.0, encoder_utilization_percent=90.0),
+        ),
+    )
+    summary = summarize_samples([payload], [], 0.0, 1.0)
+    assert summary["active_gpu_index"] == 1
+    assert summary["overall"]["gpu"]["peak_encoder_utilization_percent"] == 90.0
+
+
 class FakeCpu:
     def __init__(self) -> None:
         self.value = 10.0
