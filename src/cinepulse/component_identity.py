@@ -43,13 +43,13 @@ def bootstrap_component_fingerprint(
         try:
             state = json.loads(marker.read_text(encoding="utf-8-sig"))
         except (OSError, TypeError, ValueError):
-            state = None
-        if isinstance(state, dict):
-            marker_key = _normalized_component(str(state.get("key") or ""))
-            if marker_key == name:
-                fingerprint = _record_fingerprint(name, state)
-                if fingerprint:
-                    return fingerprint
+            return ""
+        if not isinstance(state, dict):
+            return ""
+        marker_key = _normalized_component(str(state.get("key") or ""))
+        if marker_key != name:
+            return ""
+        return _record_fingerprint(name, state)
 
     manifest = (Path(root) if root is not None else PATHS.root) / "installer" / "bootstrap-manifest.json"
     try:
