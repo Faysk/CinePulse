@@ -104,6 +104,25 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
             studio,
         )
 
+    def test_adaptive_recovery_can_restore_only_the_proven_overlap_baseline(self) -> None:
+        runtime = self.text("src/cinepulse/adaptive_runtime.py")
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn("self._recovery_window = max(3, min(12, int(recovery_window)))", runtime)
+        self.assertIn("ram_percent <= 82.0", runtime)
+        self.assertIn("vram_free >= 1536.0", runtime)
+        self.assertIn("self._level = max(requested, self._level - 1)", runtime)
+        self.assertIn("baseline_overlap_extract = bool(overlap_extract)", studio)
+        self.assertIn("baseline_overlap_pack = bool(overlap_pack)", studio)
+        self.assertIn(
+            "overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap",
+            studio,
+        )
+        self.assertIn(
+            "overlap_pack = baseline_overlap_pack and decision.allow_pack_overlap",
+            studio,
+        )
+        self.assertIn('"RECOVERY"', studio)
+
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
         for token in (
