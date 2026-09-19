@@ -245,6 +245,13 @@ class RealEsrganTuningStore:
         accepted = [sample for sample in materialized if sample.accepted]
         if not accepted:
             return None
+        if fallback is not None:
+            if (
+                not materialized
+                or materialized[0].policy != fallback
+                or not materialized[0].accepted
+            ):
+                return None
         winner = choose_proven_policy(materialized, fallback=fallback)
         winner_sample = min(
             (sample for sample in accepted if sample.policy == winner),
