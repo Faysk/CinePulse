@@ -5,7 +5,8 @@ import os
 import subprocess
 import threading
 from collections import deque
-from typing import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Callable, Iterator
 
 import numpy as np
 
@@ -28,6 +29,93 @@ from .vfx_policy import choose_vfx_render_spec
 
 class RenderCancelled(Exception):
     pass
+
+
+def choose_vfx_frame_workers(width: int, height: int, cpu_threads: int) -> int:
+    """Choose bounded frame-level VFX concurrency for sustained throughput.
+
+    The NumPy VFX renderer is frame-independent, so multiple frames can be
+    generated in parallel while FFmpeg composites/encodes the previous ones.
+    The worker count is intentionally bounded by canvas size: a 4K float32
+    effect frame has a large temporary working set, while smaller canvases can
+    safely use more parallel producers. This changes throughput only, never
+    pixels, cadence, effects, codec quality or output order.
+    """
+    pixels = max(1, int(width)) * max(1, int(height))
+    threads = max(1, int(cpu_threads))
+    if pixels >= 3840 * 2160:
+        memory_cap = 3
+    elif pixels >= 2560 * 1440:
+        memory_cap = 4
+    else:
+        memory_cap = 6
+    cpu_cap = max(1, min(6, threads // 4 if threads >= 4 else 1))
+    return max(1, min(memory_cap, cpu_cap))
+
+
+def _parallel_vfx_frames(
+    generator: "StudioFrameGenerator",
+    energy: np.ndarray,
+    rms: np.ndarray,
+    onset: np.ndarray,
+    *,
+    workers: int,
+    cancelled: Callable[[], bool],
+) -> Iterator[tuple[int, bytes]]:
+    """Yield generated RGBA frames in deterministic order with bounded look-ahead."""
+    frame_count = len(energy)
+    worker_count = max(1, int(workers))
+    if worker_count == 1:
+        for frame_number in range(frame_count):
+            if cancelled():
+                raise RenderCancelled
+            yield frame_number, generator.make(
+                frame_number,
+                energy[frame_number],
+                float(rms[frame_number]),
+                float(onset[frame_number]),
+            )
+        return
+
+    # Keep enough work queued to overlap NumPy production with FFmpeg without
+    # letting several 4K temporary working sets accumulate without bound.
+    depth = max(worker_count, min(worker_count * 2, 8))
+    pending: deque[tuple[int, Future[bytes]]] = deque()
+    next_submit = 0
+
+    def submit(executor: ThreadPoolExecutor, frame_number: int) -> Future[bytes]:
+        return executor.submit(
+            generator.make,
+            frame_number,
+            energy[frame_number],
+            float(rms[frame_number]),
+            float(onset[frame_number]),
+        )
+
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="cinepulse-vfx",
+    ) as executor:
+        while next_submit < frame_count and len(pending) < depth:
+            pending.append((next_submit, submit(executor, next_submit)))
+            next_submit += 1
+
+        try:
+            while pending:
+                if cancelled():
+                    for _index, future in pending:
+                        future.cancel()
+                    raise RenderCancelled
+                frame_number, future = pending.popleft()
+                frame = future.result()
+                yield frame_number, frame
+                if next_submit < frame_count:
+                    pending.append((next_submit, submit(executor, next_submit)))
+                    next_submit += 1
+        finally:
+            if cancelled():
+                for _index, future in pending:
+                    future.cancel()
 
 
 def _hex_color(value: str) -> tuple[int, int, int]:
@@ -459,18 +547,24 @@ def render_vfx_intermediate(
         fps=spec.fps,
     )
     frame_count = len(shaped.energy)
+    vfx_workers = choose_vfx_frame_workers(spec.width, spec.height, cpu_threads)
+    log(
+        f"VFX throughput: {vfx_workers} produtor(es) NumPy em paralelo; "
+        "frames permanecem em ordem e o look-ahead é limitado."
+    )
     try:
         assert process.stdin is not None
-        for frame_number in range(frame_count):
+        for frame_number, frame in _parallel_vfx_frames(
+            generator,
+            shaped.energy,
+            shaped.rms,
+            shaped.onset,
+            workers=vfx_workers,
+            cancelled=cancelled,
+        ):
             if cancelled():
                 process.terminate()
                 raise RenderCancelled
-            frame = generator.make(
-                frame_number,
-                shaped.energy[frame_number],
-                float(shaped.rms[frame_number]),
-                float(shaped.onset[frame_number]),
-            )
             try:
                 process.stdin.write(frame)
             except (BrokenPipeError, OSError):
