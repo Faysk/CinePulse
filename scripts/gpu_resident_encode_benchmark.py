@@ -148,16 +148,17 @@ def main() -> int:
     source_w, source_h = int(sv.get("width") or 0), int(sv.get("height") or 0); width, height = (args.width or source_w), (args.height or source_h)
     do_scale = (width, height) != (source_w, source_h); scaler = caps.cuda_scale if do_scale else None
     if do_scale and not scaler: raise SystemExit("CUDA scaler unavailable for requested geometry")
+    hardware = detect_hardware(args.gpu_index)
+    if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
+    gpu_index = hardware.gpu_index
     contract = NvencContract(
         encoder=args.encoder, preset=args.preset, rate_control=args.rc, pixel_format=args.pix_fmt, profile=args.profile,
         cq=args.cq, qp=args.qp, bitrate_kbps=args.bitrate_kbps, maxrate_kbps=args.maxrate_kbps,
         bufsize_kbps=args.bufsize_kbps, lookahead=args.lookahead, bframes=args.bframes, tune=args.tune,
         spatial_aq=args.spatial_aq, temporal_aq=args.temporal_aq, aq_strength=args.aq_strength,
         multipass=args.multipass, b_ref_mode=args.b_ref_mode, gop=args.gop,
+        gpu_index=gpu_index,
     )
-    hardware = detect_hardware(args.gpu_index)
-    if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
-    gpu_index = hardware.gpu_index
     key = ResidentEncodeKey(hardware.gpu, hardware.driver or "unknown-driver", caps.fingerprint, codec,
                             source_w, source_h, width, height, profile.pixel_format, profile.primaries,
                             profile.transfer, profile.space, profile.range, scaler or "none", contract.token(),
@@ -172,7 +173,7 @@ def main() -> int:
         psnr=metric(ffmpeg,baseline,candidate,"psnr",args.timeout); ssim=metric(ffmpeg,baseline,candidate,"ssim",args.timeout)
         sb=root/"seek-baseline.mkv"; sc=root/"seek-candidate.mkv"; seek=max(.001,args.seek_seconds); clip=max(.05,args.seek_clip_seconds)
         run(baseline_command(ffmpeg,args.input,sb,contract=contract,profile=profile,width=width,height=height,seek=seek,clip=clip),args.timeout)
-        run(candidate_command(ffmpeg,args.input,sc,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=seek,clip=clip,gpu_index=args.gpu_index),args.timeout)
+        run(candidate_command(ffmpeg,args.input,sc,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=seek,clip=clip,gpu_index=gpu_index),args.timeout)
         spb,spc=probe(ffprobe,sb),probe(ffprobe,sc); seek_ok=frames(video(spb))==frames(video(spc)) and signature(video(spb))==signature(video(spc)) and metric(ffmpeg,sb,sc,"psnr",args.timeout)>=55 and metric(ffmpeg,sb,sc,"ssim",args.timeout)>=.999
         decode_ok=bool(video(bp)) and bool(video(cp))
         ev=ResidentEncodeEvidence(bsec,csec,psnr,ssim,frame_ok,metadata_ok,audio_ok,seek_ok,decode_ok,baseline.stat().st_size,candidate.stat().st_size)
