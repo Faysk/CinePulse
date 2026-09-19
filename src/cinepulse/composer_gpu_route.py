@@ -74,6 +74,7 @@ def build_compositor_stack_key(
         vram_mb=int(hardware.vram_mb or 0),
         cpu_name=hardware.cpu,
         cpu_threads=int(hardware.cpu_threads or 0),
+        gpu_index=max(0, int(hardware.gpu_index)),
     )
 
 
