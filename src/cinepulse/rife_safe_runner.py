@@ -376,7 +376,6 @@ def run_safe_rife(
         raise ValueError("RIFE recebeu menos de dois PNGs válidos")
     width, height = validate_png(input_frames[0])
     uhd = max(width, height) >= 3840 or width * height >= 3840 * 2160
-    tuned: RifePolicy | None = None
     tuning_key: RifeTuningKey | None = None
     tuning_store: RifeTuningStore | None = None
     selected_policy: RifePolicy | None = None
