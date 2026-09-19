@@ -361,8 +361,6 @@ def _run_native_with_rollback(
                         f"jobs={current.jobs} reason={tuning_reason}",
                         flush=True,
                     )
-            if attempted_fallback or (current.jobs == fallback.jobs and current.gpu_index == fallback.gpu_index):
-                raise
             text = str(exc).lower()
             oom = any(token in text for token in OOM_TOKENS)
             retry_policy = fallback
@@ -392,6 +390,8 @@ def _run_native_with_rollback(
                 retry_policy.jobs == current.jobs
                 and retry_policy.gpu_index == current.gpu_index
             ):
+                raise
+            if attempted_fallback and not oom:
                 raise
             print(
                 "CINEPULSE_RIFE_SAFE ROLLBACK "
