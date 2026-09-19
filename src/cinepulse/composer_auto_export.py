@@ -71,6 +71,10 @@ def _gpu_visual_command(request: ComposerExportRequest, route: ComposerGpuRoute,
     ) + ";[vout]format=rgba[vfinal]"
     command = [str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
     gpu_index = route.key.gpu_index if route.key is not None else 0
+    command += [
+        "-init_hw_device", f"cuda=cinepulse_gpu:{gpu_index}",
+        "-filter_hw_device", "cinepulse_gpu",
+    ]
     if route.base_decoder:
         command += [
             "-hwaccel", "cuda",
