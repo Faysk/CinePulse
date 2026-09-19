@@ -42,11 +42,11 @@ def main() -> int:
     if any(png_dimensions(path) != source_size for path in inputs):
         raise SystemExit("all benchmark PNG frames must have identical dimensions")
 
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     gpu_name = args.gpu_name or hardware.gpu or "unknown-gpu"
     vram_mb = int(args.vram_mb if args.vram_mb is not None else (hardware.vram_mb or 0))
     driver = args.driver or hardware.driver or "unknown-driver"
-    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
+    gpu_index = hardware.gpu_index
     topology = detect_cpu_topology()
     default_feed = schedule_cpu_threads(
         "neural_gpu", topology=topology, mode="balanced", gpu_active=True
