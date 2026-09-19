@@ -60,6 +60,8 @@ class GpuSample:
     driver: str | None = None
     utilization_percent: float | None = None
     memory_utilization_percent: float | None = None
+    encoder_utilization_percent: float | None = None
+    decoder_utilization_percent: float | None = None
     vram_total_mb: float | None = None
     vram_used_mb: float | None = None
     vram_free_mb: float | None = None
@@ -384,19 +386,20 @@ class _WindowsDiskSampler(_DiskSampler):
 
 
 class NvidiaSmiSampler:
-    QUERY = (
+    BASE_QUERY = (
         "index,name,driver_version,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,"
         "power.draw,power.limit,temperature.gpu,clocks.current.graphics,clocks.current.memory,pstate"
     )
+    ENGINE_QUERY = BASE_QUERY + ",utilization.encoder,utilization.decoder"
 
     def __init__(self, executable: str | None = None, *, timeout: float = 1.5) -> None:
         self.executable = executable or shutil.which("nvidia-smi") or "nvidia-smi"
         self.timeout = max(0.25, float(timeout))
 
-    def sample(self) -> tuple[GpuSample, ...]:
+    def _query(self, query: str) -> subprocess.CompletedProcess[str] | None:
         try:
-            result = subprocess.run(
-                [self.executable, f"--query-gpu={self.QUERY}", "--format=csv,noheader,nounits"],
+            return subprocess.run(
+                [self.executable, f"--query-gpu={query}", "--format=csv,noheader,nounits"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -406,8 +409,17 @@ class NvidiaSmiSampler:
                 check=False,
             )
         except (OSError, subprocess.SubprocessError):
-            return ()
-        if result.returncode != 0:
+            return None
+
+    def sample(self) -> tuple[GpuSample, ...]:
+        # Encoder/decoder counters are useful for finding NVENC/NVDEC stalls,
+        # but older drivers may not expose those query fields. Retry the stable
+        # base query rather than losing all GPU/VRAM telemetry.
+        result = self._query(self.ENGINE_QUERY)
+        engines_available = bool(result is not None and result.returncode == 0)
+        if not engines_available:
+            result = self._query(self.BASE_QUERY)
+        if result is None or result.returncode != 0:
             return ()
         rows = csv.reader(line for line in result.stdout.splitlines() if line.strip())
         samples: list[GpuSample] = []
@@ -434,6 +446,8 @@ class NvidiaSmiSampler:
                 graphics_clock_mhz=_number(values[11]),
                 memory_clock_mhz=_number(values[12]),
                 pstate=values[13] or None,
+                encoder_utilization_percent=_number(values[14]) if engines_available and len(values) > 14 else None,
+                decoder_utilization_percent=_number(values[15]) if engines_available and len(values) > 15 else None,
             ))
         return tuple(samples)
 
@@ -541,6 +555,10 @@ def summarize_samples(samples: list[HardwareSample], events: list[StageEvent], s
                 "average_utilization_percent": _mean(gpu.utilization_percent for gpu in gpu_rows),
                 "peak_utilization_percent": _maximum(gpu.utilization_percent for gpu in gpu_rows),
                 "average_memory_utilization_percent": _mean(gpu.memory_utilization_percent for gpu in gpu_rows),
+                "average_encoder_utilization_percent": _mean(gpu.encoder_utilization_percent for gpu in gpu_rows),
+                "peak_encoder_utilization_percent": _maximum(gpu.encoder_utilization_percent for gpu in gpu_rows),
+                "average_decoder_utilization_percent": _mean(gpu.decoder_utilization_percent for gpu in gpu_rows),
+                "peak_decoder_utilization_percent": _maximum(gpu.decoder_utilization_percent for gpu in gpu_rows),
                 "peak_vram_used_mb": _maximum(gpu.vram_used_mb for gpu in gpu_rows),
                 "minimum_vram_free_mb": _minimum(gpu.vram_free_mb for gpu in gpu_rows),
                 "average_power_w": _mean(gpu.power_w for gpu in gpu_rows),
