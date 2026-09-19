@@ -218,6 +218,22 @@ class GpuCompositorTests(unittest.TestCase):
             self.assertFalse(store.benchmark_due(exact))
             self.assertTrue(store.benchmark_due(exact, cooldown_seconds=0.0))
 
+    def test_failed_local_benchmark_enters_cooldown_without_becoming_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "compositor.json"
+            store = GpuCompositorStore(path)
+            exact = key(OverlayLayer("logo.png", "png"))
+            self.assertTrue(store.benchmark_due(exact))
+            store.record_benchmark_failure(exact, RuntimeError("CUDA benchmark failed"))
+            self.assertFalse(store.approved(exact, caps()))
+            self.assertFalse(store.benchmark_due(exact))
+            payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+            record = payload["records"][exact.token()]
+            self.assertFalse(record["accepted"])
+            self.assertIn("CUDA benchmark failed", record["benchmark_failure"])
+            self.assertNotIn("evidence", record)
+            self.assertTrue(store.benchmark_due(exact, cooldown_seconds=0.0))
+
     def test_runtime_permission_is_exact_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = GpuCompositorStore(Path(temporary) / "compositor.json")
