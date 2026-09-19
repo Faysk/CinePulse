@@ -101,6 +101,17 @@ def safe_candidates(
     if threads >= 20:
         pipelines.append((4, 2, 4))
 
+    # H9 physical autotune must be able to discover real GPU concurrency,
+    # instead of benchmarking only variants whose Vulkan process count is 2.
+    # These remain candidates only: no runtime permission is granted unless the
+    # exact hardware/driver/model/geometry benchmark passes integrity gates.
+    if vram >= 7500 and threads >= 12 and pixels <= 2560 * 1440:
+        pipelines.append((3, 3, 3))
+    if vram >= 12000 and threads >= 16 and pixels <= 3840 * 2160:
+        pipelines.append((4, 3, 4))
+    if vram >= 20000 and threads >= 20 and pixels <= 2560 * 1440:
+        pipelines.append((4, 4, 4))
+
     candidates: list[RealEsrganPolicy] = []
     for tile in tiles:
         for load, process, save in pipelines:
