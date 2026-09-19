@@ -17,6 +17,12 @@ on:
       - 'src/cinepulse/frame_quality.py'
       - 'src/cinepulse/storage_resilience.py'
       - 'src/cinepulse/stem_engine.py'
+      - 'src/cinepulse/composer_*.py'
+      - 'src/cinepulse/gpu_compositor.py'
+      - 'src/cinepulse/overlay_composer.py'
+      - 'src/cinepulse/ui/composer_view.py'
+      - 'tests/test_composer_*.py'
+      - 'tests/test_gpu_compositor.py'
       - 'tests/recovery_gpu_acceptance.py'
       - 'tests/integration_smoke.py'
 
