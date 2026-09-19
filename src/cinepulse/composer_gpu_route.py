@@ -111,6 +111,7 @@ def select_gpu_export_route(
     transfer: str,
     matrix: str,
     color_range: str,
+    base_is_still: bool = False,
 ) -> ComposerGpuRoute:
     """Select the bounded H6 fast path or fail closed to CPU reference.
 
@@ -119,6 +120,11 @@ def select_gpu_export_route(
     exact stack because alpha rounding and z-order interact across layers.
     """
     items = state.ordered()
+    if base_is_still:
+        return ComposerGpuRoute(
+            False,
+            "still-image base has no dedicated H6 physical parity evidence",
+        )
     if not items:
         return ComposerGpuRoute(False, "no media layer is available for H6 GPU export")
     if any(item.visualizer is not None for item in items):
