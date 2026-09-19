@@ -26,6 +26,27 @@ class RifeEngineTests(unittest.TestCase):
             self.assertEqual("60", command[command.index("--frames") + 1])
             self.assertNotIn("-n", command)
 
+    def test_precomputed_component_fingerprint_is_forwarded_to_safe_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            fingerprint = "rife:v1:" + "a" * 64
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=False,
+                component_fingerprint=fingerprint,
+            )
+            self.assertEqual(
+                fingerprint,
+                command[command.index("--component-fingerprint") + 1],
+            )
+
     def test_gpu_mode_is_delegated_to_safe_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
