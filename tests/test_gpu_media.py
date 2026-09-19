@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,6 +96,52 @@ class GpuMediaTests(unittest.TestCase):
             ):
                 discovered = detect_gpu_media_capabilities("ffmpeg").fingerprint
             self.assertEqual(absolute, discovered)
+
+    def test_repeated_capability_detection_reuses_cached_ffmpeg_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"same-build")
+            probe_outputs = {
+                "-version": "ffmpeg version cache-test",
+                "-hwaccels": "cuda",
+                "-decoders": " V..... h264_cuvid",
+                "-filters": " ... scale_cuda",
+                "-encoders": " V..... h264_nvenc",
+            }
+
+            def fake_probe(_ffmpeg: str, *args: str, **_kwargs) -> str:
+                return probe_outputs.get(args[-1], "")
+
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe) as run:
+                first = detect_gpu_media_capabilities(str(ffmpeg))
+                second = detect_gpu_media_capabilities(str(ffmpeg))
+            self.assertEqual(first, second)
+            self.assertEqual(5, run.call_count)
+
+    def test_ffmpeg_fingerprint_detects_same_size_same_mtime_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"AAAA")
+            stamp = ffmpeg.stat().st_mtime_ns
+            probe_outputs = {
+                "-version": "ffmpeg version identical-text",
+                "-hwaccels": "cuda",
+                "-decoders": " V..... h264_cuvid",
+                "-filters": " ... scale_cuda",
+                "-encoders": " V..... h264_nvenc",
+            }
+
+            def fake_probe(_ffmpeg: str, *args: str, **_kwargs) -> str:
+                return probe_outputs.get(args[-1], "")
+
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe):
+                first = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+                ffmpeg.write_bytes(b"BBBB")
+                os.utime(ffmpeg, ns=(stamp, stamp))
+                second = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            self.assertEqual(4, ffmpeg.stat().st_size)
+            self.assertEqual(stamp, ffmpeg.stat().st_mtime_ns)
+            self.assertNotEqual(first, second)
 
     def test_ffmpeg_fingerprint_changes_when_binary_changes_even_if_version_text_matches(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
