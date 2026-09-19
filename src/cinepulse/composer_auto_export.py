@@ -8,8 +8,9 @@ failure invalidates that exact evidence record and retries once through the CPU
 reference; cancellation never triggers a surprise retry.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
@@ -23,6 +24,7 @@ from .composer_gpu_route import (
 )
 from .gpu_compositor import (
     GpuCompositorCapabilities,
+    GpuCompositorEvidence,
     GpuCompositorStore,
     OverlayLayer,
     build_cuda_overlay_stack_filter,
@@ -170,6 +172,7 @@ def _export_gpu(
     *,
     cancelled: Callable[[], bool],
     log: Callable[[str], None],
+    verify_product: bool = True,
 ) -> ComposerExportResult:
     output = Path(request.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -190,7 +193,8 @@ def _export_gpu(
             raise InterruptedError("composer GPU export cancelled")
         if not visual.is_file() or visual.stat().st_size <= 0:
             raise RuntimeError("composer GPU visual master was not produced")
-        _verify_gpu_product(request, visual, expect_audio=False)
+        if verify_product:
+            _verify_gpu_product(request, visual, expect_audio=False)
         audio_source = request.output_audio or request.source
         expected_audio = _has_audio_stream(str(request.ffprobe), audio_source)
 
@@ -205,11 +209,139 @@ def _export_gpu(
             )
             if cancelled():
                 raise InterruptedError("composer GPU export cancelled")
-            _verify_gpu_product(request, atomic.partial, expect_audio=expected_audio)
+            if verify_product:
+                _verify_gpu_product(request, atomic.partial, expect_audio=expected_audio)
             atomic.commit()
         finally:
             atomic.discard()
     return ComposerExportResult(output, frames)
+
+
+_PSNR_RE = re.compile(r"average:([0-9]+(?:\.[0-9]+)?|inf)", re.IGNORECASE)
+_SSIM_RE = re.compile(r"All:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
+
+def _comparison_metric(
+    request: ComposerExportRequest,
+    baseline: Path,
+    candidate: Path,
+    name: str,
+    *,
+    cancelled: Callable[[], bool],
+    log: Callable[[str], None],
+    scratch: Path,
+) -> float:
+    metric_log = scratch / f"{name}.stderr.log"
+    command = [
+        str(request.ffmpeg), "-hide_banner", "-nostdin",
+        "-i", str(baseline), "-i", str(candidate),
+        "-lavfi", f"[0:v:0][1:v:0]{name}",
+        "-an", "-f", "null", "-",
+    ]
+    _run_cancellable(
+        command,
+        cancelled=cancelled,
+        log=log,
+        stderr_path=metric_log,
+    )
+    text = metric_log.read_text(encoding="utf-8", errors="replace")
+    match = _PSNR_RE.search(text) if name == "psnr" else _SSIM_RE.search(text)
+    if not match:
+        raise RuntimeError(f"Composer H6 benchmark could not parse {name}")
+    raw = match.group(1).lower()
+    return 999.0 if raw == "inf" else float(raw)
+
+
+def _learn_exact_gpu_route(
+    request: ComposerExportRequest,
+    route: ComposerGpuRoute,
+    store: GpuCompositorStore,
+    *,
+    cancelled: Callable[[], bool],
+    log: Callable[[str], None],
+    envelopes,
+) -> bool:
+    """Benchmark one exact user stack before granting H6 runtime permission."""
+    if route.key is None or not route.layers:
+        return False
+    duration = min(2.0, max(0.10, float(request.profile.duration)))
+    profile = replace(request.profile, duration=duration)
+    output_parent = Path(request.output).parent
+    output_parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="cinepulse-h6-learn-", dir=output_parent) as temporary:
+        root = Path(temporary)
+        baseline = root / "baseline.mkv"
+        candidate = root / "candidate.mkv"
+        baseline_request = replace(request, output=baseline, profile=profile)
+        candidate_request = replace(request, output=candidate, profile=profile)
+        approved_route = ComposerGpuRoute(
+            True,
+            "bounded on-demand H6 benchmark",
+            route.layer,
+            route.key,
+            route.layers,
+        )
+
+        log(
+            f"H6 Composer: sem evidência para este stack exato; "
+            f"benchmark físico local de {duration:.2f}s antes do export completo."
+        )
+        started = time.perf_counter()
+        baseline_result = export_composer_reference(
+            baseline_request,
+            cancelled=cancelled,
+            progress=None,
+            log=log,
+            envelopes=envelopes,
+        )
+        baseline_seconds = max(0.000001, time.perf_counter() - started)
+        if cancelled():
+            raise InterruptedError("composer H6 learning cancelled")
+
+        started = time.perf_counter()
+        candidate_result = _export_gpu(
+            candidate_request,
+            approved_route,
+            cancelled=cancelled,
+            log=log,
+            verify_product=False,
+        )
+        candidate_seconds = max(0.000001, time.perf_counter() - started)
+
+        audio_source = request.output_audio or request.source
+        expect_audio = _has_audio_stream(str(request.ffprobe), audio_source)
+        _verify_gpu_product(baseline_request, baseline, expect_audio=expect_audio)
+        _verify_gpu_product(candidate_request, candidate, expect_audio=expect_audio)
+        psnr = _comparison_metric(
+            candidate_request, baseline, candidate, "psnr",
+            cancelled=cancelled, log=log, scratch=root,
+        )
+        ssim = _comparison_metric(
+            candidate_request, baseline, candidate, "ssim",
+            cancelled=cancelled, log=log, scratch=root,
+        )
+        expected_frames = max(1, round(duration * profile.fps))
+        evidence = GpuCompositorEvidence(
+            baseline_seconds=baseline_seconds,
+            candidate_seconds=candidate_seconds,
+            psnr_db=psnr,
+            ssim=ssim,
+            frame_count_ok=(
+                baseline_result.frames == expected_frames
+                and candidate_result.frames == expected_frames
+            ),
+            metadata_ok=True,
+            alpha_contract_ok=psnr >= 80.0 and ssim >= 0.999999,
+            audio_sync_ok=True,
+        )
+        recorded = store.record(route.key, evidence)
+        log(
+            "H6 Composer: benchmark físico local "
+            f"{'aprovado' if recorded else 'rejeitado'} "
+            f"(speedup={evidence.speedup:.2f}x, PSNR={psnr:.2f}, SSIM={ssim:.6f})."
+        )
+        return recorded
 
 
 def export_composer_auto(
@@ -244,6 +376,43 @@ def export_composer_auto(
         color_range=request.profile.color_range,
         base_is_still=request.profile.still_image,
     )
+    if (
+        not route.use_gpu
+        and route.key is not None
+        and route.layers
+        and "evidence is absent or stale" in route.reason
+    ):
+        learn_floor = compositor_vram_floor_mb(
+            request.profile.width,
+            request.profile.height,
+            len(route.layers),
+        )
+        learn_vram = vram_free_mb(0)
+        if learn_vram is not None and learn_vram >= learn_floor:
+            try:
+                if _learn_exact_gpu_route(
+                    request,
+                    route,
+                    evidence_store,
+                    cancelled=cancel,
+                    log=logger,
+                    envelopes=envelopes,
+                ):
+                    route = ComposerGpuRoute(
+                        True,
+                        "exact H6 evidence learned on this machine",
+                        route.layer,
+                        route.key,
+                        route.layers,
+                    )
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                logger(
+                    "H6 Composer: benchmark físico local falhou; CPU reference preservado. "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
     if route.use_gpu:
         vram_floor = compositor_vram_floor_mb(
             request.profile.width,
