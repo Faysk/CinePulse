@@ -15,6 +15,7 @@ from cinepulse.storage_engine import (
     resolve_scratch_dir,
     probe_scratch,
     touch_cache_entry,
+    _compressed_gb,
 )
 
 
@@ -90,6 +91,40 @@ class StorageEngineTests(unittest.TestCase):
         details = " ".join(stage.detail for stage in overlapped.stages)
         self.assertIn("até 3 lote(s) coexistem", details)
         self.assertIn("até 2 lote(s) coexistem", details)
+
+    def test_neural_peak_includes_accumulated_segments_plus_live_worksets(self):
+        plan = self._plan(
+            source_width=1920, source_height=1080, source_fps=30,
+            target_width=3840, target_height=2160, target_fps=60,
+        )
+        estimate = estimate_storage(
+            plan,
+            duration=30,
+            output_gb=1.2,
+            ai_chunk_budget_gb=16.0,
+            rife_chunk_budget_gb=12.0,
+            ai_inflight_chunks=3,
+            rife_inflight_chunks=2,
+        )
+        by_key = {stage.key: stage for stage in estimate.stages}
+
+        enhancement = by_key["enhancement"]
+        ai_spec = plan.step("enhancement").output_spec
+        self.assertIsNotNone(ai_spec)
+        ai_master = _compressed_gb(ai_spec, enhancement.duration_seconds, lossless=True)
+        self.assertGreaterEqual(
+            enhancement.peak_scratch_gb + 1e-9,
+            ai_master + enhancement.working_set_gb,
+        )
+
+        rife_base = by_key["rife_base"]
+        rife_spec = plan.step("rife_base").output_spec
+        self.assertIsNotNone(rife_spec)
+        rife_master = _compressed_gb(rife_spec, rife_base.duration_seconds, lossless=True)
+        self.assertGreaterEqual(
+            rife_base.peak_scratch_gb + 1e-9,
+            rife_master + rife_base.working_set_gb,
+        )
 
     def test_inflight_storage_inputs_are_hard_capped(self):
         plan = self._plan()
