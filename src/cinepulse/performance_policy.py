@@ -146,6 +146,8 @@ def realesrgan_pipeline_threads(
             gpu_workers = min(gpu_workers, 1)
         elif free_memory < 5_000:
             gpu_workers = min(gpu_workers, 2)
+        elif free_memory < 7_500:
+            gpu_workers = min(gpu_workers, 3)
 
     return f"{io_workers}:{gpu_workers}:{io_workers}"
 
