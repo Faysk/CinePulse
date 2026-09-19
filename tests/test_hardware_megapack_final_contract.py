@@ -86,7 +86,8 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
     def test_tuned_realesrgan_policy_is_capped_by_live_vram_headroom(self) -> None:
         studio = self.text("src/cinepulse/studio.py")
         self.assertIn("tuned_limited_by_headroom", studio)
-        self.assertIn("tuned_policy.process_jobs > fallback_policy.process_jobs", studio)
+        self.assertIn("realesrgan_live_process_cap(", studio)
+        self.assertIn("tuned_policy.process_jobs > live_process_cap", studio)
         self.assertIn("tuning físico", studio)
         self.assertIn("preservado no cache", studio)
         self.assertIn("tile=max(32, min(256, active_policy.tile))", studio)
