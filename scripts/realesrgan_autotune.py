@@ -8,6 +8,7 @@ from pathlib import Path
 from cinepulse.hardware import detect_hardware
 from cinepulse.realesrgan_benchmark import benchmark_and_record, evidence_payload, png_dimensions
 from cinepulse.realesrgan_tuning import RealEsrganTuningKey, RealEsrganTuningStore, safe_candidates
+from cinepulse.resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 
 
 def parser() -> argparse.ArgumentParser:
@@ -44,12 +45,18 @@ def main() -> int:
     gpu_name = args.gpu_name or hardware.gpu or "unknown-gpu"
     vram_mb = int(args.vram_mb if args.vram_mb is not None else (hardware.vram_mb or 0))
     driver = args.driver or hardware.driver or "unknown-driver"
-    cpu_threads = max(1, int(args.cpu_threads or hardware.cpu_threads or 1))
+    topology = detect_cpu_topology()
+    default_feed = schedule_cpu_threads(
+        "neural_gpu", topology=topology, mode="balanced", gpu_active=True
+    ).threads
+    cpu_threads = max(1, int(args.cpu_threads or default_feed))
+    logical_threads = max(1, int(hardware.cpu_threads or topology.logical_cpus or cpu_threads))
     scale = max(1, int(args.scale))
 
     candidates = safe_candidates(
         vram_mb=vram_mb,
         cpu_threads=cpu_threads,
+        logical_threads=logical_threads,
         gpu_index=max(0, int(args.gpu_index)),
         width=source_size[0],
         height=source_size[1],
@@ -62,6 +69,8 @@ def main() -> int:
         source_size[0],
         source_size[1],
         scale,
+        cpu_threads=cpu_threads,
+        logical_threads=logical_threads,
     )
     store = RealEsrganTuningStore(args.cache)
     try:
