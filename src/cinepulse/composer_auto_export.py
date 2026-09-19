@@ -70,10 +70,11 @@ def _gpu_visual_command(request: ComposerExportRequest, route: ComposerGpuRoute,
         base_resident=bool(route.base_decoder),
     ) + ";[vout]format=rgba[vfinal]"
     command = [str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
+    gpu_index = route.key.gpu_index if route.key is not None else 0
     if route.base_decoder:
         command += [
             "-hwaccel", "cuda",
-            "-hwaccel_device", "0",
+            "-hwaccel_device", str(gpu_index),
             "-hwaccel_output_format", "cuda",
             "-c:v", route.base_decoder,
         ]
@@ -518,7 +519,7 @@ def export_composer_auto(
                 request.profile.height,
                 len(route.layers),
             )
-            resident_vram = vram_free_mb(0)
+            resident_vram = vram_free_mb(resident_key.gpu_index)
             if (
                 not resident_route.use_gpu
                 and evidence_store.benchmark_due(resident_key)
@@ -563,7 +564,7 @@ def export_composer_auto(
             request.profile.height,
             len(route.layers),
         )
-        learn_vram = vram_free_mb(0)
+        learn_vram = vram_free_mb(route.key.gpu_index)
         if learn_vram is not None and learn_vram >= learn_floor:
             try:
                 if _learn_exact_gpu_route(
@@ -598,7 +599,7 @@ def export_composer_auto(
             request.profile.height,
             len(route.layers),
         )
-        live_vram = vram_free_mb(0)
+        live_vram = vram_free_mb(route.key.gpu_index)
         if live_vram is None or live_vram < vram_floor:
             logger(
                 "H6 Composer: evidência CUDA preservada, mas VRAM livre atual "
@@ -628,7 +629,7 @@ def export_composer_auto(
             raise
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
-            current_vram = vram_free_mb(0)
+            current_vram = vram_free_mb(route.key.gpu_index)
             integrity_failure = "composer gpu verification failed" in str(exc).lower()
             gpu_failure = looks_like_gpu_runtime_failure(exc)
             enough_headroom = current_vram is not None and current_vram >= vram_floor
