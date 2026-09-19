@@ -24,6 +24,58 @@ def test_component_fingerprint_uses_version_and_sha256(tmp_path: Path) -> None:
     assert bootstrap_component_fingerprint("rife", root=tmp_path) == f"rife:ncnn-test:{digest}"
 
 
+def test_critical_file_change_invalidates_installed_component_fingerprint(tmp_path: Path) -> None:
+    component = tmp_path / "components" / "real-esrgan"
+    component.mkdir(parents=True)
+    (component / ".cinepulse-component.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "key": "real-esrgan",
+            "version": "installed-version",
+            "sha256": "a" * 64,
+        }),
+        encoding="utf-8",
+    )
+    exe = component / "realesrgan-ncnn-vulkan.exe"
+    model = component / "model.bin"
+    exe.write_bytes(b"exe-v1")
+    model.write_bytes(b"model-v1")
+    first = bootstrap_component_fingerprint(
+        "real_esrgan",
+        component_root=component,
+        critical_files=(exe, model),
+    )
+    model.write_bytes(b"model-v2-longer")
+    second = bootstrap_component_fingerprint(
+        "real_esrgan",
+        component_root=component,
+        critical_files=(exe, model),
+    )
+    assert first
+    assert second
+    assert first != second
+
+
+def test_missing_critical_file_fails_closed(tmp_path: Path) -> None:
+    component = tmp_path / "components" / "rife"
+    component.mkdir(parents=True)
+    (component / ".cinepulse-component.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "key": "rife",
+            "version": "installed-version",
+            "sha256": "a" * 64,
+        }),
+        encoding="utf-8",
+    )
+    missing = component / "rife-ncnn-vulkan.exe"
+    assert bootstrap_component_fingerprint(
+        "rife",
+        component_root=component,
+        critical_files=(missing,),
+    ) == ""
+
+
 def test_installed_component_marker_is_preferred_over_release_manifest(tmp_path: Path) -> None:
     manifest_digest = "a" * 64
     installed_digest = "b" * 64
