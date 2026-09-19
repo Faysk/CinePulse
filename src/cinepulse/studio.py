@@ -4497,7 +4497,7 @@ class VideoOptimizerStudio:
                 vram_free_mb=neural_headroom.vram_free_mb,
                 scratch_free_gb=neural_headroom.scratch_free_gb,
                 scratch_write_mbps=neural_headroom.scratch_write_mbps,
-                dedicated=(machine_mode == "dedicated"),
+                dedicated=(machine_mode in {"dedicated", "overnight"}),
             )
             realesrgan_budget = derive_pipeline_budget("realesrgan", **h4_common)
             rife_budget = derive_pipeline_budget("rife", **h4_common)
