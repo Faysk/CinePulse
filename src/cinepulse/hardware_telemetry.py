@@ -412,6 +412,17 @@ class NvidiaSmiSampler:
         except (OSError, subprocess.SubprocessError):
             return None
 
+    @staticmethod
+    def _engine_fields_unsupported(result: subprocess.CompletedProcess[str] | None) -> bool:
+        if result is None or result.returncode == 0:
+            return False
+        message = f"{getattr(result, 'stdout', '')}\n{getattr(result, 'stderr', '')}".lower()
+        return (
+            "not a valid field to query" in message
+            or "field" in message and "not supported" in message
+            or "unsupported field" in message
+        )
+
     def sample(self) -> tuple[GpuSample, ...]:
         # Encoder/decoder counters are useful for finding NVENC/NVDEC stalls,
         # but older drivers may not expose those query fields. Retry the stable
@@ -421,7 +432,10 @@ class NvidiaSmiSampler:
         if self._engine_query_supported is not False:
             result = self._query(self.ENGINE_QUERY)
             engines_available = bool(result is not None and result.returncode == 0)
-            self._engine_query_supported = engines_available
+            if engines_available:
+                self._engine_query_supported = True
+            elif self._engine_fields_unsupported(result):
+                self._engine_query_supported = False
         if not engines_available:
             result = self._query(self.BASE_QUERY)
         if result is None or result.returncode != 0:
