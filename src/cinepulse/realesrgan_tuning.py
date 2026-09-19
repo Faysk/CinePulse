@@ -11,6 +11,9 @@ from typing import Iterable
 from .performance_policy import realesrgan_pipeline_threads
 
 
+MIN_TUNING_SPEEDUP = 1.03
+
+
 @dataclass(frozen=True, order=True)
 class RealEsrganPolicy:
     tile: int = 256
@@ -247,6 +250,19 @@ class RealEsrganTuningStore:
             (sample for sample in accepted if sample.policy == winner),
             key=lambda item: item.wall_seconds,
         )
+        if fallback is not None and winner != fallback:
+            baseline_samples = [
+                sample for sample in accepted if sample.policy == fallback
+            ]
+            if baseline_samples:
+                baseline_sample = min(
+                    baseline_samples,
+                    key=lambda item: item.wall_seconds,
+                )
+                speedup = baseline_sample.wall_seconds / winner_sample.wall_seconds
+                if speedup < MIN_TUNING_SPEEDUP:
+                    winner = fallback
+                    winner_sample = baseline_sample
         payload = self._load()
         records = payload.setdefault("records", {})
         if not isinstance(records, dict):
