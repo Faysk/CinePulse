@@ -118,7 +118,11 @@ def safe_candidates(
     # process concurrency is keyed to the machine envelope separately from
     # load/save concurrency.
     io_workers = 1 if threads <= 4 else 2
-    if threads >= 12:
+    # The Studio intentionally caps neural host-feed near six threads. Let the
+    # physical tuner test whether using that full six-thread envelope as
+    # 3 load + 3 save workers keeps the GPU fed better. This is candidate-only;
+    # runtime still needs exact measured evidence before using it.
+    if threads >= 6:
         io_workers = 3
     if threads >= 20:
         io_workers = 4
