@@ -80,6 +80,7 @@ from .gpu_media import (
     invalidate_on_runtime_failure as invalidate_gpu_media_policy, select_proven_policy as select_gpu_media_policy,
 )
 from .gpu_encode import ResidentEncodeStore
+from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_delivery import select_resident_delivery_route
 from .pipeline_runtime import BackgroundCommand, measure_resource_headroom, vram_free_mb
 from .audio_mastering import analyze_loudness, build_audio_filter
@@ -4936,12 +4937,17 @@ class VideoOptimizerStudio:
                 except RuntimeError as exc:
                     if resident_route is None or not resident_route.approved or resident_route.key is None:
                         raise
-                    resident_store.invalidate(resident_route.key)
+                    gpu_specific = looks_like_gpu_runtime_failure(exc)
+                    if gpu_specific:
+                        resident_store.invalidate(resident_route.key)
+                        evidence_text = "evidência exata invalidada"
+                    else:
+                        evidence_text = "evidência preservada; falha não classificada como GPU"
                     try: partial_output.unlink(missing_ok=True)
                     except OSError: pass
                     self._log(
-                        "H5 resident delivery: fast path aprovado falhou em produção; evidência exata "
-                        f"invalidada e finalização repetida pelo baseline CPU/zscale. Motivo: {exc}"
+                        "H5 resident delivery: fast path aprovado falhou em produção; "
+                        f"{evidence_text}. Finalização repetida pelo baseline CPU/zscale. Motivo: {exc}"
                     )
                     self._run_ffmpeg(baseline_command, project_duration, progress_base, 100 - progress_base)
                 self._release_temp_path(visual_source, temp_paths)
@@ -5490,10 +5496,15 @@ class VideoOptimizerStudio:
             nonlocal gpu_media_policy
             if gpu_media_policy is None or gpu_media_key is None:
                 return
-            invalidate_gpu_media_policy(gpu_media_store, gpu_media_key)
+            gpu_specific = looks_like_gpu_runtime_failure(reason)
+            if gpu_specific:
+                invalidate_gpu_media_policy(gpu_media_store, gpu_media_key)
+                evidence_text = "evidência invalidada"
+            else:
+                evidence_text = "evidência preservada; falha não classificada como GPU"
             self._log(
-                "H5 CUDA decode: política aprovada falhou em produção, foi invalidada e este lote "
-                f"será repetido uma vez pela CPU. Motivo: {reason}"
+                "H5 CUDA decode: fast path falhou em produção; "
+                f"{evidence_text}. Este lote será repetido uma vez pela CPU. Motivo: {reason}"
             )
             gpu_media_policy = None
 
