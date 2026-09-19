@@ -5657,18 +5657,52 @@ class VideoOptimizerStudio:
                     )
 
                 frames = len(list(incoming.glob("frame*.png")))
+                if frames != count and gpu_media_policy is not None:
+                    # Exact H5 decode evidence includes frame-count parity. A
+                    # short successful CUDA extraction is therefore a runtime
+                    # integrity failure even when FFmpeg exits with code zero.
+                    invalidate_gpu_extract(
+                        f"CUDA/CUVID frame-count integrity mismatch: {frames}/{count}"
+                    )
+                    safe_rmtree(incoming)
+                    incoming.mkdir(parents=True, exist_ok=True)
+                    run_extraction(
+                        processed,
+                        count,
+                        incoming,
+                        progress=True,
+                        expected_duration=chunk_duration,
+                        stage_progress_base=stage_base,
+                        stage_progress_weight=weight * fraction_chunk * 0.18,
+                    )
+                    frames = len(list(incoming.glob("frame*.png")))
+
                 if frames < 1:
                     raise RuntimeError("A IA não recebeu nenhum quadro do vídeo.")
                 if frames != count:
-                    self._log(
-                        f"H4 PREFETCH Real-ESRGAN: FFmpeg entregou {frames}/{count} quadros; "
-                        "desativando prefetch para os lotes restantes e preservando a tolerância histórica."
-                    )
                     overlap_extract = False
+                    is_final_request = processed + count >= total_frames
+                    if is_final_request and frames < count:
+                        # Duration/fps rounding can request a few frames beyond
+                        # true EOF. Accept only at the final chunk and advance by
+                        # the frames that actually exist; never skip a gap.
+                        self._log(
+                            f"H4 Real-ESRGAN: EOF real entregou {frames}/{count} quadros no lote final; "
+                            "ajustando o total materializado sem pular frames."
+                        )
+                        count = frames
+                        total_frames = processed + frames
+                        chunk_duration = count / max(1.0, source_fps)
+                        fraction_chunk = count / max(1, total_frames)
+                    else:
+                        raise RuntimeError(
+                            f"Extração de quadros incompleta no meio do vídeo: {frames}/{count}; "
+                            "render interrompido para evitar lacuna temporal."
+                        )
 
                 next_processed = processed + count
                 if overlap_extract and next_processed < total_frames and prefetch is None:
-                    next_count = min(chunk_frames, total_frames - next_processed)
+                    next_count = min(active_chunk_frames, total_frames - next_processed)
                     next_index = chunk_index + 1
                     next_dir = chunk_root / f"chunk_{next_index:05d}"
                     next_incoming = next_dir / "entrada"
