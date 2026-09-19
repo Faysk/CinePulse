@@ -65,10 +65,19 @@ class ComposerAutoExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
             selected = route(request, use_gpu=True)
-            selected = replace(selected, base_decoder="h264_cuvid")
+            assert selected.key is not None
+            selected = replace(
+                selected,
+                key=replace(selected.key, gpu_index=1),
+                base_decoder="h264_cuvid",
+            )
             command = _gpu_visual_command(request, selected, Path(temp) / "visual.mkv")
+            self.assertIn("-init_hw_device", command)
+            self.assertIn("cuda=cinepulse_gpu:1", command)
+            self.assertIn("-filter_hw_device", command)
+            self.assertEqual("cinepulse_gpu", command[command.index("-filter_hw_device") + 1])
             self.assertIn("-hwaccel", command)
-            self.assertIn("cuda", command)
+            self.assertEqual("1", command[command.index("-hwaccel_device") + 1])
             self.assertIn("-hwaccel_output_format", command)
             self.assertIn("h264_cuvid", command)
             graph = command[command.index("-filter_complex") + 1]
