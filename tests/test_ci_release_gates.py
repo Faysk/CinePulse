@@ -99,6 +99,10 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("scripts/realesrgan_autotune.py", text)
         self.assertIn("cache/hardware/realesrgan-tuning.json", text)
         self.assertIn("artifacts/gpu/realesrgan-autotune.json", text)
+        self.assertIn("Physical RIFE autotune acceptance", text)
+        self.assertIn("scripts/rife_benchmark.py", text)
+        self.assertIn("cache/hardware/rife-tuning.json", text)
+        self.assertIn("artifacts/gpu/rife-autotune.json", text)
         for path in (
             "scripts/hardware_benchmark.py",
             "src/cinepulse/performance_policy.py",
