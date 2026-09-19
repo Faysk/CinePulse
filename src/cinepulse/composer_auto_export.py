@@ -20,6 +20,7 @@ from collections.abc import Callable
 from .composer_export import ComposerExportRequest, ComposerExportResult, export_composer_reference
 from .composer_gpu_route import (
     ComposerGpuRoute,
+    build_compositor_stack_key,
     default_compositor_evidence_path,
     select_gpu_export_route,
 )
@@ -33,6 +34,7 @@ from .gpu_compositor import (
     detect_gpu_compositor_capabilities,
 )
 from .gpu_failure import looks_like_gpu_runtime_failure
+from .gpu_media import detect_gpu_media_capabilities
 from .hardware import HardwareProfile, detect_hardware
 from .paths import PATHS
 from .pipeline_runtime import vram_free_mb
@@ -65,8 +67,17 @@ def _gpu_visual_command(request: ComposerExportRequest, route: ComposerGpuRoute,
         route.layers,
         canvas_width=p.width,
         canvas_height=p.height,
+        base_resident=bool(route.base_decoder),
     ) + ";[vout]format=rgba[vfinal]"
-    command = [str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(request.source)]
+    command = [str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
+    if route.base_decoder:
+        command += [
+            "-hwaccel", "cuda",
+            "-hwaccel_device", "0",
+            "-hwaccel_output_format", "cuda",
+            "-c:v", route.base_decoder,
+        ]
+    command += ["-i", str(request.source)]
     for layer in route.layers:
         command += _layer_input_args(layer)
     command += [
@@ -90,6 +101,26 @@ def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> 
         "-t", f"{request.profile.duration:.6f}",
         str(target),
     ]
+
+
+def _probe_source_codec(ffprobe: str, path: str | Path) -> str:
+    try:
+        result = subprocess.run(
+            [
+                str(ffprobe), "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (result.stdout or "").strip().lower() if result.returncode == 0 else ""
 
 
 def _has_audio_stream(ffprobe: str, path: str | Path) -> bool:
@@ -340,6 +371,7 @@ def _learn_exact_gpu_route(
             route.layer,
             route.key,
             route.layers,
+            route.base_decoder,
         )
 
         log(
@@ -447,6 +479,69 @@ def export_composer_auto(
         color_range=request.profile.color_range,
         base_is_still=request.profile.still_image,
     )
+    # Prefer a fully resident base when the exact source codec has an NVIDIA
+    # decoder candidate. Capability only makes the route benchmarkable; runtime
+    # permission still comes exclusively from the exact H6 evidence store.
+    if not request.profile.still_image and route.layers and hw.gpu:
+        source_codec = _probe_source_codec(str(request.ffprobe), request.source)
+        media_caps = detect_gpu_media_capabilities(str(request.ffmpeg))
+        resident_decoder = media_caps.decoder_for(source_codec) if source_codec else None
+        if resident_decoder:
+            resident_key = build_compositor_stack_key(
+                hardware=hw,
+                caps=caps,
+                width=request.profile.width,
+                height=request.profile.height,
+                fps=request.profile.fps,
+                pixel_format=request.profile.pixel_format,
+                primaries=request.profile.primaries,
+                transfer=request.profile.transfer,
+                matrix=request.profile.matrix,
+                color_range=request.profile.color_range,
+                layers=route.layers,
+                base_mode="nvdec-resident",
+                base_codec=source_codec,
+                base_decoder=resident_decoder,
+            )
+            resident_route = ComposerGpuRoute(
+                evidence_store.approved(resident_key, caps),
+                "exact H6 NVDEC-resident evidence approved",
+                route.layer,
+                resident_key,
+                route.layers,
+                resident_decoder,
+            )
+            resident_floor = compositor_vram_floor_mb(
+                request.profile.width,
+                request.profile.height,
+                len(route.layers),
+            )
+            resident_vram = vram_free_mb(0)
+            if not resident_route.use_gpu and resident_vram is not None and resident_vram >= resident_floor:
+                try:
+                    if _learn_exact_gpu_route(
+                        request,
+                        resident_route,
+                        evidence_store,
+                        cancelled=cancel,
+                        log=logger,
+                        envelopes=envelopes,
+                    ):
+                        resident_route = replace(
+                            resident_route,
+                            use_gpu=True,
+                            reason="exact H6 NVDEC-resident evidence learned on this machine",
+                        )
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    logger(
+                        "H6 Composer NVDEC-resident: benchmark local rejeitado; "
+                        f"mantendo rota anterior. {type(exc).__name__}: {exc}"
+                    )
+            if resident_route.use_gpu:
+                route = resident_route
+
     if (
         not route.use_gpu
         and route.key is not None
@@ -475,6 +570,7 @@ def export_composer_auto(
                         route.layer,
                         route.key,
                         route.layers,
+                        route.base_decoder,
                     )
             except InterruptedError:
                 raise
