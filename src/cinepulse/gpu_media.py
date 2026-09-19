@@ -12,6 +12,7 @@ The stable CPU/zscale path therefore remains the fail-closed default.
 """
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -121,12 +122,23 @@ def _ffmpeg_binary_identity(ffmpeg: str) -> str:
     try:
         resolved = path.resolve(strict=True)
         stat = resolved.stat()
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
     except OSError:
         return "unresolved"
-    return f"{resolved.name}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+    return (
+        f"{resolved}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}:"
+        f"{digest.hexdigest()}"
+    )
 
 
-def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
+@lru_cache(maxsize=8)
+def _detect_gpu_media_capabilities_cached(
+    ffmpeg: str,
+    binary_identity: str,
+) -> GpuMediaCapabilities:
     version = _run_probe(ffmpeg, "-version")
     hwaccels_text = _run_probe(ffmpeg, "-hwaccels")
     decoders_text = _run_probe(ffmpeg, "-decoders")
@@ -135,7 +147,7 @@ def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
     fingerprint_payload = (
         version
         + "\nCINEPULSE_FFMPEG_BINARY="
-        + _ffmpeg_binary_identity(ffmpeg)
+        + binary_identity
     )
     fingerprint = hashlib.sha256(
         fingerprint_payload.encode("utf-8", errors="replace")
@@ -148,6 +160,13 @@ def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
         filters=_names_from_listing(filters_text),
         encoders=_names_from_listing(encoders_text),
     )
+
+
+def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
+    """Probe one exact FFmpeg build once and reuse immutable capabilities."""
+    value = str(ffmpeg)
+    identity = _ffmpeg_binary_identity(value)
+    return _detect_gpu_media_capabilities_cached(value, identity)
 
 
 @dataclass(frozen=True)
