@@ -5382,7 +5382,10 @@ class VideoOptimizerStudio:
             save_jobs=fallback_save,
             gpu_index=0,
         )
-        real_component_fingerprint = bootstrap_component_fingerprint("real_esrgan")
+        real_component_fingerprint = bootstrap_component_fingerprint(
+            "real_esrgan",
+            component_root=REAL_ESRGAN.parent,
+        )
         tuning_key = RealEsrganTuningKey(
             self._hardware.gpu or "unknown-gpu",
             int(self._hardware.vram_mb or 0),
