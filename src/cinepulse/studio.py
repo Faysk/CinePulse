@@ -5372,13 +5372,6 @@ class VideoOptimizerStudio:
             save_jobs=fallback_save,
             gpu_index=0,
         )
-        conservative_policy = RealEsrganPolicy(
-            tile=256,
-            load_jobs=max(1, min(2, fallback_policy.load_jobs)),
-            process_jobs=max(1, min(2, fallback_policy.process_jobs)),
-            save_jobs=max(1, min(2, fallback_policy.save_jobs)),
-            gpu_index=fallback_policy.gpu_index,
-        )
         tuning_key = RealEsrganTuningKey(
             self._hardware.gpu or "unknown-gpu",
             int(self._hardware.vram_mb or 0),
@@ -5396,6 +5389,13 @@ class VideoOptimizerStudio:
             tuned_policy is not None and tuned_policy.process_jobs > fallback_policy.process_jobs
         )
         active_policy = fallback_policy if tuned_limited_by_headroom else (tuned_policy or fallback_policy)
+        conservative_policy = RealEsrganPolicy(
+            tile=max(32, min(256, active_policy.tile)),
+            load_jobs=max(1, min(2, fallback_policy.load_jobs, active_policy.load_jobs)),
+            process_jobs=max(1, min(2, fallback_policy.process_jobs, active_policy.process_jobs)),
+            save_jobs=max(1, min(2, fallback_policy.save_jobs, active_policy.save_jobs)),
+            gpu_index=active_policy.gpu_index,
+        )
         if tuned_policy is not None and not tuned_limited_by_headroom:
             self._log(
                 f"H3 Real-ESRGAN: política física aprovada carregada tile={active_policy.tile} "
