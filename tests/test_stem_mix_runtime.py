@@ -216,3 +216,39 @@ def test_invalid_cached_mix_is_rebuilt_instead_of_reused() -> None:
         assert rebuilt == mixed
         assert rebuilt.stat().st_size > 44
         assert rebuilt.read_bytes().startswith(b"RIFF")
+
+
+
+def test_stale_demucs_partial_tree_is_never_reused_as_cache() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "music.wav"
+        source.write_bytes(b"audio")
+        cache = root / "cache"
+        cache_root = cache / "stems" / "fixed-key"
+        stale = cache_root / ".demucs-partial-stale" / "htdemucs_ft" / source.stem
+        stale.mkdir(parents=True)
+        for name in ("bass", "drums", "vocals", "other"):
+            (stale / f"{name}.wav").write_bytes(b"W" * 128)
+
+        models, ai_root, python = _demucs_paths(root)
+
+        def popen(command, **kwargs):
+            return FakeDemucsProcess(command, valid=True, returncode=0, **kwargs)
+
+        with (
+            patch("cinepulse.studio.PATHS", SimpleNamespace(cache=cache)),
+            patch("cinepulse.studio.ai_suite.MODELS", models),
+            patch("cinepulse.studio.ai_suite.AI_ROOT", ai_root),
+            patch("cinepulse.studio.ai_suite.VENV_PYTHON", python),
+            patch("cinepulse.studio.stem_cache_key", return_value="fixed-key"),
+            patch("cinepulse.studio.subprocess.Popen", side_effect=popen),
+        ):
+            result = _studio()._prepare_reactive_audio(
+                str(source), "Graves", False, 4
+            )
+
+        promoted = Path(result)
+        assert promoted == cache_root / "htdemucs_ft" / source.stem / "bass.wav"
+        assert promoted.is_file()
+        assert promoted.stat().st_size == 128
