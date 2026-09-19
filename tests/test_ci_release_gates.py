@@ -107,6 +107,12 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("scripts/gpu_compositor_benchmark.py", text)
         self.assertIn("cache/hardware/gpu-compositor.json", text)
         self.assertIn("artifacts/gpu/composer-h6.json", text)
+        self.assertIn("Physical NVDEC decode acceptance", text)
+        self.assertIn("scripts/gpu_media_benchmark.py", text)
+        self.assertIn("cache/hardware/gpu-media-tuning.json", text)
+        self.assertIn("artifacts/gpu/nvdec-benchmark.json", text)
+        self.assertIn("--resident-base", text)
+        self.assertIn("artifacts/gpu/composer-h6-resident.json", text)
         for path in (
             "scripts/hardware_benchmark.py",
             "src/cinepulse/performance_policy.py",
