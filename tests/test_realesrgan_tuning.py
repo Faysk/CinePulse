@@ -45,6 +45,28 @@ class RealEsrganTuningTests(unittest.TestCase):
         candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=1920, height=1080)
         self.assertTrue(any(item.process_jobs == 4 for item in candidates))
 
+    def test_candidates_model_bounded_host_feed_separately_from_machine_capacity(self) -> None:
+        rtx4070 = safe_candidates(
+            vram_mb=8192, cpu_threads=6, logical_threads=28, width=1920, height=1080
+        )
+        self.assertIn(RealEsrganPolicy(256, 2, 3, 2, 0), rtx4070)
+        rtx3090 = safe_candidates(
+            vram_mb=24576, cpu_threads=6, logical_threads=28, width=1920, height=1080
+        )
+        self.assertIn(RealEsrganPolicy(256, 2, 4, 2, 0), rtx3090)
+
+    def test_tuning_key_changes_with_host_feed_budget(self) -> None:
+        six = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28,
+        )
+        four = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=4, logical_threads=28,
+        )
+        self.assertNotEqual(six.token(), four.token())
+        self.assertIn("host6of28", six.token())
+
     def test_command_args_select_gpu_explicitly(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3, 2)
         self.assertEqual(policy.command_args(), ["-t", "320", "-j", "3:2:3", "-g", "2"])
