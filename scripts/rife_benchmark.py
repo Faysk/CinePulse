@@ -41,6 +41,11 @@ def main() -> int:
     component_fingerprint = bootstrap_component_fingerprint(
         "rife",
         component_root=args.rife.parent,
+        critical_files=(
+            args.rife,
+            args.model / "flownet.bin",
+            args.model / "flownet.param",
+        ),
     )
     if not component_fingerprint:
         raise SystemExit("RIFE component fingerprint is unavailable; refusing to record tuning evidence")
