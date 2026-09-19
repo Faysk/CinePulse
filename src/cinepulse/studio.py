@@ -3583,7 +3583,7 @@ class VideoOptimizerStudio:
         )
         preflight_mode = "dedicated" if settings.cpu_threads >= preflight_dedicated_threshold else "balanced"
         preflight_headroom = measure_resource_headroom(
-            scratch_path, gpu_index=0, probe_write=False
+            scratch_path, gpu_index=self._hardware.gpu_index, probe_write=False
         )
         preflight_common = dict(
             ram_available_gb=preflight_headroom.ram_available_gb,
@@ -4485,7 +4485,7 @@ class VideoOptimizerStudio:
                 or render_plan.step("rife_final").attempts
             )
             neural_headroom = measure_resource_headroom(
-                job_dir, gpu_index=0, probe_write=neural_steps_active, probe_size_mb=32
+                job_dir, gpu_index=self._hardware.gpu_index, probe_write=neural_steps_active, probe_size_mb=32
             )
             h4_common = dict(
                 ram_available_gb=neural_headroom.ram_available_gb,
@@ -4532,14 +4532,14 @@ class VideoOptimizerStudio:
                 )
 
             h5_ai_controller = AdaptiveRuntimeController(
-                gpu_index=0,
+                gpu_index=self._hardware.gpu_index,
                 allow_extract_overlap=realesrgan_budget.overlap_extract,
                 allow_pack_overlap=realesrgan_budget.overlap_pack,
                 overnight=overnight_mode,
                 scratch_sustainable_mbps=neural_headroom.scratch_write_mbps,
             )
             h5_rife_controller = AdaptiveRuntimeController(
-                gpu_index=0,
+                gpu_index=self._hardware.gpu_index,
                 allow_extract_overlap=(rife_budget.overlap_extract and not settings.use_cpu),
                 allow_pack_overlap=False,
                 overnight=overnight_mode,
@@ -4937,8 +4937,8 @@ class VideoOptimizerStudio:
                         target_fps=target_fps, delivery_plan=delivery_plan,
                         bitrate_mbps=bitrate_mbps, use_cpu=settings.use_cpu,
                         color_already_final=color_ready,
-                        vram_free_mb=vram_free_mb(0),
-                        gpu_index=0,
+                        vram_free_mb=vram_free_mb(self._hardware.gpu_index),
+                        gpu_index=self._hardware.gpu_index,
                     )
                 except Exception as exc:
                     self._log(f"H5 resident delivery: probe/evidence indisponível; baseline preservado ({exc}).")
@@ -5457,7 +5457,7 @@ class VideoOptimizerStudio:
             load_jobs=fallback_load,
             process_jobs=fallback_proc,
             save_jobs=fallback_save,
-            gpu_index=0,
+            gpu_index=self._hardware.gpu_index,
         )
         real_component_fingerprint = bootstrap_component_fingerprint(
             "real_esrgan",
