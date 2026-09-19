@@ -24,9 +24,9 @@ import time
 from typing import Literal
 
 
-# Schema 2 invalidates H5 records created before the complete encoder-quality
-# contract included tune/AQ/multipass/B-ref/GOP identity.
-GPU_ENCODE_SCHEMA = 3
+# Schema 4 invalidates H5 records created before the complete encoder-quality
+# contract also bound the exact NVENC adapter index.
+GPU_ENCODE_SCHEMA = 4
 Codec = Literal["h264_nvenc", "hevc_nvenc", "av1_nvenc"]
 RateControl = Literal["constqp", "vbr", "cbr"]
 
@@ -64,6 +64,7 @@ class NvencContract:
     multipass: str = ""
     b_ref_mode: str = ""
     gop: int | None = None
+    gpu_index: int = 0
 
     def __post_init__(self) -> None:
         if not self.preset.strip():
@@ -86,13 +87,15 @@ class NvencContract:
             raise ValueError("NVENC aq_strength requires AQ to be enabled")
         if self.gop is not None and int(self.gop) < 1:
             raise ValueError("NVENC GOP must be positive")
+        if int(self.gpu_index) < 0:
+            raise ValueError("NVENC GPU index must be >= 0")
 
     def token(self) -> str:
         raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
     def ffmpeg_args(self) -> list[str]:
-        args = ["-c:v", self.encoder, "-preset", self.preset]
+        args = ["-c:v", self.encoder, "-gpu", str(int(self.gpu_index)), "-preset", self.preset]
         if self.tune:
             args += ["-tune", self.tune]
         args += ["-rc", self.rate_control, "-pix_fmt", self.pixel_format]
