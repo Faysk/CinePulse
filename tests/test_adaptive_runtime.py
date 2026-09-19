@@ -43,7 +43,7 @@ class AdaptiveRuntimeControllerTests(unittest.TestCase):
         self.assertTrue(decision.allow_extract_overlap)
         self.assertTrue(decision.allow_pack_overlap)
 
-    def test_overnight_pressure_measurements_do_not_reduce_runtime() -> None:
+    def test_overnight_pressure_measurements_do_not_reduce_runtime(self) -> None:
         controller = AdaptiveRuntimeController(
             allow_extract_overlap=True,
             allow_pack_overlap=True,
@@ -60,7 +60,7 @@ class AdaptiveRuntimeControllerTests(unittest.TestCase):
         self.assertTrue(decision.allow_extract_overlap)
         self.assertTrue(decision.allow_pack_overlap)
 
-    def test_minimum_frame_contract_is_still_respected() -> None:
+    def test_minimum_frame_contract_is_still_respected(self) -> None:
         controller = AdaptiveRuntimeController(allow_extract_overlap=True)
         decision = controller.observe(sample(vram_free=1.0))
         self.assertEqual(2, decision.limit_chunk_frames(2, minimum=2))
