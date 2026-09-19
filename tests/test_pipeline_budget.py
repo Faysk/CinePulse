@@ -58,6 +58,19 @@ class PipelineBudgetTests(unittest.TestCase):
         self.assertTrue(budget.overlap_extract)
         self.assertTrue(budget.overlap_pack)
 
+    def test_balanced_mode_never_claims_two_inflight_while_scheduling_three_worksets(self) -> None:
+        budget = derive_pipeline_budget(
+            "realesrgan",
+            ram_available_gb=48.0,
+            vram_free_mb=12000,
+            scratch_free_gb=500.0,
+            scratch_write_mbps=1800.0,
+            dedicated=False,
+        )
+        self.assertEqual(budget.max_inflight_chunks, 2)
+        self.assertTrue(budget.overlap_extract)
+        self.assertFalse(budget.overlap_pack)
+
     def test_slow_scratch_disables_overlap_even_with_ram(self) -> None:
         budget = derive_pipeline_budget(
             "rife",
