@@ -421,6 +421,22 @@ def safe_candidate_policies(
     return tuple(candidates)
 
 
+def gpu_media_vram_floor_mb(key: GpuMediaKey) -> float:
+    """Estimate the live-VRAM floor for bounded CUDA media surfaces.
+
+    This is an admission ceiling only; it cannot authorize a GPU path without
+    exact physical evidence. The estimate covers a small NVDEC/CUDA surface
+    pool plus driver/filter headroom and scales with geometry/bit depth.
+    """
+    source_pixels = max(1, int(key.width)) * max(1, int(key.height))
+    target_pixels = max(1, int(key.target_width or key.width)) * max(1, int(key.target_height or key.height))
+    pixels = max(source_pixels, target_pixels)
+    bytes_per_pixel = 3.0 if int(key.bit_depth) > 8 else 1.5
+    surface_mb = pixels * bytes_per_pixel / (1024.0 * 1024.0)
+    operation_multiplier = 16.0 if "scale" in str(key.operation).lower() else 12.0
+    return max(384.0, surface_mb * operation_multiplier + 256.0)
+
+
 def select_proven_policy(
     *,
     store: GpuMediaTuningStore,
