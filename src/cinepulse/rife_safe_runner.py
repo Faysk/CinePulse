@@ -363,13 +363,41 @@ def _run_native_with_rollback(
                 raise
             text = str(exc).lower()
             oom = any(token in text for token in OOM_TOKENS)
+            retry_policy = fallback
+            if oom and current.gpu_index >= 0:
+                live_free = vram_free_mb(current.gpu_index)
+                dynamic_spec, _measured, dynamic_reason = _limit_policy_by_live_vram(
+                    None,
+                    uhd=current.uhd,
+                    free_vram_mb=live_free,
+                    gpu_index=current.gpu_index,
+                )
+                retry_policy = RifeExecutionPolicy(
+                    current.uhd,
+                    dynamic_spec.jobs,
+                    current.native_target,
+                    current.requested_target,
+                    dynamic_spec.gpu_index,
+                    False,
+                )
+                print(
+                    "CINEPULSE_RIFE_SAFE LIVE_ROLLBACK "
+                    f"free={live_free if live_free is not None else 'n/a'} "
+                    f"selected={retry_policy.jobs} reason={dynamic_reason}",
+                    flush=True,
+                )
+            if (
+                retry_policy.jobs == current.jobs
+                and retry_policy.gpu_index == current.gpu_index
+            ):
+                raise
             print(
                 "CINEPULSE_RIFE_SAFE ROLLBACK "
                 f"reason={'oom' if oom else 'instability/integrity'} "
-                f"from={current.jobs} to={fallback.jobs}",
+                f"from={current.jobs} to={retry_policy.jobs}",
                 flush=True,
             )
-            current = fallback
+            current = retry_policy
             attempted_fallback = True
 
 
