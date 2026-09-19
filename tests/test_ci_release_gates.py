@@ -92,6 +92,7 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("Test-IsolatedEnvironment.ps1", text)
         self.assertIn("Test-NeuralInstaller.ps1", text)
         self.assertIn("--profile gpu", text)
+        self.assertIn("gpu-contracts", " ".join(step.name for step in GPU_STEPS))
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.actor == 'Faysk'", text)
         self.assertIn("Recovery RIFE 8K UHD acceptance", text)
