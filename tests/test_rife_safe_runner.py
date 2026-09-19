@@ -9,6 +9,8 @@ from unittest.mock import patch
 from cinepulse.rife_safe_runner import (
     _hardware_tuning_policy,
     _limit_policy_by_live_vram,
+    _run_native_with_rollback,
+    RifeExecutionPolicy,
     execution_policy,
     validate_png,
     validate_png_sequence,
@@ -147,6 +149,43 @@ class RifeSafeRunnerTests(unittest.TestCase):
         self.assertEqual(selected, RifePolicy("3:3:3", 1))
         self.assertTrue(measured)
         self.assertIn("live VRAM", reason)
+
+    def test_fallback_oom_can_downshift_to_serial_when_live_vram_drops(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            native_dir = Path(temporary) / "native"
+            fallback = RifeExecutionPolicy(
+                uhd=False,
+                jobs="2:2:2",
+                native_target=8,
+                requested_target=8,
+                gpu_index=0,
+                measured=False,
+            )
+            calls = {"count": 0}
+
+            def fake_run(_command, *, cwd=None):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise RuntimeError("VK_ERROR_OUT_OF_DEVICE_MEMORY")
+
+            with (
+                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
+                patch("cinepulse.rife_safe_runner.validate_png_sequence", return_value=[]),
+                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=2500.0),
+            ):
+                applied = _run_native_with_rollback(
+                    rife_executable=Path("rife-ncnn-vulkan.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("incoming"),
+                    native_dir=native_dir,
+                    policy=fallback,
+                    fallback=fallback,
+                    tuning_key=None,
+                    tuning_store=None,
+                )
+
+            self.assertEqual("1:1:1", applied.jobs)
+            self.assertEqual(2, calls["count"])
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
