@@ -113,6 +113,19 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertIn("0.20000000", graph)
         self.assertIn("0.80000000", graph)
 
+    def test_layer_asset_replacement_invalidates_exact_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "logo.png"
+            source.write_bytes(b"first")
+            layer = OverlayLayer(str(source), "png")
+            first = layer.contract_token()
+            first_stack = overlay_stack_contract_token((layer,))
+            source.write_bytes(b"replacement-with-different-size")
+            second = layer.contract_token()
+            second_stack = overlay_stack_contract_token((layer,))
+            self.assertNotEqual(first, second)
+            self.assertNotEqual(first_stack, second_stack)
+
     def test_stack_contract_binds_order_and_every_layer(self) -> None:
         first = OverlayLayer("a.png", "png", z_order=0)
         second = OverlayLayer("b.png", "png", z_order=1)
