@@ -15,7 +15,13 @@ class CpuTuningTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "cpu-tuning.json"
         self.store = CpuTuningStore(self.path)
         self.topology = CpuTopology(logical_cpus=20, physical_cores=14, source="test")
-        self.key = CpuTuningKey.from_topology("encode", self.topology, mode="dedicated", gpu_active=True)
+        self.key = CpuTuningKey.from_topology(
+            "encode",
+            self.topology,
+            mode="dedicated",
+            gpu_active=True,
+            cpu_name="CPU Test A",
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -53,6 +59,22 @@ class CpuTuningTests(unittest.TestCase):
         )
         self.assertEqual(self.store.lookup(self.key, max_threads=20), 16)
         self.assertIsNone(self.store.lookup(self.key, max_threads=10))
+
+    def test_same_topology_on_different_cpu_does_not_reuse_policy(self) -> None:
+        self.store.record_samples(
+            self.key,
+            (CpuTuningSample(12, 10.0, True),),
+            fallback_threads=12,
+        )
+        other_cpu = CpuTuningKey.from_topology(
+            "encode",
+            self.topology,
+            mode="dedicated",
+            gpu_active=True,
+            cpu_name="CPU Test B",
+        )
+        self.assertIsNone(self.store.lookup(other_cpu, max_threads=20))
+        self.assertNotEqual(self.key.token(), other_cpu.token())
 
     def test_topology_or_stage_mismatch_does_not_reuse_policy(self) -> None:
         self.store.record_samples(
