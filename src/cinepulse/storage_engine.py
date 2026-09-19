@@ -483,12 +483,18 @@ class ScratchProbe:
 _speed_probe_cache: dict[str, tuple[float, float | None]] = {}
 
 
-def probe_scratch(path: Path, *, sample_mb: int = 8, cache_seconds: float = 900.0) -> ScratchProbe:
-    """Return volume/free-space data plus a tiny cached sequential-write probe.
+def probe_scratch(
+    path: Path,
+    *,
+    sample_mb: int = 8,
+    cache_seconds: float = 900.0,
+    measure_speed: bool = True,
+) -> ScratchProbe:
+    """Return scratch capacity and optionally a cached sequential-write sample.
 
-    The speed sample is intentionally small and labeled as indicative in the UI;
-    it is used to distinguish obviously slow scratch locations, not as a formal
-    disk benchmark.
+    Full-utilization mode disables the speed sample entirely: free/total space
+    is still read so impossible outputs can be rejected, but disk throughput is
+    not benchmarked or used to throttle the render.
     """
 
     root = path.expanduser().resolve(strict=False)
@@ -501,32 +507,32 @@ def probe_scratch(path: Path, *, sample_mb: int = 8, cache_seconds: float = 900.
             volume = f"dev:{root.stat().st_dev}"
         except OSError:
             volume = str(root.anchor or "/")
-    now = time.monotonic()
-    cached = _speed_probe_cache.get(volume)
-    speed: float | None
-    if cached and now - cached[0] <= cache_seconds:
-        speed = cached[1]
-    else:
-        speed = None
-        probe = root / f".cinepulse-speed-{os.getpid()}-{time.time_ns()}.tmp"
-        payload = b"\0" * (1024 * 1024)
-        try:
-            start = time.perf_counter()
-            with probe.open("wb", buffering=0) as handle:
-                for _ in range(max(1, int(sample_mb))):
-                    handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            elapsed = max(0.001, time.perf_counter() - start)
-            speed = max(0.0, float(sample_mb) / elapsed)
-        except OSError:
-            speed = None
-        finally:
+    speed: float | None = None
+    if measure_speed:
+        now = time.monotonic()
+        cached = _speed_probe_cache.get(volume)
+        if cached and now - cached[0] <= cache_seconds:
+            speed = cached[1]
+        else:
+            probe = root / f".cinepulse-speed-{os.getpid()}-{time.time_ns()}.tmp"
+            payload = b"\0" * (1024 * 1024)
             try:
-                probe.unlink(missing_ok=True)
+                start = time.perf_counter()
+                with probe.open("wb", buffering=0) as handle:
+                    for _ in range(max(1, int(sample_mb))):
+                        handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                elapsed = max(0.001, time.perf_counter() - start)
+                speed = max(0.0, float(sample_mb) / elapsed)
             except OSError:
-                pass
-        _speed_probe_cache[volume] = (now, speed)
+                speed = None
+            finally:
+                try:
+                    probe.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            _speed_probe_cache[volume] = (now, speed)
     return ScratchProbe(
         path=root,
         volume=volume,
