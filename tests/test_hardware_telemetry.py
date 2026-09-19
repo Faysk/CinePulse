@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from cinepulse.hardware_telemetry import (
     GpuSample,
     HardwareSample,
     HardwareTelemetrySession,
+    NvidiaSmiSampler,
     StageEvent,
     benchmark_summary,
     compare_benchmarks,
@@ -28,7 +31,12 @@ def sample(t: float, stage: str, gpu: float, cpu: float, vram: float = 4000.0) -
         ram_percent=31.25,
         disk_read_mbps=100 + t,
         disk_write_mbps=200 + t,
-        gpus=(GpuSample(index=0, name="RTX", utilization_percent=gpu, vram_used_mb=vram, vram_free_mb=8000-vram, power_w=90+gpu/10, temperature_c=60+gpu/20),),
+        gpus=(GpuSample(
+            index=0, name="RTX", utilization_percent=gpu,
+            encoder_utilization_percent=gpu / 2, decoder_utilization_percent=gpu / 4,
+            vram_used_mb=vram, vram_free_mb=8000-vram,
+            power_w=90+gpu/10, temperature_c=60+gpu/20,
+        ),),
     )
 
 
@@ -40,7 +48,35 @@ def test_summary_keeps_stage_wall_time_and_active_gpu() -> None:
     assert summary["stages"]["startup"]["wall_seconds"] == 2.0
     assert summary["stages"]["IA"]["wall_seconds"] == 6.0
     assert summary["stages"]["IA"]["gpu"]["peak_utilization_percent"] == 95
+    assert summary["stages"]["IA"]["gpu"]["peak_encoder_utilization_percent"] == 47.5
+    assert summary["stages"]["IA"]["gpu"]["peak_decoder_utilization_percent"] == 23.75
     assert summary["stages"]["IA"]["cpu"]["peak_percent"] == 55
+
+
+def test_nvidia_sampler_reads_video_engine_utilization() -> None:
+    row = "0, RTX Test, 999.1, 91, 62, 8192, 7000, 1192, 150, 200, 67, 2400, 10000, P2, 73, 58\n"
+    result = SimpleNamespace(returncode=0, stdout=row)
+    with patch("cinepulse.hardware_telemetry.subprocess.run", return_value=result) as run:
+        samples = NvidiaSmiSampler("nvidia-smi").sample()
+    assert len(samples) == 1
+    assert samples[0].encoder_utilization_percent == 73
+    assert samples[0].decoder_utilization_percent == 58
+    assert run.call_count == 1
+
+
+def test_nvidia_sampler_falls_back_when_video_engine_fields_are_unsupported() -> None:
+    failed = SimpleNamespace(returncode=1, stdout="")
+    base = SimpleNamespace(
+        returncode=0,
+        stdout="0, RTX Legacy, 555.1, 80, 40, 8192, 4096, 4096, 120, 180, 65, 2200, 9000, P2\n",
+    )
+    with patch("cinepulse.hardware_telemetry.subprocess.run", side_effect=(failed, base)) as run:
+        samples = NvidiaSmiSampler("nvidia-smi").sample()
+    assert len(samples) == 1
+    assert samples[0].utilization_percent == 80
+    assert samples[0].encoder_utilization_percent is None
+    assert samples[0].decoder_utilization_percent is None
+    assert run.call_count == 2
 
 
 class FakeCpu:
