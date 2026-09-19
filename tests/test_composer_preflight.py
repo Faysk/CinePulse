@@ -33,7 +33,8 @@ def profile(*, still_image: bool = False) -> ComposerBaseProfile:
 
 class ComposerPreflightTests(unittest.TestCase):
     def test_estimate_accounts_for_atomic_visual_and_mux_outputs(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, (
+        with (
+            tempfile.TemporaryDirectory() as temporary,
             patch("cinepulse.composer_preflight.shutil.disk_usage", return_value=DiskUsage(100 * GIB)),
             patch("cinepulse.composer_preflight._available_ram_bytes", return_value=16 * GIB),
         ):
@@ -43,7 +44,8 @@ class ComposerPreflightTests(unittest.TestCase):
         self.assertGreater(estimate.estimated_peak_ram_bytes, estimate.frame_bytes * 4)
 
     def test_still_background_uses_lower_but_nonzero_lossless_planning_floor(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, (
+        with (
+            tempfile.TemporaryDirectory() as temporary,
             patch("cinepulse.composer_preflight.shutil.disk_usage", return_value=DiskUsage(100 * GIB)),
             patch("cinepulse.composer_preflight._available_ram_bytes", return_value=16 * GIB),
         ):
@@ -53,7 +55,8 @@ class ComposerPreflightTests(unittest.TestCase):
         self.assertLess(still.estimated_visual_master_bytes, video.estimated_visual_master_bytes)
 
     def test_insufficient_disk_fails_before_render(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, (
+        with (
+            tempfile.TemporaryDirectory() as temporary,
             patch("cinepulse.composer_preflight.shutil.disk_usage", return_value=DiskUsage(1)),
             patch("cinepulse.composer_preflight._available_ram_bytes", return_value=16 * GIB),
         ):
@@ -61,7 +64,8 @@ class ComposerPreflightTests(unittest.TestCase):
                 validate_composer_resources(profile(), Path(temporary))
 
     def test_insufficient_ram_fails_before_render(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, (
+        with (
+            tempfile.TemporaryDirectory() as temporary,
             patch("cinepulse.composer_preflight.shutil.disk_usage", return_value=DiskUsage(100 * GIB)),
             patch("cinepulse.composer_preflight._available_ram_bytes", return_value=64 * 1024**2),
         ):
