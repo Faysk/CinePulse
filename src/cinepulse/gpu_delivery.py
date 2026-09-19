@@ -88,6 +88,31 @@ def _same_aspect(source_w: int, source_h: int, target_w: int, target_h: int) -> 
     return abs(left - right) <= 1e-6
 
 
+def resident_vram_floor_mb(
+    *,
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+    pixel_format: str,
+) -> float:
+    """Estimate a conservative live-VRAM floor for resident decode/scale/encode.
+
+    The estimate covers a bounded pool of decode, scale and encoder surfaces
+    plus fixed driver/codec headroom. It is a runtime admission guard only and
+    never substitutes for exact physical evidence.
+    """
+    pixels = max(
+        1,
+        max(int(source_width), 1) * max(int(source_height), 1),
+        max(int(target_width), 1) * max(int(target_height), 1),
+    )
+    fmt = str(pixel_format or "").lower()
+    bytes_per_pixel = 3.0 if any(token in fmt for token in ("10", "12", "16", "p010", "p016")) else 1.5
+    surface_mb = pixels * bytes_per_pixel / (1024.0 * 1024.0)
+    return max(1024.0, surface_mb * 24.0 + 512.0)
+
+
 def select_resident_delivery_route(
     *,
     hardware: HardwareProfile,
@@ -103,6 +128,7 @@ def select_resident_delivery_route(
     bitrate_mbps: int,
     use_cpu: bool,
     color_already_final: bool,
+    vram_free_mb: float | int | None,
     gpu_index: int = 0,
 ) -> ResidentDeliveryRoute:
     if use_cpu:
@@ -111,6 +137,8 @@ def select_resident_delivery_route(
         return ResidentDeliveryRoute(False, "resident H5 route currently proves HEVC/NVENC only")
     if not hardware.gpu:
         return ResidentDeliveryRoute(False, "no NVIDIA GPU detected")
+    if vram_free_mb is None:
+        return ResidentDeliveryRoute(False, "live VRAM headroom is unavailable")
     if not color_already_final or not _known_sdr_bt709(source_profile):
         return ResidentDeliveryRoute(False, "color/HDR conversion is not equivalent to the resident CUDA envelope")
     if abs(float(source_fps) - float(target_fps)) > 0.01:
@@ -127,6 +155,23 @@ def select_resident_delivery_route(
     scaler = caps.cuda_scale if do_scale else None
     if do_scale and not scaler:
         return ResidentDeliveryRoute(False, "CUDA scaler unavailable for requested geometry")
+
+    required_vram = resident_vram_floor_mb(
+        source_width=source_w,
+        source_height=source_h,
+        target_width=target_width,
+        target_height=target_height,
+        pixel_format=delivery_plan.pixel_format,
+    )
+    try:
+        live_vram = max(0.0, float(vram_free_mb))
+    except (TypeError, ValueError):
+        return ResidentDeliveryRoute(False, "live VRAM headroom is invalid")
+    if live_vram < required_vram:
+        return ResidentDeliveryRoute(
+            False,
+            f"live VRAM headroom {live_vram:.0f} MiB is below resident floor {required_vram:.0f} MiB",
+        )
 
     contract = cinepulse_hevc_nvenc_contract(
         pixel_format=delivery_plan.pixel_format,
