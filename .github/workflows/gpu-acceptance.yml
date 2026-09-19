@@ -116,6 +116,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Environment isolation failed.' }
           ./scripts/Test-NeuralInstaller.ps1 -Python (Get-Command python).Source
           if ($LASTEXITCODE -ne 0) { throw 'Neural runtime resolver failed.' }
+      - name: Physical Real-ESRGAN autotune acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Real = Join-Path $PWD 'components/real-esrgan/realesrgan-ncnn-vulkan.exe'
+          $Models = Join-Path $PWD 'components/real-esrgan/models'
+          $Input = Join-Path $PWD 'artifacts/gpu/realesrgan-input'
+          $Work = Join-Path $PWD 'artifacts/gpu/realesrgan-work'
+          $Cache = Join-Path $PWD 'cache/hardware/realesrgan-tuning.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/realesrgan-autotune.json'
+          New-Item -ItemType Directory -Force -Path $Input, (Split-Path -Parent $Cache), (Split-Path -Parent $Evidence) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -frames:v 6 (Join-Path $Input 'frame%08d.png')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create bounded Real-ESRGAN physical sample.' }
+          python scripts/realesrgan_autotune.py $Input $Cache --executable $Real --model-dir $Models --work-dir $Work --timeout 300 | Tee-Object -FilePath $Evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Physical Real-ESRGAN autotune acceptance failed.' }
+          if (-not (Test-Path -LiteralPath $Cache)) { throw 'Real-ESRGAN tuning evidence cache was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'Real-ESRGAN tuning evidence report was not created.' }
       - name: GPU gate
         run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
       - name: Recovery RIFE 8K UHD acceptance
@@ -127,6 +145,8 @@ jobs:
           name: cinepulse-gpu-acceptance
           path: |
             artifacts/ci/*.json
+            artifacts/gpu/*.json
+            cache/hardware/realesrgan-tuning.json
             data/test-runs/**/report.json
             data/logs/installer.log
           if-no-files-found: warn
