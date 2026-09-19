@@ -15,6 +15,7 @@ from cinepulse.storage_engine import (
     resolve_scratch_dir,
     probe_scratch,
     touch_cache_entry,
+    neural_chunk_workset_gb,
     _compressed_gb,
 )
 
@@ -31,6 +32,41 @@ class StorageEngineTests(unittest.TestCase):
         )
         values.update(overrides)
         return build_render_plan(PlanInput(**values))
+
+    def test_realesrgan_can_drop_to_one_frame_when_budget_is_tight(self):
+        source = FrameSpec(7680, 4320, 30)
+        target = FrameSpec(15360, 8640, 30)
+        frames = choose_chunk_frames(
+            source,
+            target,
+            budget_gb=0.5,
+            minimum=1,
+        )
+        self.assertEqual(frames, 1)
+        self.assertGreater(
+            neural_chunk_workset_gb(source, target, 2),
+            neural_chunk_workset_gb(source, target, 1),
+        )
+
+    def test_rife_minimum_two_frames_can_exceed_tiny_budget_and_is_measurable(self):
+        source = FrameSpec(11520, 6480, 30)
+        target = FrameSpec(11520, 6480, 60)
+        minimum = neural_chunk_workset_gb(
+            source,
+            target,
+            2,
+            output_frames_per_input=2.0,
+        )
+        self.assertGreater(minimum, 0.5)
+        self.assertEqual(
+            choose_chunk_frames(
+                source,
+                target,
+                budget_gb=0.5,
+                output_frames_per_input=2.0,
+            ),
+            2,
+        )
 
     def test_chunk_size_shrinks_for_larger_frames(self):
         small = choose_chunk_frames(FrameSpec(640, 360, 30), FrameSpec(1280, 720, 30), budget_gb=1)
