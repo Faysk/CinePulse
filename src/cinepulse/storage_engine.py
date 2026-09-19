@@ -217,7 +217,7 @@ def _compressed_gb(spec: FrameSpec, duration: float, *, lossless: bool) -> float
     return mbps * seconds / 8 / 1024
 
 
-def _neural_chunk_gb(
+def neural_chunk_workset_gb(
     source: FrameSpec,
     target: FrameSpec,
     chunk_frames: int,
@@ -315,8 +315,13 @@ def estimate_storage(
     ai_chunk = MAX_CHUNK_FRAMES
     if ai.attempts and ai.input_spec and ai.output_spec and ai.materializes_frames:
         seconds = stage_duration("enhancement")
-        ai_chunk = choose_chunk_frames(ai.input_spec, ai.output_spec, budget_gb=ai_budget)
-        working = _neural_chunk_gb(ai.input_spec, ai.output_spec, ai_chunk)
+        ai_chunk = choose_chunk_frames(
+            ai.input_spec,
+            ai.output_spec,
+            budget_gb=ai_budget,
+            minimum=1,
+        )
+        working = neural_chunk_workset_gb(ai.input_spec, ai.output_spec, ai_chunk)
         concurrent_working = working * ai_inflight
         enhanced = _compressed_gb(ai.output_spec, seconds, lossless=True)
         # Current + prefetch + background pack can coexist. Model the bounded
@@ -348,7 +353,7 @@ def estimate_storage(
             rife_base.input_spec, rife_base.output_spec, budget_gb=rife_budget,
             output_frames_per_input=ratio,
         )
-        working = _neural_chunk_gb(
+        working = neural_chunk_workset_gb(
             rife_base.input_spec, rife_base.output_spec, rife_chunk,
             output_frames_per_input=ratio,
         )
@@ -416,7 +421,7 @@ def estimate_storage(
             rife.input_spec, rife.output_spec, budget_gb=rife_budget,
             output_frames_per_input=ratio,
         )
-        working = _neural_chunk_gb(
+        working = neural_chunk_workset_gb(
             rife.input_spec, rife.output_spec, rife_chunk,
             output_frames_per_input=ratio,
         )
