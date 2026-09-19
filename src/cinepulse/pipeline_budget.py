@@ -42,22 +42,27 @@ def derive_pipeline_budget(
     scratch = max(0.0, float(scratch_free_gb))
     speed = None if scratch_write_mbps is None else max(0.0, float(scratch_write_mbps))
 
-    # Preserve OS/driver/UI headroom even in Dedicated mode. The neural PNG
-    # workset is disk-backed, so RAM is a guardrail rather than a target.
-    ram_reserve = max(2.0, ram * (0.15 if dedicated else 0.25))
+    # Preserve OS/driver/UI headroom even in Dedicated mode, but let abundant
+    # host RAM become a real throughput resource. Neural tools still use file
+    # paths, so the OS page cache is the zero-copy-compatible RAM cache: larger
+    # bounded chunks reduce process/FFmpeg churn and keep recently written PNGs
+    # hot in memory for the next stage instead of forcing tiny disk-backed lots.
+    ram_reserve = max(4.0 if dedicated else 6.0, ram * (0.12 if dedicated else 0.20))
     ram_usable = max(0.25, ram - ram_reserve) if ram > 0 else 4.0
     scratch_reserve = max(2.0, scratch * 0.10)
     scratch_usable = max(0.25, scratch - scratch_reserve)
 
-    # RIFE can materialize roughly 2x+ output frames for one input chunk, so
-    # keep a tighter default than Real-ESRGAN at the same machine headroom.
-    stage_cap = 8.0 if stage == "realesrgan" else 6.0
-    base = min(stage_cap, ram_usable * 0.30, scratch_usable * 0.20)
-    if vram_gb > 0:
-        base = min(base, max(1.0, vram_gb * (0.75 if stage == "realesrgan" else 0.55)))
-    # Never expand solely because one critical resource signal is absent.
-    # Legacy 4 GiB remains the upper fallback until RAM, scratch and VRAM
-    # headroom are all known. Throughput controls overlap separately below.
+    # Chunk length primarily consumes host RAM/page-cache + scratch. VRAM is
+    # governed independently by model tile/process concurrency, so tying chunk
+    # length linearly to free VRAM unnecessarily starved high-RAM / 8 GB systems.
+    # RIFE remains tighter because it can materialize 2x+ output frames.
+    stage_cap = 16.0 if stage == "realesrgan" else 12.0
+    ram_fraction = 0.40 if stage == "realesrgan" else 0.32
+    base = min(stage_cap, ram_usable * ram_fraction, scratch_usable * 0.20)
+
+    # Never expand solely because one critical signal is absent. Legacy 4 GiB
+    # remains the upper fallback until RAM, scratch and VRAM telemetry are all
+    # known, even though VRAM no longer directly caps the host workset.
     if ram <= 0 or scratch <= 0 or vram_gb <= 0:
         base = min(base, 4.0)
     chunk_budget = max(0.5, min(stage_cap, base))
@@ -76,7 +81,7 @@ def derive_pipeline_budget(
     max_inflight = max(1, min(3, max_inflight))
 
     reasons = [
-        f"chunk={chunk_budget:.2f}GiB from RAM/scratch/VRAM headroom",
+        f"chunk={chunk_budget:.2f}GiB host workset from RAM/page-cache + scratch headroom",
         f"scratch={'unknown' if speed is None else f'{speed:.0f}MB/s'}",
         f"inflight={max_inflight}",
     ]
