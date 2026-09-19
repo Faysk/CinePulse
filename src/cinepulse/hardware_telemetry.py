@@ -510,8 +510,17 @@ def _active_gpu(samples: list[HardwareSample]) -> int | None:
     scores: dict[int, list[float]] = {}
     for sample in samples:
         for gpu in sample.gpus:
-            if gpu.utilization_percent is not None:
-                scores.setdefault(gpu.index, []).append(gpu.utilization_percent)
+            engines = (
+                gpu.utilization_percent,
+                gpu.encoder_utilization_percent,
+                gpu.decoder_utilization_percent,
+                gpu.memory_utilization_percent,
+            )
+            values = [float(value) for value in engines if value is not None]
+            if values:
+                # NVENC/NVDEC can be busy while the generic graphics/compute
+                # counter stays low. Score the busiest engine for each sample.
+                scores.setdefault(gpu.index, []).append(max(values))
     if not scores:
         return None
     return max(scores, key=lambda index: _mean(scores[index]) or 0.0)
