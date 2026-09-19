@@ -28,6 +28,8 @@ def build_command(
     outgoing: Path,
     frames: int,
     use_cpu: bool,
+    *,
+    component_fingerprint: str = "",
 ) -> list[str]:
     """Build the crash-safe CinePulse RIFE wrapper command.
 
@@ -43,7 +45,7 @@ def build_command(
         raise FileNotFoundError("Executável ou modelo RIFE não encontrado.")
     if frames < 2:
         raise ValueError("RIFE requer ao menos dois quadros de saída.")
-    return [
+    command = [
         sys.executable,
         "-m",
         SAFE_RUNNER_MODULE,
@@ -60,3 +62,6 @@ def build_command(
         "--device",
         "cpu" if use_cpu else "gpu",
     ]
+    if component_fingerprint:
+        command += ["--component-fingerprint", str(component_fingerprint)]
+    return command

@@ -18,13 +18,25 @@ class H5RuntimeIntegrationTests(unittest.TestCase):
         self.assertIsNone(ai.parameters["runtime_reporter"].default)
         self.assertIsNone(rife.parameters["runtime_reporter"].default)
 
-    def test_neural_loops_only_downshift_h4_permissions(self) -> None:
+    def test_neural_loops_restore_only_the_initially_approved_h4_permissions(self) -> None:
         ai = inspect.getsource(VideoOptimizerStudio._enhance_clip_ai)
         rife = inspect.getsource(VideoOptimizerStudio._interpolate_rife)
-        self.assertIn("overlap_extract = overlap_extract and decision.allow_extract_overlap", ai)
-        self.assertIn("overlap_pack = overlap_pack and decision.allow_pack_overlap", ai)
+        self.assertIn("baseline_overlap_extract = bool(overlap_extract)", ai)
+        self.assertIn("baseline_overlap_pack = bool(overlap_pack)", ai)
+        self.assertIn(
+            "overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap",
+            ai,
+        )
+        self.assertIn(
+            "overlap_pack = baseline_overlap_pack and decision.allow_pack_overlap",
+            ai,
+        )
         self.assertIn("decision.limit_chunk_frames(chunk_frames)", ai)
-        self.assertIn("overlap_extract = overlap_extract and decision.allow_extract_overlap", rife)
+        self.assertIn("baseline_overlap_extract = bool(overlap_extract)", rife)
+        self.assertIn(
+            "overlap_extract = baseline_overlap_extract and decision.allow_extract_overlap",
+            rife,
+        )
         self.assertIn("decision.limit_chunk_frames(chunk_frames, minimum=2)", rife)
 
     def test_pressure_cancels_future_prefetch_before_smaller_chunk_is_planned(self) -> None:

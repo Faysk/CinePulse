@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from cinepulse.component_identity import bootstrap_component_fingerprint
 from cinepulse.hardware import detect_hardware
 from cinepulse.rife_benchmark import QUALITY_PSNR_FLOOR_DB, benchmark_and_record
 from cinepulse.rife_safe_runner import validate_png
@@ -19,7 +20,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cache", type=Path, required=True)
     result.add_argument("--work", type=Path, required=True)
     result.add_argument("--ffmpeg", default="ffmpeg")
-    result.add_argument("--gpu-index", type=int, default=0)
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--timeout", type=float, default=900.0)
     return result
 
@@ -31,16 +32,28 @@ def main() -> int:
         raise SystemExit("RIFE benchmark requires at least two PNG input frames")
     width, height = validate_png(frames[0])
     uhd = max(width, height) >= 3840 or width * height >= 3840 * 2160
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu:
         raise SystemExit("No NVIDIA GPU was detected; physical RIFE GPU tuning was not recorded")
+    gpu_index = hardware.gpu_index
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     if not ffmpeg:
         raise SystemExit("FFmpeg is required for the RIFE black-frame and quality-parity gates")
+    component_fingerprint = bootstrap_component_fingerprint(
+        "rife",
+        component_root=args.rife.parent,
+        critical_files=(
+            args.rife,
+            args.model / "flownet.bin",
+            args.model / "flownet.param",
+        ),
+    )
+    if not component_fingerprint:
+        raise SystemExit("RIFE component fingerprint is unavailable; refusing to record tuning evidence")
     candidates = safe_candidates(
         uhd=uhd,
         vram_mb=hardware.vram_mb,
-        gpu_index=max(0, args.gpu_index),
+        gpu_index=gpu_index,
     )
     key = RifeTuningKey(
         hardware.gpu,
@@ -49,6 +62,10 @@ def main() -> int:
         args.model.name or "rife-v4.6",
         width,
         height,
+        component_fingerprint,
+        cpu_name=hardware.cpu,
+        cpu_threads=hardware.cpu_threads,
+        gpu_index=gpu_index,
     )
     store = RifeTuningStore(args.cache)
     winner, samples = benchmark_and_record(

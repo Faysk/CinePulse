@@ -129,7 +129,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--aq-strength", type=int, default=8); p.add_argument("--multipass", default="fullres")
     p.add_argument("--b-ref-mode", default="middle"); p.add_argument("--gop", type=int, default=30,
         help="Must match max(12, delivery_fps//2) for the target runtime job.")
-    p.add_argument("--width", type=int, default=0); p.add_argument("--height", type=int, default=0); p.add_argument("--gpu-index", type=int, default=0)
+    p.add_argument("--width", type=int, default=0); p.add_argument("--height", type=int, default=0); p.add_argument("--gpu-index", type=int, default=None)
     p.add_argument("--seek-seconds", type=float, default=1.0); p.add_argument("--seek-clip-seconds", type=float, default=1.0)
     p.add_argument("--timeout", type=float, default=1800.0)
     return p
@@ -148,29 +148,32 @@ def main() -> int:
     source_w, source_h = int(sv.get("width") or 0), int(sv.get("height") or 0); width, height = (args.width or source_w), (args.height or source_h)
     do_scale = (width, height) != (source_w, source_h); scaler = caps.cuda_scale if do_scale else None
     if do_scale and not scaler: raise SystemExit("CUDA scaler unavailable for requested geometry")
+    hardware = detect_hardware(args.gpu_index)
+    if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
+    gpu_index = hardware.gpu_index
     contract = NvencContract(
         encoder=args.encoder, preset=args.preset, rate_control=args.rc, pixel_format=args.pix_fmt, profile=args.profile,
         cq=args.cq, qp=args.qp, bitrate_kbps=args.bitrate_kbps, maxrate_kbps=args.maxrate_kbps,
         bufsize_kbps=args.bufsize_kbps, lookahead=args.lookahead, bframes=args.bframes, tune=args.tune,
         spatial_aq=args.spatial_aq, temporal_aq=args.temporal_aq, aq_strength=args.aq_strength,
         multipass=args.multipass, b_ref_mode=args.b_ref_mode, gop=args.gop,
+        gpu_index=gpu_index,
     )
-    hardware = detect_hardware()
-    if not hardware.gpu: raise SystemExit("NVIDIA GPU required")
     key = ResidentEncodeKey(hardware.gpu, hardware.driver or "unknown-driver", caps.fingerprint, codec,
                             source_w, source_h, width, height, profile.pixel_format, profile.primaries,
-                            profile.transfer, profile.space, profile.range, scaler or "none", contract.token())
+                            profile.transfer, profile.space, profile.range, scaler or "none", contract.token(),
+                            gpu_index=gpu_index)
     with tempfile.TemporaryDirectory(prefix="cinepulse-h5-resident-") as tmp:
         root = Path(tmp); baseline = root/"baseline.mkv"; candidate = root/"candidate.mkv"
         bsec,_ = run(baseline_command(ffmpeg,args.input,baseline,contract=contract,profile=profile,width=width,height=height,seek=0,clip=0), args.timeout)
-        csec,_ = run(candidate_command(ffmpeg,args.input,candidate,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=0,clip=0,gpu_index=args.gpu_index), args.timeout)
+        csec,_ = run(candidate_command(ffmpeg,args.input,candidate,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=0,clip=0,gpu_index=gpu_index), args.timeout)
         bp,cp=probe(ffprobe,baseline),probe(ffprobe,candidate); bv,cv=video(bp),video(cp)
         frame_ok=frames(bv) is not None and frames(bv)==frames(cv); metadata_ok=signature(bv)==signature(cv)
         db,dc=duration(bp),duration(cp); audio_ok=db is not None and dc is not None and abs(db-dc)<=0.020 and bool(audio(source_probe))==bool(audio(bp))==bool(audio(cp))
         psnr=metric(ffmpeg,baseline,candidate,"psnr",args.timeout); ssim=metric(ffmpeg,baseline,candidate,"ssim",args.timeout)
         sb=root/"seek-baseline.mkv"; sc=root/"seek-candidate.mkv"; seek=max(.001,args.seek_seconds); clip=max(.05,args.seek_clip_seconds)
         run(baseline_command(ffmpeg,args.input,sb,contract=contract,profile=profile,width=width,height=height,seek=seek,clip=clip),args.timeout)
-        run(candidate_command(ffmpeg,args.input,sc,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=seek,clip=clip,gpu_index=args.gpu_index),args.timeout)
+        run(candidate_command(ffmpeg,args.input,sc,decoder=decoder,scaler=scaler,contract=contract,profile=profile,width=width,height=height,seek=seek,clip=clip,gpu_index=gpu_index),args.timeout)
         spb,spc=probe(ffprobe,sb),probe(ffprobe,sc); seek_ok=frames(video(spb))==frames(video(spc)) and signature(video(spb))==signature(video(spc)) and metric(ffmpeg,sb,sc,"psnr",args.timeout)>=55 and metric(ffmpeg,sb,sc,"ssim",args.timeout)>=.999
         decode_ok=bool(video(bp)) and bool(video(cp))
         ev=ResidentEncodeEvidence(bsec,csec,psnr,ssim,frame_ok,metadata_ok,audio_ok,seek_ok,decode_ok,baseline.stat().st_size,candidate.stat().st_size)

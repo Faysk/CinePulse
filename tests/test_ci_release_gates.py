@@ -92,9 +92,59 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("Test-IsolatedEnvironment.ps1", text)
         self.assertIn("Test-NeuralInstaller.ps1", text)
         self.assertIn("--profile gpu", text)
+        self.assertIn("gpu-contracts", " ".join(step.name for step in GPU_STEPS))
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.actor == 'Faysk'", text)
         self.assertIn("Recovery RIFE 8K UHD acceptance", text)
+        self.assertIn("Physical Real-ESRGAN autotune acceptance", text)
+        self.assertIn("scripts/realesrgan_autotune.py", text)
+        self.assertIn("cache/hardware/realesrgan-tuning.json", text)
+        self.assertIn("artifacts/gpu/realesrgan-autotune.json", text)
+        self.assertIn("Physical RIFE autotune acceptance", text)
+        self.assertIn("scripts/rife_benchmark.py", text)
+        self.assertIn("cache/hardware/rife-tuning.json", text)
+        self.assertIn("artifacts/gpu/rife-autotune.json", text)
+        self.assertIn("Physical Composer CUDA acceptance", text)
+        self.assertIn("scripts/gpu_compositor_benchmark.py", text)
+        self.assertIn("cache/hardware/gpu-compositor.json", text)
+        self.assertIn("artifacts/gpu/composer-h6.json", text)
+        self.assertIn("Physical NVDEC decode acceptance", text)
+        self.assertIn("scripts/gpu_media_benchmark.py", text)
+        self.assertIn("cache/hardware/gpu-media-tuning.json", text)
+        self.assertIn("artifacts/gpu/nvdec-benchmark.json", text)
+        self.assertIn("Physical resident NVDEC CUDA NVENC acceptance", text)
+        self.assertIn("scripts/gpu_resident_encode_benchmark.py", text)
+        self.assertIn("cache/hardware/resident-encode.json", text)
+        self.assertIn("artifacts/gpu/resident-encode-1080p60.json", text)
+        self.assertIn("artifacts/gpu/resident-encode-4k60.json", text)
+        self.assertIn("--resident-base", text)
+        self.assertIn("artifacts/gpu/composer-h6-resident.json", text)
+        for path in (
+            "scripts/hardware_benchmark.py",
+            "src/cinepulse/performance_policy.py",
+            "src/cinepulse/pipeline_budget.py",
+            "src/cinepulse/realesrgan_tuning.py",
+            "src/cinepulse/rife_tuning.py",
+            "src/cinepulse/gpu_media.py",
+            "src/cinepulse/gpu_delivery.py",
+            "src/cinepulse/process_control.py",
+            "src/cinepulse/storage_engine.py",
+            "src/cinepulse/component_identity.py",
+            "src/cinepulse/studio.py",
+            "tests/test_performance_policy.py",
+            "tests/test_pipeline_budget.py",
+            "tests/test_realesrgan_tuning.py",
+            "tests/test_rife_tuning.py",
+            "tests/test_gpu_media.py",
+            "tests/test_gpu_delivery.py",
+            "tests/test_gpu_encode.py",
+            "tests/test_process_control.py",
+            "tests/test_hardware_benchmark_cli.py",
+            "tests/test_storage_engine.py",
+            "tests/test_component_identity.py",
+            "tests/test_ai_cache_identity.py",
+        ):
+            self.assertIn(path, text, f"GPU acceptance must trigger for {path}")
 
     def test_release_gate_documents_phase9_contract(self) -> None:
         text = (ROOT / "scripts/release_gate.py").read_text(encoding="utf-8")

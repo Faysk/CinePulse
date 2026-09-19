@@ -4,10 +4,12 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cinepulse.rife_safe_runner import RifeExecutionPolicy, _run_native_with_rollback
 from cinepulse.rife_tuning import RifeTuningKey, RifeTuningStore
+from cinepulse.studio import VideoOptimizerStudio
 
 
 def fake_png(width: int = 64, height: int = 36) -> bytes:
@@ -61,7 +63,10 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
                 for index in range(4):
                     (native / f"{index:08d}.png").write_bytes(fake_png())
 
-            with patch("cinepulse.rife_safe_runner._run", side_effect=fake_run):
+            with (
+                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
+                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=7000.0),
+            ):
                 applied = _run_native_with_rollback(
                     rife_executable=root / "rife.exe",
                     model=root / "rife-v4.6",
@@ -75,6 +80,118 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
             self.assertEqual(applied.jobs, "1:1:1")
             self.assertEqual(calls, ["1:2:1", "1:1:1"])
             self.assertIsNone(store.lookup(key))
+
+    def test_studio_rife_aborts_on_short_source_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rife_exe = root / "rife.exe"
+            rife_exe.write_bytes(b"x")
+            rife_model = root / "rife-v4.6"
+            rife_model.mkdir()
+            studio = VideoOptimizerStudio.__new__(VideoOptimizerStudio)
+            studio._cancelled = False
+            studio._process = None
+            studio._log = lambda *_args, **_kwargs: None
+            studio._set_stage = lambda *_args, **_kwargs: None
+            studio._push_progress = lambda *_args, **_kwargs: None
+
+            def fake_ffmpeg(command, *_args, **_kwargs):
+                requested = int(command[command.index("-frames:v") + 1])
+                pattern = Path(command[-1])
+                pattern.parent.mkdir(parents=True, exist_ok=True)
+                # Reproduce the regression: FFmpeg exits successfully but the
+                # chunk contains one fewer frame than requested.
+                for index in range(max(0, requested - 1)):
+                    (pattern.parent / f"{index:08d}.png").write_bytes(b"x")
+
+            studio._run_ffmpeg = fake_ffmpeg
+            color_plan = SimpleNamespace(working_pix_fmt="yuv420p")
+            with (
+                patch("cinepulse.studio.RIFE_EXE", rife_exe),
+                patch("cinepulse.studio.RIFE_MODEL", rife_model),
+                patch("cinepulse.studio.probe_media", return_value={}),
+                patch("cinepulse.studio.first_video_size", return_value=(64, 36)),
+                patch("cinepulse.studio.choose_chunk_frames", return_value=4),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extração incompleta"):
+                    studio._interpolate_rife(
+                        "input.mp4",
+                        root,
+                        0.0,
+                        1.0,
+                        8.0,
+                        16.0,
+                        False,
+                        4,
+                        [],
+                        0.0,
+                        100.0,
+                        color_plan=color_plan,
+                    )
+
+    def test_measured_oom_preserves_tuning_when_live_vram_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            incoming = root / "in"
+            native = root / "native"
+            incoming.mkdir()
+            native.mkdir()
+            for index in range(2):
+                (incoming / f"{index:08d}.png").write_bytes(fake_png())
+
+            from cinepulse.rife_tuning import RifePolicy, RifeSample
+            key = RifeTuningKey("RTX Test", 8192, "999.1", "rife-v4.6", 1920, 1080)
+            store = RifeTuningStore(root / "rife-tuning.json")
+            fallback_policy = RifePolicy("2:2:2")
+            tuned = RifePolicy("3:3:3")
+            store.record_samples(
+                key,
+                (
+                    RifeSample(fallback_policy, 10.0, True, output_frames=4, expected_frames=4),
+                    RifeSample(tuned, 6.0, True, output_frames=4, expected_frames=4),
+                ),
+                fallback=fallback_policy,
+            )
+            self.assertEqual(store.lookup(key), tuned)
+
+            measured = RifeExecutionPolicy(False, "3:3:3", 4, 4, 0, True)
+            fallback = RifeExecutionPolicy(False, "2:2:2", 4, 4, 0, False)
+            calls = []
+
+            def fake_run(command, **_kwargs):
+                jobs = command[command.index("-j") + 1]
+                calls.append(jobs)
+                if jobs == "3:3:3":
+                    raise RuntimeError("VK_ERROR_OUT_OF_DEVICE_MEMORY")
+                for index in range(4):
+                    (native / f"{index:08d}.png").write_bytes(fake_png())
+
+            with (
+                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
+                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=2500.0),
+            ):
+                applied = _run_native_with_rollback(
+                    rife_executable=root / "rife.exe",
+                    model=root / "rife-v4.6",
+                    incoming=incoming,
+                    native_dir=native,
+                    policy=measured,
+                    fallback=fallback,
+                    tuning_key=key,
+                    tuning_store=store,
+                )
+            self.assertEqual(applied.jobs, "1:1:1")
+            self.assertEqual(calls, ["3:3:3", "1:1:1"])
+            self.assertEqual(store.lookup(key), tuned)
+
+    def test_unrelated_io_failure_does_not_delete_measured_tuning(self) -> None:
+        from cinepulse.rife_safe_runner import _should_invalidate_measured_tuning
+        measured = RifeExecutionPolicy(False, "3:3:3", 4, 4, 0, True)
+        invalidate, reason = _should_invalidate_measured_tuning(
+            RuntimeError("No space left on device while writing output"), measured
+        )
+        self.assertFalse(invalidate)
+        self.assertIn("not specific", reason)
 
     def test_baseline_failure_is_not_retried_forever(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

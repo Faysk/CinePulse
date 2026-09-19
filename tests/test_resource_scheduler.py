@@ -20,6 +20,19 @@ class ResourceSchedulerTests(unittest.TestCase):
         self.assertGreater(dedicated.threads, balanced.threads)
         self.assertLess(dedicated.threads, 20)
 
+    def test_overnight_cpu_heavy_stage_uses_full_logical_envelope(self) -> None:
+        plan = schedule_cpu_threads(
+            "encode", topology=self.topology, mode="overnight", gpu_active=False
+        )
+        self.assertEqual(plan.threads, self.topology.logical_cpus)
+        self.assertEqual(plan.reserve_logical, 0)
+
+    def test_overnight_gpu_neural_stage_still_keeps_host_feed_bounded(self) -> None:
+        plan = schedule_cpu_threads(
+            "neural_gpu", topology=self.topology, mode="overnight", gpu_active=True
+        )
+        self.assertLessEqual(plan.threads, 6)
+
     def test_gpu_neural_stage_keeps_host_threads_modest(self) -> None:
         plan = schedule_cpu_threads("neural_gpu", topology=self.topology, mode="dedicated", gpu_active=True)
         self.assertLessEqual(plan.threads, 6)

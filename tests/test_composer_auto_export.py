@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from cinepulse.composer_auto_export import _export_gpu, export_composer_auto
+from cinepulse.composer_auto_export import _export_gpu, _gpu_visual_command, export_composer_auto
 from cinepulse.composer_export import ComposerExportRequest, ComposerExportResult
 from cinepulse.composer_gpu_route import ComposerGpuRoute
 from cinepulse.composer_profile import ComposerBaseProfile
@@ -29,6 +29,12 @@ class Store:
     def invalidate(self, key) -> bool:
         self.invalidated.append(key)
         return True
+
+    def benchmark_due(self, key, *, cooldown_seconds=21600.0) -> bool:
+        return True
+
+    def record_rejection(self, key, evidence) -> None:
+        return None
 
 
 def make_request(root: Path) -> ComposerExportRequest:
@@ -55,6 +61,29 @@ def route(request: ComposerExportRequest, *, use_gpu: bool) -> ComposerGpuRoute:
 
 
 class ComposerAutoExportTests(unittest.TestCase):
+    def test_nvdec_resident_command_keeps_base_on_cuda(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            selected = route(request, use_gpu=True)
+            assert selected.key is not None
+            selected = replace(
+                selected,
+                key=replace(selected.key, gpu_index=1),
+                base_decoder="h264_cuvid",
+            )
+            command = _gpu_visual_command(request, selected, Path(temp) / "visual.mkv")
+            self.assertIn("-init_hw_device", command)
+            self.assertIn("cuda=cinepulse_gpu:1", command)
+            self.assertIn("-filter_hw_device", command)
+            self.assertEqual("cinepulse_gpu", command[command.index("-filter_hw_device") + 1])
+            self.assertIn("-hwaccel", command)
+            self.assertEqual("1", command[command.index("-hwaccel_device") + 1])
+            self.assertIn("-hwaccel_output_format", command)
+            self.assertIn("h264_cuvid", command)
+            graph = command[command.index("-filter_complex") + 1]
+            self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+            self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
+
     def test_still_background_stays_cpu_without_gpu_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
@@ -83,11 +112,72 @@ class ComposerAutoExportTests(unittest.TestCase):
             gpu.assert_not_called()
             cpu.assert_called_once()
 
+    def test_missing_exact_evidence_can_be_learned_then_promoted_to_gpu(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            missing = route(request, use_gpu=False)
+            missing = ComposerGpuRoute(
+                False,
+                "exact H6 GPU/driver/FFmpeg/profile/ordered-stack evidence is absent or stale",
+                missing.layer,
+                missing.key,
+                missing.layers,
+            )
+            with (
+                patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=missing),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
+                patch("cinepulse.composer_auto_export._learn_exact_gpu_route", return_value=True) as learn,
+                patch(
+                    "cinepulse.composer_auto_export._export_gpu",
+                    return_value=ComposerExportResult(request.output, 24),
+                ) as gpu,
+                patch("cinepulse.composer_auto_export.export_composer_reference") as cpu,
+            ):
+                result = export_composer_auto(
+                    request, hardware=GPU, capabilities=CAPS, store=Store()
+                )
+            self.assertEqual("cuda", result.backend)
+            self.assertTrue(result.gpu_attempted)
+            learn.assert_called_once()
+            gpu.assert_called_once()
+            cpu.assert_not_called()
+
+    def test_rejected_on_demand_learning_keeps_cpu_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            missing = route(request, use_gpu=False)
+            missing = ComposerGpuRoute(
+                False,
+                "exact H6 GPU/driver/FFmpeg/profile/ordered-stack evidence is absent or stale",
+                missing.layer,
+                missing.key,
+                missing.layers,
+            )
+            with (
+                patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=missing),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
+                patch("cinepulse.composer_auto_export._learn_exact_gpu_route", return_value=False) as learn,
+                patch("cinepulse.composer_auto_export._export_gpu") as gpu,
+                patch(
+                    "cinepulse.composer_auto_export.export_composer_reference",
+                    return_value=ComposerExportResult(request.output, 24),
+                ) as cpu,
+            ):
+                result = export_composer_auto(
+                    request, hardware=GPU, capabilities=CAPS, store=Store()
+                )
+            self.assertEqual("cpu-reference", result.backend)
+            self.assertFalse(result.gpu_attempted)
+            learn.assert_called_once()
+            gpu.assert_not_called()
+            cpu.assert_called_once()
+
     def test_approved_route_uses_gpu_and_does_not_touch_cpu(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
             with (
                 patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=route(request, use_gpu=True)),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
                 patch("cinepulse.composer_auto_export._export_gpu", return_value=ComposerExportResult(request.output, 24)) as gpu,
                 patch("cinepulse.composer_auto_export.export_composer_reference") as cpu,
             ):
@@ -97,6 +187,30 @@ class ComposerAutoExportTests(unittest.TestCase):
             gpu.assert_called_once()
             cpu.assert_not_called()
 
+    def test_low_live_vram_preserves_evidence_and_skips_gpu_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            store = Store()
+            selected = route(request, use_gpu=True)
+            with (
+                patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=selected),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=128.0),
+                patch("cinepulse.composer_auto_export._export_gpu") as gpu,
+                patch(
+                    "cinepulse.composer_auto_export.export_composer_reference",
+                    return_value=ComposerExportResult(request.output, 24),
+                ) as cpu,
+            ):
+                result = export_composer_auto(
+                    request, hardware=GPU, capabilities=CAPS, store=store
+                )
+            self.assertEqual("cpu-reference", result.backend)
+            self.assertFalse(result.gpu_attempted)
+            self.assertEqual("insufficient-live-vram", result.gpu_failure)
+            self.assertEqual([], store.invalidated)
+            gpu.assert_not_called()
+            cpu.assert_called_once()
+
     def test_gpu_failure_invalidates_exact_key_and_retries_cpu_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
@@ -104,6 +218,7 @@ class ComposerAutoExportTests(unittest.TestCase):
             selected = route(request, use_gpu=True)
             with (
                 patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=selected),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
                 patch("cinepulse.composer_auto_export._export_gpu", side_effect=RuntimeError("cuda exploded")),
                 patch("cinepulse.composer_auto_export.export_composer_reference", return_value=ComposerExportResult(request.output, 24)) as cpu,
             ):
@@ -120,6 +235,7 @@ class ComposerAutoExportTests(unittest.TestCase):
             store = Store()
             with (
                 patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=route(request, use_gpu=True)),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
                 patch("cinepulse.composer_auto_export._export_gpu", side_effect=InterruptedError("cancelled")),
                 patch("cinepulse.composer_auto_export.export_composer_reference") as cpu,
             ):

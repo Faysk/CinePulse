@@ -256,9 +256,16 @@ function Install-VerifiedArchive {
             foreach ($RequiredFile in $RequiredFiles) {
                 if (-not (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile))) { $Complete = $false }
             }
+            $StateKey = ([string]$State.key).Trim().ToLowerInvariant()
+            $ExpectedKey = $Key.Trim().ToLowerInvariant()
             $StateHash = ([string]$State.sha256).ToLowerInvariant()
             $ManifestHash = ([string]$Manifest.sha256).ToLowerInvariant()
-            if ($State.version -eq $Manifest.version -and $StateHash -eq $ManifestHash -and $Complete) { return }
+            if (
+                $StateKey -eq $ExpectedKey -and
+                $State.version -eq $Manifest.version -and
+                $StateHash -eq $ManifestHash -and
+                $Complete
+            ) { return }
         } catch { }
     }
     $StagingRoot = Join-Path $ComponentsRoot ".staging\$Key"
@@ -340,6 +347,10 @@ function Install-Demucs {
         if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar o runtime neural hash-locked do Demucs.' }
     }
     New-Item -ItemType Directory -Path $ModelRepo -Force | Out-Null
+    $WeightFingerprint = (
+        $BootstrapManifest.demucs.weights |
+        ForEach-Object { "$($_.file):$(([string]$_.sha256).Trim().ToLowerInvariant())" }
+    ) -join '|'
     foreach ($Weight in $BootstrapManifest.demucs.weights) {
         Get-VerifiedDownload -Name "modelo Demucs $($Weight.file)" -Url $Weight.url -Sha256 $Weight.sha256 -Destination (Join-Path $ModelRepo $Weight.file)
     }
@@ -349,13 +360,14 @@ weights:
   [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]]
 "@ | Set-Content -LiteralPath (Join-Path $ModelRepo 'htdemucs_ft.yaml') -Encoding UTF8
     @{
-        schema = 2
+        schema = 3
         python = $BootstrapManifest.python.version
         demucs = $BootstrapManifest.demucs.version
         torch = $BootstrapManifest.demucs.torch_version
         soundfile = $BootstrapManifest.demucs.soundfile_version
         cuda_runtime = $BootstrapManifest.demucs.cuda_runtime
         torch_index = $BootstrapManifest.demucs.torch_index
+        weights_fingerprint = $WeightFingerprint
     } | ConvertTo-Json | Set-Content -LiteralPath $DemucsState -Encoding UTF8
 }
 

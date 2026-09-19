@@ -4,8 +4,19 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from cinepulse.rife_safe_runner import execution_policy, validate_png, validate_png_sequence
+from cinepulse.rife_safe_runner import (
+    _hardware_tuning_policy,
+    _limit_policy_by_live_vram,
+    _run_native_with_rollback,
+    RifeExecutionPolicy,
+    execution_policy,
+    validate_png,
+    validate_png_sequence,
+)
+from cinepulse.hardware import HardwareProfile
+from cinepulse.rife_tuning import RifePolicy
 
 
 def _fake_png(width: int = 64, height: int = 36, *, complete: bool = True) -> bytes:
@@ -36,6 +47,145 @@ class RifeSafeRunnerTests(unittest.TestCase):
         policy = execution_policy(8, 1920, 1080, 16, "gpu")
         self.assertFalse(policy.uhd)
         self.assertEqual("2:2:2", policy.jobs)
+
+    def test_tuned_policy_is_suppressed_when_live_vram_is_unknown(self) -> None:
+        tuned = RifePolicy("3:3:3", 0)
+        selected, measured, reason = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=None, gpu_index=0
+        )
+        self.assertEqual(selected, RifePolicy("2:2:2", 0))
+        self.assertFalse(measured)
+        self.assertIn("unavailable", reason)
+
+    def test_low_live_vram_forces_serial_policy(self) -> None:
+        tuned = RifePolicy("3:3:3", 0)
+        selected, measured, _reason = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=2500, gpu_index=0
+        )
+        self.assertEqual(selected, RifePolicy("1:1:1", 0))
+        self.assertFalse(measured)
+
+    def test_three_process_tuning_requires_live_headroom(self) -> None:
+        tuned = RifePolicy("3:3:3", 0)
+        limited, measured_limited, _ = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=6000, gpu_index=0
+        )
+        admitted, measured_admitted, _ = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=7000, gpu_index=0
+        )
+        self.assertEqual(limited, RifePolicy("2:2:2", 0))
+        self.assertFalse(measured_limited)
+        self.assertEqual(admitted, tuned)
+        self.assertTrue(measured_admitted)
+
+    def test_tuning_lookup_reuses_already_detected_hardware_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "rife-v4.6"
+            model.mkdir()
+            exe = root / "rife-ncnn-vulkan.exe"
+            exe.write_bytes(b"exe")
+            hardware = HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 1)
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.bootstrap_component_fingerprint",
+                    return_value="rife:v1:" + "a" * 64,
+                ),
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    side_effect=AssertionError("unexpected second hardware probe"),
+                ),
+            ):
+                policy, key, store = _hardware_tuning_policy(
+                    1920, 1080, model, exe, hardware
+                )
+            self.assertIsNone(policy)
+            self.assertIsNotNone(key)
+            self.assertIsNotNone(store)
+            self.assertEqual(1, key.gpu_index)
+            self.assertEqual("RTX Test", key.gpu_name)
+
+    def test_precomputed_component_fingerprint_skips_rehash_in_tuning_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "rife-v4.6"
+            model.mkdir()
+            exe = root / "rife-ncnn-vulkan.exe"
+            exe.write_bytes(b"exe")
+            hardware = HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0)
+            fingerprint = "rife:v1:" + "a" * 64
+            with patch(
+                "cinepulse.rife_safe_runner.bootstrap_component_fingerprint",
+                side_effect=AssertionError("unexpected component rehash"),
+            ):
+                policy, key, store = _hardware_tuning_policy(
+                    1920,
+                    1080,
+                    model,
+                    exe,
+                    hardware,
+                    component_fingerprint=fingerprint,
+                )
+            self.assertIsNone(policy)
+            self.assertEqual(fingerprint, key.component_fingerprint)
+            self.assertIsNotNone(store)
+
+    def test_hardware_snapshot_exposes_live_vram_without_second_probe(self) -> None:
+        hardware = HardwareProfile(
+            "CPU Test", 28, "RTX Test", 8192, "999.1", 1, 7000
+        )
+        self.assertEqual(hardware.gpu_index, 1)
+        self.assertEqual(hardware.vram_free_mb, 7000)
+        with patch(
+            "cinepulse.rife_safe_runner.vram_free_mb",
+            side_effect=AssertionError("unexpected initial VRAM re-probe"),
+        ):
+            selected, measured, reason = _limit_policy_by_live_vram(
+                RifePolicy("3:3:3", 1),
+                uhd=False,
+                free_vram_mb=float(hardware.vram_free_mb),
+                gpu_index=hardware.gpu_index,
+            )
+        self.assertEqual(selected, RifePolicy("3:3:3", 1))
+        self.assertTrue(measured)
+        self.assertIn("live VRAM", reason)
+
+    def test_fallback_oom_can_downshift_to_serial_when_live_vram_drops(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            native_dir = Path(temporary) / "native"
+            fallback = RifeExecutionPolicy(
+                uhd=False,
+                jobs="2:2:2",
+                native_target=8,
+                requested_target=8,
+                gpu_index=0,
+                measured=False,
+            )
+            calls = {"count": 0}
+
+            def fake_run(_command, *, cwd=None):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise RuntimeError("VK_ERROR_OUT_OF_DEVICE_MEMORY")
+
+            with (
+                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
+                patch("cinepulse.rife_safe_runner.validate_png_sequence", return_value=[]),
+                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=2500.0),
+            ):
+                applied = _run_native_with_rollback(
+                    rife_executable=Path("rife-ncnn-vulkan.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("incoming"),
+                    native_dir=native_dir,
+                    policy=fallback,
+                    fallback=fallback,
+                    tuning_key=None,
+                    tuning_store=None,
+                )
+
+            self.assertEqual("1:1:1", applied.jobs)
+            self.assertEqual(2, calls["count"])
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")

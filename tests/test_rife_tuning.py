@@ -70,6 +70,85 @@ class RifeTuningTests(unittest.TestCase):
         self.assertEqual(winner, fast)
         self.assertEqual(self.store.lookup(self.key), fast)
 
+    def test_component_fingerprint_change_invalidates_key(self) -> None:
+        fallback = RifePolicy("1:1:1")
+        first = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            "rife:v1:" + "a" * 64,
+        )
+        second = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            "rife:v2:" + "b" * 64,
+        )
+        self.store.record_samples(
+            first,
+            (RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),),
+            fallback=fallback,
+        )
+        self.assertEqual(self.store.lookup(first), fallback)
+        self.assertIsNone(self.store.lookup(second))
+        self.assertNotEqual(first.token(), second.token())
+
+    def test_gpu_index_change_invalidates_key(self) -> None:
+        fallback = RifePolicy("1:1:1", 0)
+        first = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            gpu_index=0,
+        )
+        second = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            gpu_index=1,
+        )
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(0, fallback.gpu_index)
+
+    def test_cpu_change_invalidates_key(self) -> None:
+        fallback = RifePolicy("1:1:1")
+        first = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            "rife:v1:" + "a" * 64, cpu_name="CPU A", cpu_threads=28,
+        )
+        second = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            "rife:v1:" + "a" * 64, cpu_name="CPU B", cpu_threads=16,
+        )
+        self.store.record_samples(
+            first,
+            (RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),),
+            fallback=fallback,
+        )
+        self.assertEqual(self.store.lookup(first), fallback)
+        self.assertIsNone(self.store.lookup(second))
+        self.assertNotEqual(first.token(), second.token())
+
+    def test_recording_keeps_rife_baseline_for_sub_three_percent_gain(self) -> None:
+        fallback = RifePolicy("2:2:2")
+        candidate = RifePolicy("3:2:3")
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),
+                RifeSample(candidate, 9.85, True, output_frames=20, expected_frames=20),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, fallback)
+        self.assertEqual(self.store.lookup(self.key), fallback)
+
+    def test_recording_promotes_rife_after_meaningful_speedup(self) -> None:
+        fallback = RifePolicy("2:2:2")
+        candidate = RifePolicy("3:2:3")
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),
+                RifeSample(candidate, 9.0, True, output_frames=20, expected_frames=20),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, candidate)
+        self.assertEqual(self.store.lookup(self.key), candidate)
+
     def test_driver_change_invalidates_key(self) -> None:
         fallback = RifePolicy("1:1:1")
         self.store.record_samples(

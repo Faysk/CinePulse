@@ -21,7 +21,12 @@ GIB = 1024 ** 3
 DEFAULT_CACHE_QUOTA_GB = 50.0
 DEFAULT_CHUNK_BUDGET_GB = 4.0
 MIN_CHUNK_FRAMES = 2
-MAX_CHUNK_FRAMES = 240
+# The byte/GiB workset budget is the primary safety boundary. 240 frames was a
+# legacy process-churn cap that prevented 64+ GiB systems from using the RAM
+# budget already approved by H4/H9 at 720p/1080p. 480 keeps retry/cancel
+# granularity bounded while allowing common neural stages to reach their
+# concurrency-aware host-memory envelope.
+MAX_CHUNK_FRAMES = 480
 
 
 @dataclass(frozen=True)
@@ -217,7 +222,7 @@ def _compressed_gb(spec: FrameSpec, duration: float, *, lossless: bool) -> float
     return mbps * seconds / 8 / 1024
 
 
-def _neural_chunk_gb(
+def neural_chunk_workset_gb(
     source: FrameSpec,
     target: FrameSpec,
     chunk_frames: int,
@@ -239,6 +244,10 @@ def estimate_storage(
     cache_current_gb: float = 0.0,
     cache_quota_gb: float = DEFAULT_CACHE_QUOTA_GB,
     chunk_budget_gb: float = DEFAULT_CHUNK_BUDGET_GB,
+    ai_chunk_budget_gb: float | None = None,
+    rife_chunk_budget_gb: float | None = None,
+    ai_inflight_chunks: int = 1,
+    rife_inflight_chunks: int = 1,
 ) -> StorageEstimate:
     """Estimate scratch/cache pressure from the durations each stage materializes.
 
@@ -252,6 +261,11 @@ def estimate_storage(
     RIFE and delivery operate on the expanded project timeline.  Treating every
     stage as project-long was the 1.1.2 false-terabyte preflight bug.
     """
+
+    ai_budget = max(0.5, float(chunk_budget_gb if ai_chunk_budget_gb is None else ai_chunk_budget_gb))
+    rife_budget = max(0.5, float(chunk_budget_gb if rife_chunk_budget_gb is None else rife_chunk_budget_gb))
+    ai_inflight = max(1, min(3, int(ai_inflight_chunks)))
+    rife_inflight = max(1, min(3, int(rife_inflight_chunks)))
 
     if project_duration is None:
         project_duration = duration
@@ -306,16 +320,30 @@ def estimate_storage(
     ai_chunk = MAX_CHUNK_FRAMES
     if ai.attempts and ai.input_spec and ai.output_spec and ai.materializes_frames:
         seconds = stage_duration("enhancement")
-        ai_chunk = choose_chunk_frames(ai.input_spec, ai.output_spec, budget_gb=chunk_budget_gb)
-        working = _neural_chunk_gb(ai.input_spec, ai.output_spec, ai_chunk)
+        ai_chunk = choose_chunk_frames(
+            ai.input_spec,
+            ai.output_spec,
+            budget_gb=ai_budget,
+            minimum=1,
+        )
+        working = neural_chunk_workset_gb(ai.input_spec, ai.output_spec, ai_chunk)
+        concurrent_working = working * ai_inflight
         enhanced = _compressed_gb(ai.output_spec, seconds, lossless=True)
-        # Chunk videos coexist with the assembled cache only during concat.
-        # A color prepass, when present, also remains live until AI promotion.
-        stage_peak = max(current_persistent + working, current_persistent + enhanced * 2.05)
+        # Current + prefetch + background pack can coexist. Model the bounded
+        # runtime overlap explicitly so larger RAM-backed worksets cannot make
+        # scratch preflight optimistic.
+        # Near the final chunk, previously packed lossless segments can coexist
+        # with the current/prefetched PNG worksets. Final concat then overlaps
+        # the accumulated segments with the atomic output master. Model both
+        # peaks instead of treating them as mutually exclusive.
+        stage_peak = max(
+            current_persistent + enhanced + concurrent_working,
+            current_persistent + enhanced * 2.05,
+        )
         cache_growth = min(enhanced, cache_quota_gb) if cache_quota_gb > 0 else 0.0
         stages.append(StorageStageEstimate(
-            "enhancement", "Real-ESRGAN em chunks", 0.0, working, stage_peak, seconds,
-            f"{ai_chunk} quadro(s)/lote; PNGs são descartados e o master (~{enhanced:.2f} GB) é promovido ao cache.",
+            "enhancement", "Real-ESRGAN em chunks", 0.0, concurrent_working, stage_peak, seconds,
+            f"{ai_chunk} quadro(s)/lote; até {ai_inflight} lote(s) coexistem; PNGs são descartados e o master (~{enhanced:.2f} GB) é promovido ao cache.",
         ))
         # The assembled AI master is atomically moved to cache and the optional
         # color prepass is released by the worker after successful promotion.
@@ -327,18 +355,22 @@ def estimate_storage(
         seconds = stage_duration("rife_base")
         ratio = rife_base.output_spec.fps / max(1.0, rife_base.input_spec.fps)
         rife_chunk = choose_chunk_frames(
-            rife_base.input_spec, rife_base.output_spec, budget_gb=chunk_budget_gb,
+            rife_base.input_spec, rife_base.output_spec, budget_gb=rife_budget,
             output_frames_per_input=ratio,
         )
-        working = _neural_chunk_gb(
+        working = neural_chunk_workset_gb(
             rife_base.input_spec, rife_base.output_spec, rife_chunk,
             output_frames_per_input=ratio,
         )
+        concurrent_working = working * rife_inflight
         interpolated = _compressed_gb(rife_base.output_spec, seconds, lossless=True)
-        stage_peak = max(current_persistent + working, current_persistent + interpolated * 2.05)
+        stage_peak = max(
+            current_persistent + interpolated + concurrent_working,
+            current_persistent + interpolated * 2.05,
+        )
         stages.append(StorageStageEstimate(
-            "rife_base", "RIFE do clipe reutilizável", interpolated, working, stage_peak, seconds,
-            f"{rife_chunk} quadro(s) fonte/lote; o master neural cobre apenas o clipe reutilizável.",
+            "rife_base", "RIFE do clipe reutilizável", interpolated, concurrent_working, stage_peak, seconds,
+            f"{rife_chunk} quadro(s) fonte/lote; até {rife_inflight} lote(s) coexistem; o master neural cobre apenas o clipe reutilizável.",
         ))
         current_persistent = interpolated
         peak = max(peak, stage_peak)
@@ -391,18 +423,22 @@ def estimate_storage(
         seconds = stage_duration("rife_final")
         ratio = rife.output_spec.fps / max(1.0, rife.input_spec.fps)
         rife_chunk = choose_chunk_frames(
-            rife.input_spec, rife.output_spec, budget_gb=chunk_budget_gb,
+            rife.input_spec, rife.output_spec, budget_gb=rife_budget,
             output_frames_per_input=ratio,
         )
-        working = _neural_chunk_gb(
+        working = neural_chunk_workset_gb(
             rife.input_spec, rife.output_spec, rife_chunk,
             output_frames_per_input=ratio,
         )
+        concurrent_working = working * rife_inflight
         interpolated = _compressed_gb(rife.output_spec, seconds, lossless=True)
-        stage_peak = max(current_persistent + working, current_persistent + interpolated * 2.05)
+        stage_peak = max(
+            current_persistent + interpolated + concurrent_working,
+            current_persistent + interpolated * 2.05,
+        )
         stages.append(StorageStageEstimate(
-            "rife_final", "RIFE em chunks", interpolated, working, stage_peak, seconds,
-            f"{rife_chunk} quadro(s) fonte/lote; entrada/saída PNG não cobrem mais o projeto inteiro.",
+            "rife_final", "RIFE em chunks", interpolated, concurrent_working, stage_peak, seconds,
+            f"{rife_chunk} quadro(s) fonte/lote; até {rife_inflight} lote(s) coexistem; entrada/saída PNG não cobrem mais o projeto inteiro.",
         ))
         current_persistent = interpolated
         peak = max(peak, stage_peak)

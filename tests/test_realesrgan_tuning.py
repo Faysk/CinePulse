@@ -26,12 +26,86 @@ class RealEsrganTuningTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_legacy_fallback_is_always_first_candidate(self) -> None:
-        candidates = safe_candidates(vram_mb=8192, cpu_threads=20, gpu_index=1, width=1920, height=1080)
+        candidates = safe_candidates(
+            vram_mb=8192, cpu_threads=20, logical_threads=28,
+            gpu_index=1, width=1920, height=1080,
+        )
         self.assertEqual(candidates[0], RealEsrganPolicy(256, 2, 2, 2, 1))
+
+    def test_first_candidate_matches_runtime_baseline_for_large_gpu(self) -> None:
+        candidates = safe_candidates(
+            vram_mb=24576,
+            cpu_threads=6,
+            logical_threads=28,
+            width=1920,
+            height=1080,
+        )
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 2, 4, 2, 0))
+
+    def test_first_candidate_matches_runtime_baseline_for_small_host_feed(self) -> None:
+        candidates = safe_candidates(
+            vram_mb=8192,
+            cpu_threads=4,
+            logical_threads=28,
+            width=1920,
+            height=1080,
+        )
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 1, 2, 1, 0))
 
     def test_high_resolution_does_not_offer_512_tile(self) -> None:
         candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=7680, height=4320)
         self.assertFalse(any(item.tile == 512 for item in candidates))
+
+    def test_physical_candidates_can_probe_more_gpu_workers_on_8gb_1080p(self) -> None:
+        candidates = safe_candidates(vram_mb=8192, cpu_threads=20, width=1920, height=1080)
+        self.assertTrue(any(item.process_jobs == 3 for item in candidates))
+
+    def test_physical_candidates_keep_8gb_4k_process_concurrency_conservative(self) -> None:
+        candidates = safe_candidates(vram_mb=8192, cpu_threads=20, width=3840, height=2160)
+        self.assertFalse(any(item.process_jobs > 2 for item in candidates))
+
+    def test_physical_candidates_can_probe_four_gpu_workers_on_24gb(self) -> None:
+        candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=1920, height=1080)
+        self.assertTrue(any(item.process_jobs == 4 for item in candidates))
+
+    def test_candidates_model_bounded_host_feed_separately_from_machine_capacity(self) -> None:
+        rtx4070 = safe_candidates(
+            vram_mb=8192, cpu_threads=6, logical_threads=28, width=1920, height=1080
+        )
+        self.assertEqual(rtx4070[0], RealEsrganPolicy(256, 2, 2, 2, 0))
+        self.assertIn(RealEsrganPolicy(256, 3, 3, 3, 0), rtx4070)
+        rtx3090 = safe_candidates(
+            vram_mb=24576, cpu_threads=6, logical_threads=28, width=1920, height=1080
+        )
+        self.assertEqual(rtx3090[0], RealEsrganPolicy(256, 2, 4, 2, 0))
+        self.assertIn(RealEsrganPolicy(256, 3, 4, 3, 0), rtx3090)
+
+    def test_six_thread_host_feed_can_probe_three_load_and_save_workers(self) -> None:
+        candidates = safe_candidates(
+            vram_mb=12288,
+            cpu_threads=6,
+            logical_threads=28,
+            width=1920,
+            height=1080,
+        )
+        self.assertTrue(
+            any(item.load_jobs == 3 and item.save_jobs == 3 for item in candidates)
+        )
+        self.assertFalse(
+            any(item.load_jobs > 3 or item.save_jobs > 3 for item in candidates)
+        )
+
+    def test_tuning_key_changes_with_host_feed_budget(self) -> None:
+        six = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28,
+        )
+        four = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=4, logical_threads=28,
+        )
+        self.assertNotEqual(six.token(), four.token())
+        self.assertIn("host6of28", six.token())
 
     def test_command_args_select_gpu_explicitly(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3, 2)
@@ -57,6 +131,47 @@ class RealEsrganTuningTests(unittest.TestCase):
         )
         self.assertEqual(downshift_policy(failed, candidates), RealEsrganPolicy(256, 2, 2, 2))
 
+    def test_recording_rejects_promotion_without_accepted_declared_baseline(self) -> None:
+        fallback = RealEsrganPolicy(256, 2, 2, 2)
+        candidate = RealEsrganPolicy(320, 3, 3, 3)
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RealEsrganSample(candidate, 5.0, True, output_frames=10, expected_frames=10),
+            ),
+            fallback=fallback,
+        )
+        self.assertIsNone(recorded)
+        self.assertIsNone(self.store.lookup(self.key))
+
+    def test_recording_keeps_baseline_when_candidate_gain_is_only_noise(self) -> None:
+        fallback = RealEsrganPolicy(256, 2, 2, 2)
+        barely_faster = RealEsrganPolicy(320, 3, 2, 3)
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RealEsrganSample(fallback, 10.0, True, output_frames=10, expected_frames=10),
+                RealEsrganSample(barely_faster, 9.85, True, output_frames=10, expected_frames=10),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, fallback)
+        self.assertEqual(self.store.lookup(self.key), fallback)
+
+    def test_recording_promotes_candidate_after_meaningful_speedup(self) -> None:
+        fallback = RealEsrganPolicy(256, 2, 2, 2)
+        faster = RealEsrganPolicy(320, 3, 2, 3)
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RealEsrganSample(fallback, 10.0, True, output_frames=10, expected_frames=10),
+                RealEsrganSample(faster, 9.0, True, output_frames=10, expected_frames=10),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, faster)
+        self.assertEqual(self.store.lookup(self.key), faster)
+
     def test_store_only_records_accepted_policy(self) -> None:
         winner = RealEsrganPolicy(320, 3, 2, 3)
         recorded = self.store.record_samples(
@@ -69,6 +184,57 @@ class RealEsrganTuningTests(unittest.TestCase):
         )
         self.assertEqual(recorded, winner)
         self.assertEqual(self.store.lookup(self.key), winner)
+
+    def test_component_fingerprint_change_invalidates_cache_key(self) -> None:
+        policy = RealEsrganPolicy(320, 3, 2, 3)
+        first = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, component_fingerprint="real_esrgan:v1:" + "a" * 64,
+        )
+        second = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, component_fingerprint="real_esrgan:v2:" + "b" * 64,
+        )
+        self.store.record_samples(
+            first,
+            (RealEsrganSample(policy, 7.0, True, output_frames=10, expected_frames=10),),
+        )
+        self.assertEqual(self.store.lookup(first), policy)
+        self.assertIsNone(self.store.lookup(second))
+        self.assertNotEqual(first.token(), second.token())
+
+    def test_gpu_index_change_invalidates_cache_key(self) -> None:
+        first = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, gpu_index=0,
+        )
+        second = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, gpu_index=1,
+        )
+        self.assertNotEqual(first.token(), second.token())
+
+    def test_cpu_identity_change_invalidates_cache_key(self) -> None:
+        policy = RealEsrganPolicy(320, 3, 2, 3)
+        first = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28,
+            component_fingerprint="real_esrgan:v1:" + "a" * 64,
+            cpu_name="CPU A",
+        )
+        second = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28,
+            component_fingerprint="real_esrgan:v1:" + "a" * 64,
+            cpu_name="CPU B",
+        )
+        self.store.record_samples(
+            first,
+            (RealEsrganSample(policy, 7.0, True, output_frames=10, expected_frames=10),),
+        )
+        self.assertEqual(self.store.lookup(first), policy)
+        self.assertIsNone(self.store.lookup(second))
+        self.assertNotEqual(first.token(), second.token())
 
     def test_driver_change_invalidates_cache_key(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3)

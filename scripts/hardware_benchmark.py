@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 from dataclasses import asdict
 from pathlib import Path
 
@@ -78,6 +79,10 @@ def _add_realesrgan_key_args(command: argparse.ArgumentParser) -> None:
     command.add_argument("--height", type=int, required=True)
     command.add_argument("--scale", type=int, default=2)
     command.add_argument("--gpu-index", type=int, default=0)
+    command.add_argument("--cpu-threads", type=int, required=True)
+    command.add_argument("--logical-threads", type=int, required=True)
+    command.add_argument("--cpu-name", required=True)
+    command.add_argument("--component-fingerprint", required=True)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -100,7 +105,7 @@ def parser() -> argparse.ArgumentParser:
     cpu_candidates.add_argument("--stage", required=True, choices=("decode", "color", "scale", "encode", "audio", "vfx_cpu", "neural_gpu", "neural_cpu", "verification", "other"))
     cpu_candidates.add_argument("--logical", type=int, required=True)
     cpu_candidates.add_argument("--physical", type=int, required=True)
-    cpu_candidates.add_argument("--mode", choices=("balanced", "dedicated"), default="balanced")
+    cpu_candidates.add_argument("--mode", choices=("balanced", "dedicated", "overnight"), default="balanced")
     cpu_candidates.add_argument("--gpu-active", action="store_true")
     cpu_candidates.add_argument("--max-threads", type=int)
 
@@ -120,6 +125,7 @@ def parser() -> argparse.ArgumentParser:
     )
     neural_candidates.add_argument("--vram-mb", type=int, required=True)
     neural_candidates.add_argument("--cpu-threads", type=int, required=True)
+    neural_candidates.add_argument("--logical-threads", type=int, required=True)
     neural_candidates.add_argument("--gpu-index", type=int, default=0)
     neural_candidates.add_argument("--width", type=int, required=True)
     neural_candidates.add_argument("--height", type=int, required=True)
@@ -143,6 +149,11 @@ def _realesrgan_key(args: argparse.Namespace) -> RealEsrganTuningKey:
         max(1, int(args.width)),
         max(1, int(args.height)),
         max(1, int(args.scale)),
+        cpu_threads=max(1, int(args.cpu_threads)),
+        logical_threads=max(1, int(args.logical_threads)),
+        component_fingerprint=str(args.component_fingerprint).strip(),
+        cpu_name=str(args.cpu_name).strip(),
+        gpu_index=max(0, int(args.gpu_index)),
     )
 
 
@@ -227,6 +238,7 @@ def main() -> int:
             topology,
             mode=args.mode,
             gpu_active=args.gpu_active,
+            cpu_name=platform.processor() or "unknown-cpu",
         )
         store = CpuTuningStore(args.cache)
         chosen = store.record_samples(key, args.sample, fallback_threads=args.fallback_threads)
@@ -248,6 +260,7 @@ def main() -> int:
         candidates = realesrgan_candidates(
             vram_mb=args.vram_mb,
             cpu_threads=args.cpu_threads,
+            logical_threads=args.logical_threads,
             gpu_index=max(0, args.gpu_index),
             width=max(1, args.width),
             height=max(1, args.height),
@@ -276,8 +289,17 @@ def main() -> int:
             )
             for sample in args.sample
         )
+        baseline_candidates = realesrgan_candidates(
+            vram_mb=args.vram_mb,
+            cpu_threads=args.cpu_threads,
+            logical_threads=args.logical_threads,
+            gpu_index=max(0, args.gpu_index),
+            width=max(1, args.width),
+            height=max(1, args.height),
+        )
+        fallback = baseline_candidates[0]
         store = RealEsrganTuningStore(args.cache)
-        chosen = store.record_samples(key, samples)
+        chosen = store.record_samples(key, samples, fallback=fallback)
         if chosen is None:
             payload = {
                 "recorded": False,

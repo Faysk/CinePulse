@@ -5,9 +5,11 @@ import json
 import shutil
 from pathlib import Path
 
+from cinepulse.component_identity import bootstrap_component_fingerprint
 from cinepulse.hardware import detect_hardware
 from cinepulse.realesrgan_benchmark import benchmark_and_record, evidence_payload, png_dimensions
 from cinepulse.realesrgan_tuning import RealEsrganTuningKey, RealEsrganTuningStore, safe_candidates
+from cinepulse.resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 
 
 def parser() -> argparse.ArgumentParser:
@@ -20,7 +22,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--scale", type=int, default=2)
     result.add_argument("--work-dir", type=Path, required=True)
     result.add_argument("--cpu-threads", type=int)
-    result.add_argument("--gpu-index", type=int, default=0)
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--gpu-name")
     result.add_argument("--vram-mb", type=int)
     result.add_argument("--driver")
@@ -40,17 +42,33 @@ def main() -> int:
     if any(png_dimensions(path) != source_size for path in inputs):
         raise SystemExit("all benchmark PNG frames must have identical dimensions")
 
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     gpu_name = args.gpu_name or hardware.gpu or "unknown-gpu"
     vram_mb = int(args.vram_mb if args.vram_mb is not None else (hardware.vram_mb or 0))
     driver = args.driver or hardware.driver or "unknown-driver"
-    cpu_threads = max(1, int(args.cpu_threads or hardware.cpu_threads or 1))
+    gpu_index = hardware.gpu_index
+    topology = detect_cpu_topology()
+    default_feed = schedule_cpu_threads(
+        "neural_gpu", topology=topology, mode="balanced", gpu_active=True
+    ).threads
+    cpu_threads = max(1, int(args.cpu_threads or default_feed))
+    logical_threads = max(1, int(hardware.cpu_threads or topology.logical_cpus or cpu_threads))
     scale = max(1, int(args.scale))
+    model_bin = args.model_dir / f"{args.model}-x{scale}.bin"
+    model_param = args.model_dir / f"{args.model}-x{scale}.param"
+    component_fingerprint = bootstrap_component_fingerprint(
+        "real_esrgan",
+        component_root=args.executable.parent,
+        critical_files=(args.executable, model_bin, model_param),
+    )
+    if not component_fingerprint:
+        raise SystemExit("Real-ESRGAN component fingerprint is unavailable; refusing to record tuning evidence")
 
     candidates = safe_candidates(
         vram_mb=vram_mb,
         cpu_threads=cpu_threads,
-        gpu_index=max(0, int(args.gpu_index)),
+        logical_threads=logical_threads,
+        gpu_index=gpu_index,
         width=source_size[0],
         height=source_size[1],
     )
@@ -62,6 +80,11 @@ def main() -> int:
         source_size[0],
         source_size[1],
         scale,
+        cpu_threads=cpu_threads,
+        logical_threads=logical_threads,
+        component_fingerprint=component_fingerprint,
+        cpu_name=hardware.cpu,
+        gpu_index=gpu_index,
     )
     store = RealEsrganTuningStore(args.cache)
     try:

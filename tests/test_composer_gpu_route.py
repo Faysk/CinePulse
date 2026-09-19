@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cinepulse.composer_gpu_route import select_gpu_export_route
+from cinepulse.composer_gpu_route import build_compositor_stack_key, select_gpu_export_route
 from cinepulse.gpu_compositor import GpuCompositorCapabilities, OverlayLayer, overlay_stack_contract_token
 from cinepulse.hardware import HardwareProfile
 from cinepulse.overlay_composer import ComposerItem, OverlayComposerState, VisualizerLayer
@@ -10,6 +10,7 @@ from cinepulse.overlay_composer import ComposerItem, OverlayComposerState, Visua
 
 CAPS = GpuCompositorCapabilities("ffmpeg", "abc123", True, True, True, True)
 GPU = HardwareProfile("cpu", 28, "RTX Test", 8192, "999.1")
+GPU_1 = HardwareProfile("cpu", 28, "RTX Test", 8192, "999.1", gpu_index=1)
 NO_GPU = HardwareProfile("cpu", 28, None, None, None)
 
 
@@ -73,6 +74,39 @@ class ComposerGpuRouteTests(unittest.TestCase):
         self.assertEqual("RTX Test", result.key.gpu_name)
         self.assertEqual(30000, result.key.fps_milli)
         self.assertEqual(1, len(store.keys))
+
+    def test_same_gpu_model_on_different_adapter_has_distinct_key(self) -> None:
+        layer = OverlayLayer("logo.png", "png")
+        first = build_compositor_stack_key(
+            hardware=GPU, caps=CAPS, width=1920, height=1080, fps=30.0,
+            pixel_format="yuv420p", primaries="bt709", transfer="bt709",
+            matrix="bt709", color_range="tv", layers=(layer,),
+        )
+        second = build_compositor_stack_key(
+            hardware=GPU_1, caps=CAPS, width=1920, height=1080, fps=30.0,
+            pixel_format="yuv420p", primaries="bt709", transfer="bt709",
+            matrix="bt709", color_range="tv", layers=(layer,),
+        )
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(1, second.gpu_index)
+
+    def test_resident_base_has_separate_exact_evidence_key(self) -> None:
+        layer = OverlayLayer("logo.png", "png")
+        upload = build_compositor_stack_key(
+            hardware=GPU, caps=CAPS, width=1920, height=1080, fps=30.0,
+            pixel_format="yuv420p", primaries="bt709", transfer="bt709",
+            matrix="bt709", color_range="tv", layers=(layer,),
+        )
+        resident = build_compositor_stack_key(
+            hardware=GPU, caps=CAPS, width=1920, height=1080, fps=30.0,
+            pixel_format="yuv420p", primaries="bt709", transfer="bt709",
+            matrix="bt709", color_range="tv", layers=(layer,),
+            base_mode="nvdec-resident", base_codec="h264", base_decoder="h264_cuvid",
+        )
+        self.assertNotEqual(upload.token(), resident.token())
+        self.assertEqual("cpu-upload", upload.base_mode)
+        self.assertEqual("nvdec-resident", resident.base_mode)
+        self.assertEqual("h264_cuvid", resident.base_decoder)
 
     def test_dynamic_transform_never_queries_evidence_store(self) -> None:
         store = Store(True)

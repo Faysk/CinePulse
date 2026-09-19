@@ -12,11 +12,13 @@ The stable CPU/zscale path therefore remains the fail-closed default.
 """
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -28,7 +30,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 # Schema 2 intentionally invalidates H5 records written before non-zero seek
 # alignment became a mandatory acceptance gate. Old evidence was correct for
 # frame-zero playback but is insufficient for CinePulse's chunked runtime.
-GPU_MEDIA_SCHEMA = 2
+GPU_MEDIA_SCHEMA = 3
 DEFAULT_PSNR_FLOOR_DB = 55.0
 DEFAULT_SSIM_FLOOR = 0.999
 DECODE_PSNR_FLOOR_DB = 80.0
@@ -111,13 +113,45 @@ def _names_from_listing(text: str) -> frozenset[str]:
     return frozenset(names)
 
 
-def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
+def _ffmpeg_binary_identity(ffmpeg: str) -> str:
+    path = Path(str(ffmpeg))
+    if not path.is_file():
+        discovered = shutil.which(str(ffmpeg))
+        if discovered:
+            path = Path(discovered)
+    try:
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError:
+        return "unresolved"
+    return (
+        f"{resolved}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}:"
+        f"{digest.hexdigest()}"
+    )
+
+
+@lru_cache(maxsize=8)
+def _detect_gpu_media_capabilities_cached(
+    ffmpeg: str,
+    binary_identity: str,
+) -> GpuMediaCapabilities:
     version = _run_probe(ffmpeg, "-version")
     hwaccels_text = _run_probe(ffmpeg, "-hwaccels")
     decoders_text = _run_probe(ffmpeg, "-decoders")
     filters_text = _run_probe(ffmpeg, "-filters")
     encoders_text = _run_probe(ffmpeg, "-encoders")
-    fingerprint = hashlib.sha256(version.encode("utf-8", errors="replace")).hexdigest()[:20]
+    fingerprint_payload = (
+        version
+        + "\nCINEPULSE_FFMPEG_BINARY="
+        + binary_identity
+    )
+    fingerprint = hashlib.sha256(
+        fingerprint_payload.encode("utf-8", errors="replace")
+    ).hexdigest()[:20]
     return GpuMediaCapabilities(
         ffmpeg=str(ffmpeg),
         fingerprint=fingerprint,
@@ -126,6 +160,13 @@ def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
         filters=_names_from_listing(filters_text),
         encoders=_names_from_listing(encoders_text),
     )
+
+
+def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
+    """Probe one exact FFmpeg build once and reuse immutable capabilities."""
+    value = str(ffmpeg)
+    identity = _ffmpeg_binary_identity(value)
+    return _detect_gpu_media_capabilities_cached(value, identity)
 
 
 @dataclass(frozen=True)
@@ -145,6 +186,7 @@ class GpuMediaKey:
     operation: str
     target_width: int = 0
     target_height: int = 0
+    gpu_index: int = 0
 
     def token(self) -> str:
         target_width = max(1, int(self.target_width or self.width))
@@ -163,6 +205,7 @@ class GpuMediaKey:
             str(self.space).strip().lower() or "unknown",
             str(self.color_range).strip().lower() or "unknown",
             str(self.operation).strip().lower(),
+            f"gpu{max(0, int(self.gpu_index))}",
         )
         return "|".join(values)
 
@@ -180,6 +223,7 @@ class GpuMediaKey:
         operation: str,
         target_width: int | None = None,
         target_height: int | None = None,
+        gpu_index: int = 0,
     ) -> "GpuMediaKey":
         return cls(
             gpu_name=gpu_name,
@@ -197,6 +241,7 @@ class GpuMediaKey:
             operation=operation,
             target_width=target_width or width,
             target_height=target_height or height,
+            gpu_index=max(0, int(gpu_index)),
         )
 
 
@@ -315,6 +360,8 @@ class GpuMediaTuningStore:
             )
         except (KeyError, TypeError, ValueError):
             return None
+        if policy.gpu_index != max(0, int(key.gpu_index)):
+            return None
         if not capabilities.cuda or policy.decoder not in capabilities.decoders:
             return None
         if policy.scaler and policy.scaler not in capabilities.filters:
@@ -324,7 +371,11 @@ class GpuMediaTuningStore:
         return policy
 
     def record(self, key: GpuMediaKey, evidence: GpuMediaEvidence) -> bool:
-        if evidence.policy.operation != key.operation or not evidence.accepted:
+        if (
+            evidence.policy.operation != key.operation
+            or evidence.policy.gpu_index != max(0, int(key.gpu_index))
+            or not evidence.accepted
+        ):
             return False
         payload = self._load()
         records = payload.setdefault("records", {})
@@ -419,6 +470,22 @@ def safe_candidate_policies(
             )
         )
     return tuple(candidates)
+
+
+def gpu_media_vram_floor_mb(key: GpuMediaKey) -> float:
+    """Estimate the live-VRAM floor for bounded CUDA media surfaces.
+
+    This is an admission ceiling only; it cannot authorize a GPU path without
+    exact physical evidence. The estimate covers a small NVDEC/CUDA surface
+    pool plus driver/filter headroom and scales with geometry/bit depth.
+    """
+    source_pixels = max(1, int(key.width)) * max(1, int(key.height))
+    target_pixels = max(1, int(key.target_width or key.width)) * max(1, int(key.target_height or key.height))
+    pixels = max(source_pixels, target_pixels)
+    bytes_per_pixel = 3.0 if int(key.bit_depth) > 8 else 1.5
+    surface_mb = pixels * bytes_per_pixel / (1024.0 * 1024.0)
+    operation_multiplier = 16.0 if "scale" in str(key.operation).lower() else 12.0
+    return max(384.0, surface_mb * operation_multiplier + 256.0)
 
 
 def select_proven_policy(

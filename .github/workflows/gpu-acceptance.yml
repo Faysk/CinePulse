@@ -9,8 +9,24 @@ on:
       - 'installer/**'
       - 'requirements*.lock'
       - 'requirements-neural.in'
+      - 'scripts/realesrgan_autotune.py'
+      - 'scripts/hardware_benchmark.py'
+      - 'scripts/rife_benchmark.py'
+      - 'scripts/gpu_*benchmark.py'
       - 'src/cinepulse/rife_engine.py'
       - 'src/cinepulse/rife_safe_runner.py'
+      - 'src/cinepulse/component_identity.py'
+      - 'src/cinepulse/performance_policy.py'
+      - 'src/cinepulse/pipeline_budget.py'
+      - 'src/cinepulse/pipeline_runtime.py'
+      - 'src/cinepulse/adaptive_runtime.py'
+      - 'src/cinepulse/hardware.py'
+      - 'src/cinepulse/hardware_telemetry.py'
+      - 'src/cinepulse/realesrgan_tuning.py'
+      - 'src/cinepulse/realesrgan_benchmark.py'
+      - 'src/cinepulse/rife_tuning.py'
+      - 'src/cinepulse/rife_benchmark.py'
+      - 'src/cinepulse/studio.py'
       - 'src/cinepulse/job_lease.py'
       - 'src/cinepulse/render_worker.py'
       - 'src/cinepulse/stage_adapter.py'
@@ -19,10 +35,42 @@ on:
       - 'src/cinepulse/stem_engine.py'
       - 'src/cinepulse/composer_*.py'
       - 'src/cinepulse/gpu_compositor.py'
+      - 'src/cinepulse/gpu_media.py'
+      - 'src/cinepulse/gpu_delivery.py'
+      - 'src/cinepulse/gpu_encode.py'
+      - 'src/cinepulse/process_control.py'
+      - 'src/cinepulse/storage_engine.py'
+      - 'src/cinepulse/cpu_tuning.py'
+      - 'src/cinepulse/gpu_failure.py'
       - 'src/cinepulse/overlay_composer.py'
       - 'src/cinepulse/ui/composer_view.py'
       - 'tests/test_composer_*.py'
       - 'tests/test_gpu_compositor.py'
+      - 'tests/test_gpu_media.py'
+      - 'tests/test_gpu_delivery.py'
+      - 'tests/test_gpu_encode.py'
+      - 'tests/test_process_control.py'
+      - 'tests/test_storage_engine.py'
+      - 'tests/test_h5_gpu_media_runtime_contract.py'
+      - 'tests/test_hardware_megapack_final_contract.py'
+      - 'tests/test_hardware_benchmark_cli.py'
+      - 'tests/test_rife_safe_runner.py'
+      - 'tests/test_rife_runtime_fallback.py'
+      - 'tests/test_stem_engine.py'
+      - 'tests/test_stem_mix_runtime.py'
+      - 'tests/test_ai_cache_identity.py'
+      - 'tests/test_cpu_tuning.py'
+      - 'tests/test_gpu_failure.py'
+      - 'tests/test_component_identity.py'
+      - 'tests/test_performance_policy.py'
+      - 'tests/test_pipeline_budget.py'
+      - 'tests/test_pipeline_runtime.py'
+      - 'tests/test_adaptive_runtime.py'
+      - 'tests/test_hardware.py'
+      - 'tests/test_hardware_telemetry.py'
+      - 'tests/test_realesrgan_tuning.py'
+      - 'tests/test_realesrgan_benchmark.py'
+      - 'tests/test_rife_tuning.py'
       - 'tests/recovery_gpu_acceptance.py'
       - 'tests/integration_smoke.py'
 
@@ -74,6 +122,117 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Environment isolation failed.' }
           ./scripts/Test-NeuralInstaller.ps1 -Python (Get-Command python).Source
           if ($LASTEXITCODE -ne 0) { throw 'Neural runtime resolver failed.' }
+      - name: Physical NVDEC decode acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Ffprobe = Join-Path $PWD 'components/ffmpeg/bin/ffprobe.exe'
+          $Root = Join-Path $PWD 'artifacts/gpu/nvdec'
+          $Source = Join-Path $Root 'source.mp4'
+          $Cache = Join-Path $PWD 'cache/hardware/gpu-media-tuning.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/nvdec-benchmark.json'
+          New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -c:v libx264 -preset fast -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create bounded NVDEC physical sample.' }
+          python scripts/gpu_media_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --seek-seconds 1 --seek-clip-seconds 1 --timeout 300 | Tee-Object -FilePath $Evidence
+          $NvdecExit = $LASTEXITCODE
+          if ($NvdecExit -ne 0 -and $NvdecExit -ne 2) { throw "Physical NVDEC benchmark failed with code $NvdecExit." }
+          if ($NvdecExit -eq 2) { Write-Host 'CINEPULSE_NVDEC_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'NVDEC physical evidence report was not created.' }
+      - name: Physical resident NVDEC CUDA NVENC acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Ffprobe = Join-Path $PWD 'components/ffmpeg/bin/ffprobe.exe'
+          $Root = Join-Path $PWD 'artifacts/gpu/resident-delivery'
+          $Source = Join-Path $Root 'source.mp4'
+          $Cache = Join-Path $PWD 'cache/hardware/resident-encode.json'
+          $Evidence1080 = Join-Path $PWD 'artifacts/gpu/resident-encode-1080p60.json'
+          $Evidence4K = Join-Path $PWD 'artifacts/gpu/resident-encode-4k60.json'
+          New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -c:v libx264 -preset fast -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create resident-delivery physical sample.' }
+
+          # Exact CinePulse 1080p60 streaming contract: 12 Mbps, GOP 30.
+          python scripts/gpu_resident_encode_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --width 1920 --height 1080 --bitrate-kbps 12000 --maxrate-kbps 24000 --bufsize-kbps 48000 --gop 30 --timeout 300 | Tee-Object -FilePath $Evidence1080
+          $Resident1080Exit = $LASTEXITCODE
+          if ($Resident1080Exit -ne 0 -and $Resident1080Exit -ne 2) { throw "Resident 1080p60 benchmark failed with code $Resident1080Exit." }
+          if ($Resident1080Exit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_1080_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+
+          # Exact CinePulse 4K60 streaming contract: 48 Mbps, GOP 30.
+          python scripts/gpu_resident_encode_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --width 3840 --height 2160 --bitrate-kbps 48000 --maxrate-kbps 96000 --bufsize-kbps 192000 --gop 30 --timeout 300 | Tee-Object -FilePath $Evidence4K
+          $Resident4KExit = $LASTEXITCODE
+          if ($Resident4KExit -ne 0 -and $Resident4KExit -ne 2) { throw "Resident 4K60 benchmark failed with code $Resident4KExit." }
+          if ($Resident4KExit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_4K_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+
+          if (-not (Test-Path -LiteralPath $Evidence1080)) { throw 'Resident 1080p60 evidence report was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence4K)) { throw 'Resident 4K60 evidence report was not created.' }
+      - name: Physical Real-ESRGAN autotune acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Real = Join-Path $PWD 'components/real-esrgan/realesrgan-ncnn-vulkan.exe'
+          $Models = Join-Path $PWD 'components/real-esrgan/models'
+          $Input = Join-Path $PWD 'artifacts/gpu/realesrgan-input'
+          $Work = Join-Path $PWD 'artifacts/gpu/realesrgan-work'
+          $Cache = Join-Path $PWD 'cache/hardware/realesrgan-tuning.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/realesrgan-autotune.json'
+          New-Item -ItemType Directory -Force -Path $Input, (Split-Path -Parent $Cache), (Split-Path -Parent $Evidence) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -frames:v 6 (Join-Path $Input 'frame%08d.png')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create bounded Real-ESRGAN physical sample.' }
+          python scripts/realesrgan_autotune.py $Input $Cache --executable $Real --model-dir $Models --work-dir $Work --timeout 300 | Tee-Object -FilePath $Evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Physical Real-ESRGAN autotune acceptance failed.' }
+          if (-not (Test-Path -LiteralPath $Cache)) { throw 'Real-ESRGAN tuning evidence cache was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'Real-ESRGAN tuning evidence report was not created.' }
+      - name: Physical RIFE autotune acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $RifeRoot = Join-Path $PWD 'components/ai/models/rife/portable/rife-ncnn-vulkan-20221029-windows'
+          $Rife = Join-Path $RifeRoot 'rife-ncnn-vulkan.exe'
+          $Model = Join-Path $RifeRoot 'rife-v4.6'
+          $Input = Join-Path $PWD 'artifacts/gpu/rife-input'
+          $Work = Join-Path $PWD 'artifacts/gpu/rife-work'
+          $Cache = Join-Path $PWD 'cache/hardware/rife-tuning.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/rife-autotune.json'
+          New-Item -ItemType Directory -Force -Path $Input, (Split-Path -Parent $Cache), (Split-Path -Parent $Evidence) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=8' -frames:v 8 -start_number 0 (Join-Path $Input '%08d.png')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create bounded RIFE physical sample.' }
+          python scripts/rife_benchmark.py --input $Input --rife $Rife --model $Model --cache $Cache --work $Work --ffmpeg $Ffmpeg --timeout 300 | Tee-Object -FilePath $Evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Physical RIFE autotune acceptance failed.' }
+          if (-not (Test-Path -LiteralPath $Cache)) { throw 'RIFE tuning evidence cache was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'RIFE tuning evidence report was not created.' }
+          if (Test-Path -LiteralPath $Work) { Remove-Item -LiteralPath $Work -Recurse -Force }
+      - name: Physical Composer CUDA acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Ffprobe = Join-Path $PWD 'components/ffmpeg/bin/ffprobe.exe'
+          $Root = Join-Path $PWD 'artifacts/gpu/composer-h6'
+          $Base = Join-Path $Root 'base.mkv'
+          $Layer = Join-Path $Root 'layer.png'
+          $Cache = Join-Path $PWD 'cache/hardware/gpu-compositor.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/composer-h6.json'
+          $ResidentEvidence = Join-Path $PWD 'artifacts/gpu/composer-h6-resident.json'
+          New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'format=yuv420p' -c:v libx264 -preset fast -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 H.264 base sample.' }
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'color=c=red@0.55:s=512x288:d=1' -frames:v 1 -vf 'format=rgba' $Layer
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 alpha layer.' }
+          python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --timeout 300 | Tee-Object -FilePath $Evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Physical Composer CUDA upload-path acceptance failed.' }
+          python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --resident-base --timeout 300 | Tee-Object -FilePath $ResidentEvidence
+          $ResidentExit = $LASTEXITCODE
+          if ($ResidentExit -ne 0 -and $ResidentExit -ne 2) { throw "Physical Composer NVDEC-resident benchmark failed with code $ResidentExit." }
+          if ($ResidentExit -eq 2) { Write-Host 'CINEPULSE_COMPOSER_RESIDENT_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if (-not (Test-Path -LiteralPath $Cache)) { throw 'Composer GPU evidence cache was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'Composer GPU evidence report was not created.' }
+          if (-not (Test-Path -LiteralPath $ResidentEvidence)) { throw 'Composer resident GPU evidence report was not created.' }
       - name: GPU gate
         run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
       - name: Recovery RIFE 8K UHD acceptance
@@ -85,6 +244,12 @@ jobs:
           name: cinepulse-gpu-acceptance
           path: |
             artifacts/ci/*.json
+            artifacts/gpu/*.json
+            cache/hardware/realesrgan-tuning.json
+            cache/hardware/gpu-media-tuning.json
+            cache/hardware/resident-encode.json
+            cache/hardware/rife-tuning.json
+            cache/hardware/gpu-compositor.json
             data/test-runs/**/report.json
             data/logs/installer.log
           if-no-files-found: warn

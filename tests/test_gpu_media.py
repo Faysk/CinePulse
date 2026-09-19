@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cinepulse.gpu_media import (
     GpuMediaCapabilities,
@@ -10,6 +12,8 @@ from cinepulse.gpu_media import (
     GpuMediaKey,
     GpuMediaPolicy,
     GpuMediaTuningStore,
+    detect_gpu_media_capabilities,
+    gpu_media_vram_floor_mb,
     safe_candidate_policies,
     select_proven_policy,
 )
@@ -60,6 +64,107 @@ def accepted_decode(policy: GpuMediaPolicy | None = None) -> GpuMediaEvidence:
 
 
 class GpuMediaTests(unittest.TestCase):
+    def test_exact_key_changes_with_adapter_index(self) -> None:
+        first = key()
+        second = GpuMediaKey.from_profile(
+            gpu_name="RTX Test",
+            driver="999.1",
+            ffmpeg_fingerprint="ffmpeg-test",
+            codec="h264",
+            width=1920,
+            height=1080,
+            profile=sdr_profile(),
+            operation="decode",
+            gpu_index=1,
+        )
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(0, first.gpu_index)
+        self.assertEqual(1, second.gpu_index)
+
+    def test_ffmpeg_fingerprint_resolves_command_name_from_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"path-build")
+            with patch(
+                "cinepulse.gpu_media._run_probe",
+                return_value="ffmpeg version path-test",
+            ):
+                absolute = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            with (
+                patch("cinepulse.gpu_media.shutil.which", return_value=str(ffmpeg)),
+                patch("cinepulse.gpu_media._run_probe", return_value="ffmpeg version path-test"),
+            ):
+                discovered = detect_gpu_media_capabilities("ffmpeg").fingerprint
+            self.assertEqual(absolute, discovered)
+
+    def test_repeated_capability_detection_reuses_cached_ffmpeg_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"same-build")
+            probe_outputs = {
+                "-version": "ffmpeg version cache-test",
+                "-hwaccels": "cuda",
+                "-decoders": " V..... h264_cuvid",
+                "-filters": " ... scale_cuda",
+                "-encoders": " V..... h264_nvenc",
+            }
+
+            def fake_probe(_ffmpeg: str, *args: str, **_kwargs) -> str:
+                return probe_outputs.get(args[-1], "")
+
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe) as run:
+                first = detect_gpu_media_capabilities(str(ffmpeg))
+                second = detect_gpu_media_capabilities(str(ffmpeg))
+            self.assertEqual(first, second)
+            self.assertEqual(5, run.call_count)
+
+    def test_ffmpeg_fingerprint_detects_same_size_same_mtime_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"AAAA")
+            stamp = ffmpeg.stat().st_mtime_ns
+            probe_outputs = {
+                "-version": "ffmpeg version identical-text",
+                "-hwaccels": "cuda",
+                "-decoders": " V..... h264_cuvid",
+                "-filters": " ... scale_cuda",
+                "-encoders": " V..... h264_nvenc",
+            }
+
+            def fake_probe(_ffmpeg: str, *args: str, **_kwargs) -> str:
+                return probe_outputs.get(args[-1], "")
+
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe):
+                first = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+                ffmpeg.write_bytes(b"BBBB")
+                os.utime(ffmpeg, ns=(stamp, stamp))
+                second = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            self.assertEqual(4, ffmpeg.stat().st_size)
+            self.assertEqual(stamp, ffmpeg.stat().st_mtime_ns)
+            self.assertNotEqual(first, second)
+
+    def test_ffmpeg_fingerprint_changes_when_binary_changes_even_if_version_text_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"build-one")
+            probe_outputs = {
+                "-version": "ffmpeg version same-version",
+                "-hwaccels": "cuda",
+                "-decoders": " V..... h264_cuvid",
+                "-filters": " ... scale_cuda",
+                "-encoders": " V..... h264_nvenc",
+            }
+
+            def fake_probe(_ffmpeg: str, *args: str, **_kwargs) -> str:
+                return probe_outputs.get(args[-1], "")
+
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe):
+                first = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            ffmpeg.write_bytes(b"build-two-with-different-size")
+            with patch("cinepulse.gpu_media._run_probe", side_effect=fake_probe):
+                second = detect_gpu_media_capabilities(str(ffmpeg)).fingerprint
+            self.assertNotEqual(first, second)
+
     def test_sdr_known_color_can_generate_benchmark_candidate(self) -> None:
         values = safe_candidate_policies(capabilities(), codec="h264", profile=sdr_profile())
         self.assertEqual(1, len(values))
@@ -81,6 +186,23 @@ class GpuMediaTests(unittest.TestCase):
     def test_unknown_color_never_generates_candidate(self) -> None:
         unknown = ColorProfile("unknown", "bt709", "bt709", "tv", "yuv420p", 8, False)
         self.assertEqual((), safe_candidate_policies(capabilities(), codec="h264", profile=unknown))
+
+    def test_cuda_surface_vram_floor_scales_with_geometry_and_bit_depth(self) -> None:
+        hd = key()
+        uhd10 = GpuMediaKey.from_profile(
+            gpu_name="RTX Test",
+            driver="999.1",
+            ffmpeg_fingerprint="ffmpeg-test",
+            codec="hevc",
+            width=3840,
+            height=2160,
+            target_width=7680,
+            target_height=4320,
+            profile=ColorProfile("bt709", "bt709", "bt709", "tv", "yuv420p10le", 10, False),
+            operation="decode-scale",
+        )
+        self.assertGreaterEqual(gpu_media_vram_floor_mb(hd), 384.0)
+        self.assertGreater(gpu_media_vram_floor_mb(uhd10), gpu_media_vram_floor_mb(hd))
 
     def test_unproven_gpu_path_fails_closed_to_cpu(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

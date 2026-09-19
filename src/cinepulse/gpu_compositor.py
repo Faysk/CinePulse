@@ -26,7 +26,7 @@ from typing import Iterable, Literal
 from .gpu_media import CREATE_NO_WINDOW
 
 
-COMPOSITOR_SCHEMA = 3
+COMPOSITOR_SCHEMA = 7
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 80.0
 COMPOSITOR_SSIM_FLOOR = 0.999999
@@ -78,7 +78,12 @@ class OverlayLayer:
         return abs(float(self.rotation_degrees)) > 1e-9 or abs(float(self.spin_rpm)) > 1e-9
 
     def contract_token(self) -> str:
-        raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        raw = json.dumps(
+            _layer_contract_payload(self),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
@@ -87,9 +92,28 @@ def canonical_overlay_stack(layers: Iterable[OverlayLayer]) -> tuple[OverlayLaye
     return tuple(layer for _index, layer in sorted(indexed, key=lambda item: (item[1].z_order, item[0])))
 
 
+def _layer_contract_payload(layer: OverlayLayer) -> dict[str, object]:
+    payload = asdict(layer)
+    source = Path(layer.source)
+    try:
+        resolved = source.resolve()
+    except OSError:
+        resolved = source
+    identity: dict[str, object] = {"path": str(resolved)}
+    try:
+        stat = source.stat()
+        identity["size"] = int(stat.st_size)
+        identity["mtime"] = int(stat.st_mtime_ns)
+    except OSError:
+        identity["size"] = 0
+        identity["mtime"] = 0
+    payload["source"] = identity
+    return payload
+
+
 def overlay_stack_contract_token(layers: Iterable[OverlayLayer]) -> str:
     ordered = canonical_overlay_stack(layers)
-    payload = [asdict(layer) for layer in ordered]
+    payload = [_layer_contract_payload(layer) for layer in ordered]
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
@@ -126,11 +150,33 @@ def _probe(ffmpeg: str, *args: str) -> str:
     return result.stdout or ""
 
 
+def _ffmpeg_binary_identity(ffmpeg: str) -> str:
+    path = Path(str(ffmpeg))
+    if not path.is_file():
+        import shutil
+        discovered = shutil.which(str(ffmpeg))
+        if discovered:
+            path = Path(discovered)
+    try:
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+    except OSError:
+        return "unresolved"
+    return f"{resolved.name}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+
+
 def detect_gpu_compositor_capabilities(ffmpeg: str) -> GpuCompositorCapabilities:
     version = _probe(ffmpeg, "-version")
     filters = _probe(ffmpeg, "-filters").lower()
     hwaccels = _probe(ffmpeg, "-hwaccels").lower()
-    fingerprint = hashlib.sha256(version.encode("utf-8", errors="replace")).hexdigest()[:20]
+    fingerprint_payload = (
+        version
+        + "\nCINEPULSE_FFMPEG_BINARY="
+        + _ffmpeg_binary_identity(ffmpeg)
+    )
+    fingerprint = hashlib.sha256(
+        fingerprint_payload.encode("utf-8", errors="replace")
+    ).hexdigest()[:20]
     return GpuCompositorCapabilities(
         ffmpeg=str(ffmpeg),
         fingerprint=fingerprint,
@@ -155,6 +201,13 @@ class GpuCompositorKey:
     space: str
     color_range: str
     layer_contract: str
+    base_mode: str = "cpu-upload"
+    base_codec: str = ""
+    base_decoder: str = ""
+    vram_mb: int = 0
+    cpu_name: str = ""
+    cpu_threads: int = 0
+    gpu_index: int = 0
 
     def token(self) -> str:
         return "|".join(
@@ -170,6 +223,13 @@ class GpuCompositorKey:
                 self.space.strip().lower() or "unknown",
                 self.color_range.strip().lower() or "unknown",
                 self.layer_contract.strip().lower(),
+                self.base_mode.strip().lower() or "cpu-upload",
+                self.base_codec.strip().lower() or "unknown-codec",
+                self.base_decoder.strip().lower() or "none",
+                str(max(0, int(self.vram_mb))),
+                " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
+                f"cpu{max(0, int(self.cpu_threads))}",
+                f"gpu{max(0, int(self.gpu_index))}",
             )
         )
 
@@ -237,6 +297,50 @@ class GpuCompositorStore:
             and evidence.get("reference_id") == COMPOSITOR_REFERENCE_ID
         )
 
+    def benchmark_due(self, key: GpuCompositorKey, *, cooldown_seconds: float = 21600.0) -> bool:
+        record = self._load().get("records", {}).get(key.token())
+        if not isinstance(record, dict):
+            return True
+        if record.get("accepted"):
+            return False
+        try:
+            updated = float(record.get("updated_unix") or 0.0)
+        except (TypeError, ValueError):
+            return True
+        return (time.time() - updated) >= max(0.0, float(cooldown_seconds))
+
+    def record_benchmark_failure(self, key: GpuCompositorKey, reason: BaseException | str) -> None:
+        """Cooldown one failed local benchmark without creating GPU evidence."""
+        payload = self._load()
+        records = payload.setdefault("records", {})
+        if not isinstance(records, dict):
+            records = {}
+            payload["records"] = records
+        records[key.token()] = {
+            "key": asdict(key),
+            "accepted": False,
+            "benchmark_failure": str(reason),
+            "updated_unix": time.time(),
+        }
+        payload["version"] = self.VERSION
+        self._atomic_write(payload)
+
+    def record_rejection(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> None:
+        payload = self._load()
+        records = payload.setdefault("records", {})
+        if not isinstance(records, dict):
+            records = {}
+            payload["records"] = records
+        records[key.token()] = {
+            "key": asdict(key),
+            "accepted": False,
+            "evidence": asdict(evidence),
+            "speedup": evidence.speedup,
+            "updated_unix": time.time(),
+        }
+        payload["version"] = self.VERSION
+        self._atomic_write(payload)
+
     def record(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> bool:
         if not evidence.accepted:
             return False
@@ -296,6 +400,26 @@ def _static_layer_supported(layer: OverlayLayer) -> bool:
     )
 
 
+def compositor_vram_floor_mb(
+    width: int,
+    height: int,
+    layer_count: int,
+) -> float:
+    """Estimate live VRAM required by the bounded SDR CUDA compositor.
+
+    This guard never authorizes H6 by itself; exact physical evidence is still
+    mandatory. It only avoids entering an approved path when current VRAM
+    cannot safely hold the base, overlay and intermediate CUDA surfaces.
+    """
+    pixels = max(1, int(width)) * max(1, int(height))
+    layers = max(1, min(COMPOSITOR_MAX_STACK_LAYERS, int(layer_count)))
+    yuv420_surface_mb = pixels * 1.5 / (1024.0 * 1024.0)
+    # Base decode/upload + per-layer upload + overlay intermediates + FFmpeg/
+    # driver reserve. This is deliberately conservative for the SDR envelope.
+    surface_factor = 8.0 + layers * 4.0
+    return max(512.0, yuv420_surface_mb * surface_factor + 384.0)
+
+
 def cuda_layer_eligible(layer: OverlayLayer, caps: GpuCompositorCapabilities) -> bool:
     """Return benchmark eligibility, not runtime permission."""
     return caps.media_layers_supported and _static_layer_supported(layer)
@@ -328,6 +452,7 @@ def build_cuda_overlay_stack_filter(
     *,
     canvas_width: int,
     canvas_height: int,
+    base_resident: bool = False,
 ) -> str:
     """Build a bounded, deterministic CUDA overlay stack.
 
@@ -342,8 +467,10 @@ def build_cuda_overlay_stack_filter(
     if any(not _static_layer_supported(layer) for layer in ordered):
         raise ValueError("stack contains an unproven transform/blend outside H6 CUDA envelope")
 
-    chains: list[str] = ["[0:v]format=yuv420p,hwupload_cuda[basegpu]"]
-    previous = "basegpu"
+    chains: list[str] = []
+    previous = "0:v" if base_resident else "basegpu"
+    if not base_resident:
+        chains.append("[0:v]format=yuv420p,hwupload_cuda[basegpu]")
     for index, layer in enumerate(ordered, start=1):
         prep = ["format=yuva420p"]
         if layer.opacity < 0.999999:

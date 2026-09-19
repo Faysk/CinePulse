@@ -32,6 +32,7 @@ from cinepulse.gpu_compositor import (
     detect_gpu_compositor_capabilities,
     overlay_stack_contract_token,
 )
+from cinepulse.gpu_media import detect_gpu_media_capabilities
 from cinepulse.hardware import detect_hardware
 from cinepulse.media_profile import ColorProfile
 from cinepulse.overlay_composer import ComposerItem, OverlayComposerState
@@ -180,6 +181,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--x", type=float, default=0.5)
     result.add_argument("--y", type=float, default=0.5)
     result.add_argument("--opacity", type=float, default=1.0)
+    result.add_argument("--resident-base", action="store_true", help="Benchmark NVDEC-resident base frames instead of CPU decode + hwupload.")
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--timeout", type=float, default=900.0)
     return result
 
@@ -228,11 +231,23 @@ def main() -> int:
     caps = detect_gpu_compositor_capabilities(ffmpeg)
     if not cuda_stack_eligible(layers, caps):
         raise SystemExit("layer stack is outside the bounded H6 CUDA envelope")
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu:
         raise SystemExit("NVIDIA GPU required; no H6 physical evidence recorded")
 
     stack_contract = overlay_stack_contract_token(layers)
+    base_codec = str(base_video.get("codec_name") or "unknown").lower()
+    resident_decoder = ""
+    if args.resident_base:
+        media_caps = detect_gpu_media_capabilities(ffmpeg)
+        resident_decoder = media_caps.decoder_for(base_codec) or ""
+        if not resident_decoder:
+            print(json.dumps({
+                "physical_acceptance": "rejected",
+                "reason": f"no CUDA decoder candidate for codec {base_codec}",
+                "base_mode": "nvdec-resident",
+            }, indent=2))
+            return 2
     key = GpuCompositorKey(
         gpu_name=hardware.gpu,
         driver=hardware.driver or "unknown-driver",
@@ -246,6 +261,13 @@ def main() -> int:
         space=profile.space,
         color_range=profile.range,
         layer_contract=stack_contract,
+        base_mode="nvdec-resident" if args.resident_base else "cpu-upload",
+        base_codec=base_codec if args.resident_base else "",
+        base_decoder=resident_decoder,
+        vram_mb=int(hardware.vram_mb or 0),
+        cpu_name=hardware.cpu,
+        cpu_threads=int(hardware.cpu_threads or 0),
+        gpu_index=hardware.gpu_index,
     )
 
     with tempfile.TemporaryDirectory(prefix="cinepulse-h6-") as temporary:
@@ -284,8 +306,21 @@ def main() -> int:
             layers,
             canvas_width=width,
             canvas_height=height,
+            base_resident=args.resident_base,
         ) + ";[vout]format=rgba[vfinal]"
-        candidate_cmd = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(args.base)]
+        candidate_cmd = [
+            ffmpeg, "-y", "-hide_banner", "-nostdin",
+            "-init_hw_device", f"cuda=cinepulse_gpu:{hardware.gpu_index}",
+            "-filter_hw_device", "cinepulse_gpu",
+        ]
+        if args.resident_base:
+            candidate_cmd += [
+                "-hwaccel", "cuda",
+                "-hwaccel_device", str(hardware.gpu_index),
+                "-hwaccel_output_format", "cuda",
+                "-c:v", resident_decoder,
+            ]
+        candidate_cmd += ["-i", str(args.base)]
         for layer in layers:
             candidate_cmd += layer_input_args(layer)
         candidate_cmd += [
@@ -333,6 +368,9 @@ def main() -> int:
         "layer_count": len(layers),
         "layer_contracts": [layer.contract_token() for layer in layers],
         "stack_contract": stack_contract,
+        "base_mode": key.base_mode,
+        "base_codec": key.base_codec,
+        "base_decoder": key.base_decoder,
         "baseline_seconds": evidence.baseline_seconds,
         "candidate_seconds": evidence.candidate_seconds,
         "speedup": evidence.speedup,

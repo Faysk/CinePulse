@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 
 from cinepulse.delivery import DeliveryPlan
-from cinepulse.gpu_delivery import cinepulse_hevc_nvenc_contract, select_resident_delivery_route
+from cinepulse.gpu_delivery import (
+    cinepulse_hevc_nvenc_contract,
+    resident_vram_floor_mb,
+    select_resident_delivery_route,
+)
 from cinepulse.gpu_media import GpuMediaCapabilities
 from cinepulse.hardware import HardwareProfile
 from cinepulse.media_profile import ColorProfile
@@ -43,7 +47,16 @@ def profile() -> ColorProfile:
     return ColorProfile("bt709", "bt709", "bt709", "tv", "yuv420p", 8, False)
 
 
-def select(*, store=None, source_fps=60.0, target_fps=60, target=(3840, 2160), source=(1920, 1080), color_final=True):
+def select(
+    *,
+    store=None,
+    source_fps=60.0,
+    target_fps=60,
+    target=(3840, 2160),
+    source=(1920, 1080),
+    color_final=True,
+    vram_free=7000.0,
+):
     return select_resident_delivery_route(
         hardware=GPU,
         caps=CAPS,
@@ -54,6 +67,7 @@ def select(*, store=None, source_fps=60.0, target_fps=60, target=(3840, 2160), s
         target_width=target[0], target_height=target[1], target_fps=target_fps,
         delivery_plan=plan(), bitrate_mbps=80, use_cpu=False,
         color_already_final=color_final,
+        vram_free_mb=vram_free,
     )
 
 
@@ -69,6 +83,15 @@ class GpuDeliveryTests(unittest.TestCase):
         actual = cinepulse_hevc_nvenc_contract(pixel_format="yuv420p", bitrate_mbps=80, fps=60).ffmpeg_args()
         self.assertEqual(option_map(expected), option_map(actual))
 
+    def test_contract_parity_includes_nonzero_gpu_index(self) -> None:
+        expected = plan().video_args(
+            use_cpu=False, nvenc_available=True, bitrate_mbps=80, fps=60, gpu_index=2
+        )
+        actual = cinepulse_hevc_nvenc_contract(
+            pixel_format="yuv420p", bitrate_mbps=80, fps=60, gpu_index=2
+        ).ffmpeg_args()
+        self.assertEqual(option_map(expected), option_map(actual))
+
     def test_exact_evidence_allows_simple_same_aspect_resident_route(self) -> None:
         store = Store(True)
         route = select(store=store)
@@ -77,6 +100,45 @@ class GpuDeliveryTests(unittest.TestCase):
         self.assertEqual("scale_cuda", route.scaler)
         self.assertEqual(1, len(store.keys))
         self.assertEqual(route.contract.token(), store.keys[0].encode_contract)
+
+    def test_unknown_live_vram_blocks_resident_route_before_store_lookup(self) -> None:
+        store = Store(True)
+        route = select(store=store, vram_free=None)
+        self.assertFalse(route.approved)
+        self.assertIn("VRAM", route.reason)
+        self.assertEqual([], store.keys)
+
+    def test_low_live_vram_blocks_resident_route_before_store_lookup(self) -> None:
+        store = Store(True)
+        floor = resident_vram_floor_mb(
+            source_width=1920,
+            source_height=1080,
+            target_width=3840,
+            target_height=2160,
+            pixel_format="yuv420p",
+        )
+        route = select(store=store, vram_free=floor - 1)
+        self.assertFalse(route.approved)
+        self.assertIn("resident floor", route.reason)
+        self.assertEqual([], store.keys)
+
+    def test_resident_vram_floor_scales_with_geometry_and_bit_depth(self) -> None:
+        hd = resident_vram_floor_mb(
+            source_width=1920,
+            source_height=1080,
+            target_width=1920,
+            target_height=1080,
+            pixel_format="yuv420p",
+        )
+        uhd = resident_vram_floor_mb(
+            source_width=3840,
+            source_height=2160,
+            target_width=7680,
+            target_height=4320,
+            pixel_format="p010le",
+        )
+        self.assertGreaterEqual(hd, 1024.0)
+        self.assertGreater(uhd, hd)
 
     def test_missing_evidence_stays_cpu(self) -> None:
         route = select(store=Store(False))

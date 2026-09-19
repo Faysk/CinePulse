@@ -9,8 +9,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .hardware import detect_hardware
+from .component_identity import bootstrap_component_fingerprint
+from .gpu_failure import looks_like_gpu_runtime_failure
+from .hardware import HardwareProfile, detect_hardware
 from .paths import PATHS
+from .pipeline_runtime import vram_free_mb
 from .rife_tuning import RifePolicy, RifeTuningKey, RifeTuningStore, fallback_policy
 
 
@@ -167,9 +170,26 @@ def _move_native_frames(native_dir: Path, output_dir: Path, expected: int) -> No
     validate_png_sequence(output_dir, expected)
 
 
-def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
-    hardware = detect_hardware()
+def _hardware_tuning_policy(
+    width: int,
+    height: int,
+    model: Path,
+    executable: Path,
+    hardware: HardwareProfile,
+    component_fingerprint: str = "",
+) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
     if not hardware.gpu:
+        return None, None, None
+    component_fingerprint = str(component_fingerprint or "").strip() or bootstrap_component_fingerprint(
+        "rife",
+        component_root=model.parent,
+        critical_files=(
+            executable,
+            model / "flownet.bin",
+            model / "flownet.param",
+        ),
+    )
+    if not component_fingerprint:
         return None, None, None
     key = RifeTuningKey(
         hardware.gpu,
@@ -178,10 +198,51 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
         model.name or "rife-v4.6",
         width,
         height,
+        component_fingerprint,
+        cpu_name=hardware.cpu,
+        cpu_threads=hardware.cpu_threads,
+        gpu_index=hardware.gpu_index,
     )
     store = RifeTuningStore(PATHS.cache / "hardware" / "rife-tuning.json")
-    policy = store.lookup(key, gpu_index=0)
+    policy = store.lookup(key, gpu_index=hardware.gpu_index)
     return policy, key, store
+
+
+def _limit_policy_by_live_vram(
+    tuned: RifePolicy | None,
+    *,
+    uhd: bool,
+    free_vram_mb: float | None,
+    gpu_index: int = 0,
+) -> tuple[RifePolicy, bool, str]:
+    """Select a per-invocation RIFE policy from current VRAM headroom.
+
+    Physical tuning proves an exact hardware/driver/geometry policy, but VRAM
+    occupancy can change between renders. Missing live telemetry therefore
+    fails closed to the historical fallback. Very low headroom uses 1:1:1 even
+    for non-UHD so rollback never increases GPU pressure.
+    """
+
+    base = fallback_policy(uhd=uhd, gpu_index=max(0, int(gpu_index)))
+    if free_vram_mb is None:
+        return base, False, "live VRAM unavailable"
+    free = max(0.0, float(free_vram_mb))
+    if free < 3000.0:
+        serial = RifePolicy("1:1:1", max(0, int(gpu_index)))
+        return serial, False, f"live VRAM low ({free:.0f} MiB)"
+    if tuned is None:
+        return base, False, f"no tuned policy; live VRAM {free:.0f} MiB"
+
+    process_jobs = tuned.pressure[0]
+    required = 6500.0 if process_jobs >= 3 else 4000.0 if process_jobs >= 2 else 2500.0
+    if uhd:
+        required = max(required, 5000.0)
+    if free < required:
+        return base, False, (
+            f"tuned policy {tuned.jobs} needs >= {required:.0f} MiB live headroom; "
+            f"{free:.0f} MiB available"
+        )
+    return tuned, True, f"tuned policy admitted with {free:.0f} MiB live VRAM"
 
 
 def _native_command(
@@ -209,6 +270,44 @@ def _native_command(
         command.append("-u")
     command += ["-f", "%08d.png"]
     return command
+
+
+def _should_invalidate_measured_tuning(
+    exc: BaseException,
+    current: RifeExecutionPolicy,
+) -> tuple[bool, str]:
+    """Decide whether one failure proves the measured policy stale/unsafe."""
+    text = str(exc).lower()
+    integrity_failure = any(
+        token in text
+        for token in (
+            "sequência produziu",
+            "dimensões inconsistentes",
+            "png truncado",
+            "assinatura png inválida",
+            "ihdr ausente",
+        )
+    )
+    gpu_failure = looks_like_gpu_runtime_failure(exc)
+    oom = any(token in text for token in OOM_TOKENS)
+    if oom:
+        live_free = vram_free_mb(current.gpu_index)
+        tuned = RifePolicy(current.jobs, current.gpu_index)
+        admitted, measured, _reason = _limit_policy_by_live_vram(
+            tuned,
+            uhd=current.uhd,
+            free_vram_mb=live_free,
+            gpu_index=current.gpu_index,
+        )
+        if not measured or admitted != tuned:
+            return False, (
+                "OOM coincided with reduced live VRAM headroom; physical evidence preserved"
+            )
+    if integrity_failure:
+        return True, "output integrity failure"
+    if gpu_failure:
+        return True, "GPU runtime failure with sufficient live headroom"
+    return False, "failure is not specific to GPU concurrency/integrity"
 
 
 def _run_native_with_rollback(
@@ -248,23 +347,59 @@ def _run_native_with_rollback(
             return current
         except Exception as exc:
             if current.measured and tuning_key is not None and tuning_store is not None:
-                tuning_store.invalidate(tuning_key)
-                print(
-                    "CINEPULSE_RIFE_SAFE TUNING_INVALIDATED "
-                    f"jobs={current.jobs} reason={type(exc).__name__}",
-                    flush=True,
-                )
-            if attempted_fallback or (current.jobs == fallback.jobs and current.gpu_index == fallback.gpu_index):
-                raise
+                invalidate, tuning_reason = _should_invalidate_measured_tuning(exc, current)
+                if invalidate:
+                    tuning_store.invalidate(tuning_key)
+                    print(
+                        "CINEPULSE_RIFE_SAFE TUNING_INVALIDATED "
+                        f"jobs={current.jobs} reason={tuning_reason}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "CINEPULSE_RIFE_SAFE TUNING_PRESERVED "
+                        f"jobs={current.jobs} reason={tuning_reason}",
+                        flush=True,
+                    )
             text = str(exc).lower()
             oom = any(token in text for token in OOM_TOKENS)
+            retry_policy = fallback
+            if oom and current.gpu_index >= 0:
+                live_free = vram_free_mb(current.gpu_index)
+                dynamic_spec, _measured, dynamic_reason = _limit_policy_by_live_vram(
+                    None,
+                    uhd=current.uhd,
+                    free_vram_mb=live_free,
+                    gpu_index=current.gpu_index,
+                )
+                retry_policy = RifeExecutionPolicy(
+                    current.uhd,
+                    dynamic_spec.jobs,
+                    current.native_target,
+                    current.requested_target,
+                    dynamic_spec.gpu_index,
+                    False,
+                )
+                print(
+                    "CINEPULSE_RIFE_SAFE LIVE_ROLLBACK "
+                    f"free={live_free if live_free is not None else 'n/a'} "
+                    f"selected={retry_policy.jobs} reason={dynamic_reason}",
+                    flush=True,
+                )
+            if (
+                retry_policy.jobs == current.jobs
+                and retry_policy.gpu_index == current.gpu_index
+            ):
+                raise
+            if attempted_fallback and not oom:
+                raise
             print(
                 "CINEPULSE_RIFE_SAFE ROLLBACK "
                 f"reason={'oom' if oom else 'instability/integrity'} "
-                f"from={current.jobs} to={fallback.jobs}",
+                f"from={current.jobs} to={retry_policy.jobs}",
                 flush=True,
             )
-            current = fallback
+            current = retry_policy
             attempted_fallback = True
 
 
@@ -277,6 +412,7 @@ def run_safe_rife(
     requested_target: int,
     device: str,
     ffmpeg: str = "",
+    component_fingerprint: str = "",
 ) -> RifeExecutionPolicy:
     input_frames = validate_png_sequence(incoming, len(list(incoming.glob("*.png"))))
     if len(input_frames) < 2:
@@ -286,9 +422,40 @@ def run_safe_rife(
     tuned: RifePolicy | None = None
     tuning_key: RifeTuningKey | None = None
     tuning_store: RifeTuningStore | None = None
+    selected_policy: RifePolicy | None = None
+    selected_measured = False
+    live_reason = ""
+    live_free: float | None = None
+    active_gpu_index = 0
     if device == "gpu":
-        tuned, tuning_key, tuning_store = _hardware_tuning_policy(width, height, model)
-    fallback_spec = fallback_policy(uhd=uhd, gpu_index=0)
+        runtime_hardware = detect_hardware()
+        active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
+        tuned, tuning_key, tuning_store = _hardware_tuning_policy(
+            width, height, model, rife_executable, runtime_hardware,
+            component_fingerprint=component_fingerprint,
+        )
+        live_free = (
+            float(runtime_hardware.vram_free_mb)
+            if runtime_hardware.vram_free_mb is not None
+            else None
+        )
+        selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
+            tuned,
+            uhd=uhd,
+            free_vram_mb=live_free,
+            gpu_index=active_gpu_index,
+        )
+        print(
+            "CINEPULSE_RIFE_SAFE LIVE_VRAM "
+            f"free={live_free if live_free is not None else 'n/a'} "
+            f"selected={selected_policy.jobs} measured={selected_measured} reason={live_reason}",
+            flush=True,
+        )
+    fallback_spec = (
+        _limit_policy_by_live_vram(None, uhd=uhd, free_vram_mb=live_free, gpu_index=active_gpu_index)[0]
+        if device == "gpu"
+        else fallback_policy(uhd=uhd, gpu_index=active_gpu_index)
+    )
     fallback = execution_policy(
         len(input_frames), width, height, requested_target, device,
         jobs_override=fallback_spec.jobs if device == "gpu" else "",
@@ -297,9 +464,9 @@ def run_safe_rife(
     )
     policy = execution_policy(
         len(input_frames), width, height, requested_target, device,
-        jobs_override=tuned.jobs if tuned is not None else fallback.jobs,
-        gpu_index=tuned.gpu_index if tuned is not None else fallback.gpu_index,
-        measured=tuned is not None,
+        jobs_override=selected_policy.jobs if selected_policy is not None else fallback.jobs,
+        gpu_index=selected_policy.gpu_index if selected_policy is not None else fallback.gpu_index,
+        measured=selected_measured,
     )
     outgoing.mkdir(parents=True, exist_ok=True)
     if any(outgoing.iterdir()):
@@ -368,6 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frames", required=True, type=int)
     parser.add_argument("--device", choices=("gpu", "cpu"), default="gpu")
     parser.add_argument("--ffmpeg", default="")
+    parser.add_argument("--component-fingerprint", default="")
     return parser
 
 
@@ -382,6 +550,7 @@ def main(argv: list[str] | None = None) -> int:
             requested_target=args.frames,
             device=args.device,
             ffmpeg=args.ffmpeg,
+            component_fingerprint=args.component_fingerprint,
         )
         return 0
     except Exception as exc:

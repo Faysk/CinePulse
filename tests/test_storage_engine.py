@@ -15,6 +15,8 @@ from cinepulse.storage_engine import (
     resolve_scratch_dir,
     probe_scratch,
     touch_cache_entry,
+    neural_chunk_workset_gb,
+    _compressed_gb,
 )
 
 
@@ -31,11 +33,63 @@ class StorageEngineTests(unittest.TestCase):
         values.update(overrides)
         return build_render_plan(PlanInput(**values))
 
+    def test_realesrgan_can_drop_to_one_frame_when_budget_is_tight(self):
+        source = FrameSpec(7680, 4320, 30)
+        target = FrameSpec(15360, 8640, 30)
+        frames = choose_chunk_frames(
+            source,
+            target,
+            budget_gb=0.5,
+            minimum=1,
+        )
+        self.assertEqual(frames, 1)
+        self.assertGreater(
+            neural_chunk_workset_gb(source, target, 2),
+            neural_chunk_workset_gb(source, target, 1),
+        )
+
+    def test_rife_minimum_two_frames_can_exceed_tiny_budget_and_is_measurable(self):
+        source = FrameSpec(11520, 6480, 30)
+        target = FrameSpec(11520, 6480, 60)
+        minimum = neural_chunk_workset_gb(
+            source,
+            target,
+            2,
+            output_frames_per_input=2.0,
+        )
+        self.assertGreater(minimum, 0.5)
+        self.assertEqual(
+            choose_chunk_frames(
+                source,
+                target,
+                budget_gb=0.5,
+                output_frames_per_input=2.0,
+            ),
+            2,
+        )
+
     def test_chunk_size_shrinks_for_larger_frames(self):
         small = choose_chunk_frames(FrameSpec(640, 360, 30), FrameSpec(1280, 720, 30), budget_gb=1)
         large = choose_chunk_frames(FrameSpec(3840, 2160, 30), FrameSpec(7680, 4320, 30), budget_gb=1)
         self.assertGreater(small, large)
         self.assertGreaterEqual(large, 2)
+
+    def test_large_ram_budget_can_exceed_legacy_240_frame_cap(self):
+        ai = choose_chunk_frames(
+            FrameSpec(1280, 720, 30),
+            FrameSpec(2560, 1440, 30),
+            budget_gb=16.0,
+        )
+        rife = choose_chunk_frames(
+            FrameSpec(1920, 1080, 30),
+            FrameSpec(1920, 1080, 60),
+            budget_gb=12.0,
+            output_frames_per_input=2.0,
+        )
+        self.assertGreater(ai, 240)
+        self.assertLessEqual(ai, 480)
+        self.assertGreater(rife, 240)
+        self.assertLessEqual(rife, 480)
 
     def test_rife_ratio_is_part_of_chunk_budget(self):
         one_x = choose_chunk_frames(FrameSpec(1920, 1080, 24), FrameSpec(1920, 1080, 24), budget_gb=1)
@@ -52,7 +106,101 @@ class StorageEngineTests(unittest.TestCase):
         self.assertIn("rife_base", keys)
         self.assertNotIn("rife_final", keys)
         self.assertGreater(estimate.peak_scratch_gb, 0)
-        self.assertLessEqual(estimate.ai_chunk_frames, 240)
+        self.assertLessEqual(estimate.ai_chunk_frames, 480)
+
+    def test_separate_dynamic_ai_and_rife_budgets_are_reflected_in_preflight(self):
+        plan = self._plan(
+            source_width=1920, source_height=1080, source_fps=30,
+            target_width=3840, target_height=2160, target_fps=60,
+        )
+        legacy = estimate_storage(plan, duration=30, output_gb=1.2, chunk_budget_gb=4.0)
+        dynamic = estimate_storage(
+            plan, duration=30, output_gb=1.2,
+            ai_chunk_budget_gb=16.0, rife_chunk_budget_gb=12.0,
+        )
+        self.assertGreaterEqual(dynamic.ai_chunk_frames, legacy.ai_chunk_frames)
+        self.assertGreaterEqual(dynamic.rife_chunk_frames, legacy.rife_chunk_frames)
+        self.assertGreaterEqual(dynamic.peak_scratch_gb, legacy.peak_scratch_gb)
+        by_key = {stage.key: stage for stage in dynamic.stages}
+        self.assertGreater(by_key["enhancement"].working_set_gb, 0.0)
+        self.assertGreater(by_key["rife_base"].working_set_gb, 0.0)
+
+    def test_concurrent_neural_worksets_raise_peak_scratch_reservation(self):
+        plan = self._plan(
+            source_width=1920, source_height=1080, source_fps=30,
+            target_width=3840, target_height=2160, target_fps=60,
+        )
+        one = estimate_storage(
+            plan, duration=30, output_gb=1.2,
+            ai_chunk_budget_gb=16.0, rife_chunk_budget_gb=12.0,
+            ai_inflight_chunks=1, rife_inflight_chunks=1,
+        )
+        overlapped = estimate_storage(
+            plan, duration=30, output_gb=1.2,
+            ai_chunk_budget_gb=16.0, rife_chunk_budget_gb=12.0,
+            ai_inflight_chunks=3, rife_inflight_chunks=2,
+        )
+        self.assertGreater(overlapped.peak_scratch_gb, one.peak_scratch_gb)
+        details = " ".join(stage.detail for stage in overlapped.stages)
+        self.assertIn("até 3 lote(s) coexistem", details)
+        self.assertIn("até 2 lote(s) coexistem", details)
+
+    def test_neural_peak_includes_accumulated_segments_plus_live_worksets(self):
+        plan = self._plan(
+            source_width=1920, source_height=1080, source_fps=30,
+            target_width=3840, target_height=2160, target_fps=60,
+        )
+        estimate = estimate_storage(
+            plan,
+            duration=30,
+            output_gb=1.2,
+            ai_chunk_budget_gb=16.0,
+            rife_chunk_budget_gb=12.0,
+            ai_inflight_chunks=3,
+            rife_inflight_chunks=2,
+        )
+        by_key = {stage.key: stage for stage in estimate.stages}
+
+        enhancement = by_key["enhancement"]
+        ai_spec = plan.step("enhancement").output_spec
+        self.assertIsNotNone(ai_spec)
+        ai_master = _compressed_gb(ai_spec, enhancement.duration_seconds, lossless=True)
+        self.assertGreaterEqual(
+            enhancement.peak_scratch_gb + 1e-9,
+            ai_master + enhancement.working_set_gb,
+        )
+
+        rife_base = by_key["rife_base"]
+        rife_spec = plan.step("rife_base").output_spec
+        self.assertIsNotNone(rife_spec)
+        rife_master = _compressed_gb(rife_spec, rife_base.duration_seconds, lossless=True)
+        self.assertGreaterEqual(
+            rife_base.peak_scratch_gb + 1e-9,
+            rife_master + rife_base.working_set_gb,
+        )
+
+    def test_inflight_storage_inputs_are_hard_capped(self):
+        plan = self._plan()
+        capped = estimate_storage(
+            plan, duration=20, output_gb=1.0,
+            ai_inflight_chunks=99, rife_inflight_chunks=99,
+        )
+        explicit = estimate_storage(
+            plan, duration=20, output_gb=1.0,
+            ai_inflight_chunks=3, rife_inflight_chunks=3,
+        )
+        self.assertAlmostEqual(capped.peak_scratch_gb, explicit.peak_scratch_gb, places=6)
+
+    def test_legacy_chunk_budget_remains_backward_compatible(self):
+        plan = self._plan()
+        old_style = estimate_storage(plan, duration=20, output_gb=1.0, chunk_budget_gb=3.0)
+        split_style = estimate_storage(
+            plan, duration=20, output_gb=1.0,
+            ai_chunk_budget_gb=3.0, rife_chunk_budget_gb=3.0,
+        )
+        self.assertEqual(old_style.ai_chunk_frames, split_style.ai_chunk_frames)
+        self.assertEqual(old_style.rife_chunk_frames, split_style.rife_chunk_frames)
+        self.assertAlmostEqual(old_style.peak_scratch_gb, split_style.peak_scratch_gb, places=6)
 
     def test_music_loop_uses_clip_duration_before_timeline_expansion(self):
         plan = self._plan(

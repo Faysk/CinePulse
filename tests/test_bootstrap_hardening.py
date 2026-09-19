@@ -66,9 +66,13 @@ class BootstrapHardeningTests(unittest.TestCase):
 
     def test_components_require_version_hash_and_atomic_promotion(self) -> None:
         text = START.read_text(encoding="utf-8-sig")
+        self.assertIn("$StateKey = ([string]$State.key).Trim().ToLowerInvariant()", text)
+        self.assertIn("$ExpectedKey = $Key.Trim().ToLowerInvariant()", text)
         self.assertIn("$StateHash = ([string]$State.sha256).ToLowerInvariant()", text)
         self.assertIn("$ManifestHash = ([string]$Manifest.sha256).ToLowerInvariant()", text)
-        self.assertIn("$State.version -eq $Manifest.version -and $StateHash -eq $ManifestHash", text)
+        self.assertIn("$StateKey -eq $ExpectedKey", text)
+        self.assertIn("$State.version -eq $Manifest.version", text)
+        self.assertIn("$StateHash -eq $ManifestHash", text)
         self.assertIn("CINEPULSE_CI_COMPONENT_FAIL_AFTER_PROMOTE", text)
         self.assertIn("if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }", text)
         self.assertIn("if (Test-Path -LiteralPath $Previous) { Move-Item -LiteralPath $Previous -Destination $Destination }", text)

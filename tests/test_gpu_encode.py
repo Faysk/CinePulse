@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +33,12 @@ def good() -> ResidentEncodeEvidence:
 
 
 class GpuEncodeTests(unittest.TestCase):
+    def test_exact_key_changes_with_adapter_index(self) -> None:
+        first = key()
+        second = replace(first, gpu_index=1)
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(1, second.gpu_index)
+
     def test_contract_hash_changes_with_every_quality_relevant_option(self) -> None:
         original = contract()
         variants = [
@@ -43,6 +51,7 @@ class GpuEncodeTests(unittest.TestCase):
             NvencContract(**{**original.__dict__, "b_ref_mode": "disabled"}),
             NvencContract(**{**original.__dict__, "gop": 60}),
             NvencContract(**{**original.__dict__, "bframes": 3}),
+            NvencContract(**{**original.__dict__, "gpu_index": 1}),
         ]
         self.assertTrue(all(original.token() != item.token() for item in variants))
 
@@ -50,12 +59,20 @@ class GpuEncodeTests(unittest.TestCase):
         args = contract().ffmpeg_args()
         joined = " ".join(args)
         for value in (
-            "hevc_nvenc", "p7", "-tune hq", "-rc vbr", "-cq 14",
+            "hevc_nvenc", "-gpu 0", "p7", "-tune hq", "-rc vbr", "-cq 14",
             "-b:v 30M", "-maxrate 60M", "-bufsize 120M",
             "-spatial-aq 1", "-temporal-aq 1", "-aq-strength 8",
             "-multipass fullres", "-b_ref_mode middle", "-g 30", "-bf 2",
         ):
             self.assertIn(value, joined)
+
+    def test_nvenc_args_select_exact_adapter(self) -> None:
+        value = NvencContract(
+            **{**contract().__dict__, "gpu_index": 2}
+        )
+        joined = " ".join(value.ffmpeg_args())
+        self.assertIn("-gpu 2", joined)
+        self.assertNotEqual(contract().token(), value.token())
 
     def test_non_whole_megabit_rates_remain_exact_kilobits(self) -> None:
         value = NvencContract(

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from cinepulse.gpu_compositor import (
     COMPOSITOR_MAX_STACK_LAYERS,
@@ -15,6 +17,8 @@ from cinepulse.gpu_compositor import (
     build_cuda_overlay_filter,
     build_cuda_overlay_stack_filter,
     canonical_overlay_stack,
+    compositor_vram_floor_mb,
+    detect_gpu_compositor_capabilities,
     cuda_layer_eligible,
     cuda_stack_eligible,
     overlay_cuda_position,
@@ -63,6 +67,14 @@ class GpuCompositorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             OverlayLayer("a.png", "png", blend="difference")  # type: ignore[arg-type]
 
+    def test_compositor_vram_floor_scales_with_canvas_and_stack_depth(self) -> None:
+        hd_one = compositor_vram_floor_mb(1920, 1080, 1)
+        uhd_one = compositor_vram_floor_mb(3840, 2160, 1)
+        uhd_four = compositor_vram_floor_mb(3840, 2160, 4)
+        self.assertGreaterEqual(hd_one, 512.0)
+        self.assertGreater(uhd_one, hd_one)
+        self.assertGreater(uhd_four, uhd_one)
+
     def test_initial_cuda_envelope_rejects_unproven_scale_rotation_and_reactivity(self) -> None:
         self.assertTrue(cuda_layer_eligible(OverlayLayer("a.png", "png"), caps()))
         self.assertFalse(cuda_layer_eligible(OverlayLayer("a.png", "png", scale=1.25), caps()))
@@ -91,6 +103,18 @@ class GpuCompositorTests(unittest.TestCase):
                 layer_height=256,
             )
 
+    def test_resident_base_skips_cpu_to_gpu_upload(self) -> None:
+        layer = OverlayLayer("a.png", "png")
+        graph = build_cuda_overlay_stack_filter(
+            (layer,),
+            canvas_width=1920,
+            canvas_height=1080,
+            base_resident=True,
+        )
+        self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+        self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
+        self.assertEqual(1, graph.count("hwdownload"))
+
     def test_stack_is_z_ordered_and_downloads_only_after_last_overlay(self) -> None:
         top = OverlayLayer("top.png", "png", z_order=20, x=0.8)
         bottom = OverlayLayer("bottom.png", "png", z_order=10, opacity=0.75, x=0.2)
@@ -103,6 +127,19 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertLess(graph.index("[1:v]"), graph.index("[2:v]"))
         self.assertIn("0.20000000", graph)
         self.assertIn("0.80000000", graph)
+
+    def test_layer_asset_replacement_invalidates_exact_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "logo.png"
+            source.write_bytes(b"first")
+            layer = OverlayLayer(str(source), "png")
+            first = layer.contract_token()
+            first_stack = overlay_stack_contract_token((layer,))
+            source.write_bytes(b"replacement-with-different-size")
+            second = layer.contract_token()
+            second_stack = overlay_stack_contract_token((layer,))
+            self.assertNotEqual(first, second)
+            self.assertNotEqual(first_stack, second_stack)
 
     def test_stack_contract_binds_order_and_every_layer(self) -> None:
         first = OverlayLayer("a.png", "png", z_order=0)
@@ -126,6 +163,35 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertIn("0.25000000", x)
         self.assertIn("0.75000000", y)
 
+    def test_exact_key_changes_with_vram_or_cpu_baseline(self) -> None:
+        layer = OverlayLayer("logo.png", "png")
+        base = key(layer)
+        machine = replace(base, vram_mb=8192, cpu_name="CPU A", cpu_threads=28)
+        more_vram = replace(machine, vram_mb=24576)
+        other_cpu = replace(machine, cpu_name="CPU B")
+        other_gpu = replace(machine, gpu_index=1)
+        self.assertNotEqual(machine.token(), more_vram.token())
+        self.assertNotEqual(machine.token(), other_cpu.token())
+        self.assertNotEqual(machine.token(), other_gpu.token())
+
+    def test_ffmpeg_fingerprint_changes_when_binary_changes_same_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ffmpeg = Path(temporary) / "ffmpeg.exe"
+            ffmpeg.write_bytes(b"binary-v1")
+            def fake_probe(_ffmpeg, *args):
+                if "-version" in args:
+                    return "ffmpeg version SAME"
+                if "-filters" in args:
+                    return "overlay_cuda scale_cuda hwupload_cuda"
+                if "-hwaccels" in args:
+                    return "cuda"
+                return ""
+            with patch("cinepulse.gpu_compositor._probe", side_effect=fake_probe):
+                first = detect_gpu_compositor_capabilities(str(ffmpeg)).fingerprint
+                ffmpeg.write_bytes(b"binary-v2-with-different-size")
+                second = detect_gpu_compositor_capabilities(str(ffmpeg)).fingerprint
+            self.assertNotEqual(first, second)
+
     def test_evidence_must_be_near_identical_faster_and_from_real_reference(self) -> None:
         good = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
         visible_change = GpuCompositorEvidence(10.0, 6.0, 50.0, 0.999, True, True, True, True)
@@ -139,6 +205,36 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertFalse(visible_change.accepted)
         self.assertFalse(slower.accepted)
         self.assertFalse(wrong_reference.accepted)
+
+    def test_rejected_exact_contract_has_bounded_rebenchmark_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = GpuCompositorStore(Path(temporary) / "compositor.json")
+            layer = OverlayLayer("logo.png", "png")
+            rejected = GpuCompositorEvidence(
+                10.0, 10.0, 90.0, 1.0, True, True, True, True
+            )
+            exact = key(layer)
+            self.assertTrue(store.benchmark_due(exact))
+            store.record_rejection(exact, rejected)
+            self.assertFalse(store.approved(exact, caps()))
+            self.assertFalse(store.benchmark_due(exact))
+            self.assertTrue(store.benchmark_due(exact, cooldown_seconds=0.0))
+
+    def test_failed_local_benchmark_enters_cooldown_without_becoming_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "compositor.json"
+            store = GpuCompositorStore(path)
+            exact = key(OverlayLayer("logo.png", "png"))
+            self.assertTrue(store.benchmark_due(exact))
+            store.record_benchmark_failure(exact, RuntimeError("CUDA benchmark failed"))
+            self.assertFalse(store.approved(exact, caps()))
+            self.assertFalse(store.benchmark_due(exact))
+            payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+            record = payload["records"][exact.token()]
+            self.assertFalse(record["accepted"])
+            self.assertIn("CUDA benchmark failed", record["benchmark_failure"])
+            self.assertNotIn("evidence", record)
+            self.assertTrue(store.benchmark_due(exact, cooldown_seconds=0.0))
 
     def test_runtime_permission_is_exact_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

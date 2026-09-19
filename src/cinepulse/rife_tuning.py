@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Iterable
 
 
+MIN_TUNING_SPEEDUP = 1.03
+
+
 @dataclass(frozen=True, order=True)
 class RifePolicy:
     jobs: str
@@ -38,6 +41,10 @@ class RifeTuningKey:
     model: str
     width: int
     height: int
+    component_fingerprint: str = ""
+    cpu_name: str = ""
+    cpu_threads: int = 0
+    gpu_index: int = 0
 
     def token(self) -> str:
         return "|".join(
@@ -47,6 +54,10 @@ class RifeTuningKey:
                 str(self.driver).strip().lower() or "unknown-driver",
                 str(self.model).strip().lower() or "unknown-model",
                 f"{max(1, int(self.width))}x{max(1, int(self.height))}",
+                str(self.component_fingerprint or "unknown-component").strip().lower(),
+                " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
+                f"cpu{max(0, int(self.cpu_threads))}",
+                f"gpu{max(0, int(self.gpu_index))}",
             )
         )
 
@@ -127,7 +138,7 @@ def downshift_policy(failed: RifePolicy, candidates: Iterable[RifePolicy], *, fa
 
 
 class RifeTuningStore:
-    VERSION = 2
+    VERSION = 5
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -181,6 +192,12 @@ class RifeTuningStore:
             return None
         winner = choose_proven_policy(values, fallback=fallback)
         winner_sample = min((sample for sample in accepted if sample.policy == winner), key=lambda sample: sample.wall_seconds)
+        if winner != fallback:
+            baseline_sample = values[0]
+            speedup = baseline_sample.wall_seconds / winner_sample.wall_seconds
+            if speedup < MIN_TUNING_SPEEDUP:
+                winner = fallback
+                winner_sample = baseline_sample
         payload = self._load()
         records = payload.setdefault("records", {})
         if not isinstance(records, dict):

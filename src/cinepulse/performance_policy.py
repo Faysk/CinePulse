@@ -82,17 +82,58 @@ def profile_for_threads(requested: int | None, logical_threads: int | None) -> s
     return exact.get(value, "Manual")
 
 
+def realesrgan_live_process_cap(
+    vram_mb: int | None,
+    *,
+    vram_free_mb: float | int | None,
+    width: int = 1920,
+    height: int = 1080,
+) -> int:
+    """Return the maximum GPU process concurrency live headroom can sustain.
+
+    This is a *ceiling only*. It never grants a faster policy by itself; callers
+    may use it to admit an already physically-proven tuning record or to
+    downshift an existing baseline. Missing live telemetry fails closed to the
+    historical total-VRAM envelope.
+    """
+    total = max(0, int(vram_mb or 0))
+    try:
+        free = max(0, int(float(vram_free_mb))) if vram_free_mb is not None else 0
+    except (TypeError, ValueError):
+        free = 0
+    pixels = max(1, int(width)) * max(1, int(height))
+
+    baseline = 4 if total >= 20_000 else 3 if total >= 10_000 else 2
+    cap = baseline
+    if total >= 7_500 and pixels <= 2560 * 1440 and free >= 6_400:
+        cap = max(cap, 3)
+    if free > 0:
+        if free < 3_000:
+            cap = min(cap, 1)
+        elif free < 5_000:
+            cap = min(cap, 2)
+        elif free < 7_500:
+            cap = min(cap, 3)
+    return max(1, cap)
+
+
 def realesrgan_pipeline_threads(
     cpu_threads: int | None,
     logical_threads: int | None,
     vram_mb: int | None = None,
+    *,
+    vram_free_mb: float | int | None = None,
+    width: int = 1920,
+    height: int = 1080,
 ) -> str:
     """Build the Real-ESRGAN NCNN ``-j load:proc:save`` budget.
 
-    Phase 2 deliberately scales CPU-side image feeding/saving more aggressively
-    than GPU processing.  Extra ``proc`` workers can duplicate Vulkan working
-    sets, so cards below 10 GB VRAM stay at two GPU workers until physical
-    telemetry proves a larger value safe.
+    Host load/save workers scale with the CPU envelope. GPU workers preserve
+    the historical total-VRAM baseline; live free-VRAM evidence may only lower
+    that baseline. Extra process concurrency (for example 3 workers on an 8 GB
+    card) is admitted separately from an exact physically-proven tuning record.
+    Runtime OOM/integrity handling still falls back to a lower-or-equal pressure
+    policy, so utilization can rise without changing model or output contracts.
     """
     logical = _logical_threads(logical_threads)
     threads = clamp_cpu_threads(cpu_threads, logical)
@@ -108,12 +149,32 @@ def realesrgan_pipeline_threads(
         io_workers = 4
 
     memory = max(0, int(vram_mb or 0))
-    if memory >= 20_000 and threads >= 12:
+    try:
+        free_memory = max(0, int(float(vram_free_mb))) if vram_free_mb is not None else 0
+    except (TypeError, ValueError):
+        free_memory = 0
+    # The bounded host feed/extraction budget intentionally stays modest; it
+    # must not be mistaken for the adapter's safe Vulkan process concurrency.
+    # Use the machine logical envelope to establish that enough host capacity
+    # exists while keeping at least four feed threads available.
+    host_feed_ready = threads >= 4
+    if memory >= 20_000 and logical >= 12 and host_feed_ready:
         gpu_workers = 4
-    elif memory >= 10_000 and threads >= 8:
+    elif memory >= 10_000 and logical >= 8 and host_feed_ready:
         gpu_workers = 3
     else:
-        gpu_workers = 2 if threads >= 4 else 1
+        gpu_workers = 2 if host_feed_ready else 1
+
+    # Live headroom is a ceiling, never an authorization. Extra concurrency
+    # beyond this baseline must come from an exact physically-proven tuning
+    # record; headroom alone may only reduce pressure.
+    live_cap = realesrgan_live_process_cap(
+        memory,
+        vram_free_mb=free_memory if vram_free_mb is not None else None,
+        width=width,
+        height=height,
+    )
+    gpu_workers = min(gpu_workers, live_cap)
 
     return f"{io_workers}:{gpu_workers}:{io_workers}"
 

@@ -8,6 +8,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .performance_policy import realesrgan_pipeline_threads
+
+
+MIN_TUNING_SPEEDUP = 1.03
+
 
 @dataclass(frozen=True, order=True)
 class RealEsrganPolicy:
@@ -34,6 +39,11 @@ class RealEsrganTuningKey:
     width: int
     height: int
     scale: int
+    cpu_threads: int = 0
+    logical_threads: int = 0
+    component_fingerprint: str = ""
+    cpu_name: str = ""
+    gpu_index: int = 0
 
     def token(self) -> str:
         clean_gpu = " ".join(self.gpu_name.split()).lower() or "unknown-gpu"
@@ -46,6 +56,10 @@ class RealEsrganTuningKey:
                 self.model.strip().lower(),
                 f"{max(1, int(self.width))}x{max(1, int(self.height))}",
                 f"x{max(1, int(self.scale))}",
+                f"host{max(0, int(self.cpu_threads))}of{max(0, int(self.logical_threads))}",
+                str(self.component_fingerprint or "unknown-component").strip().lower(),
+                " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
+                f"gpu{max(0, int(self.gpu_index))}",
             )
         )
 
@@ -72,6 +86,7 @@ def safe_candidates(
     *,
     vram_mb: int | None,
     cpu_threads: int,
+    logical_threads: int | None = None,
     gpu_index: int = 0,
     width: int = 1920,
     height: int = 1080,
@@ -79,11 +94,13 @@ def safe_candidates(
     """Return bounded benchmark candidates; the caller must benchmark before use.
 
     Candidate generation intentionally does not declare any option faster or safe on
-    physical hardware. The legacy 256 / 2:2:2 policy is always included first as the
-    known fallback. Larger tiles/concurrency are merely candidates for H2 evidence.
+    physical hardware. Candidate zero is the exact current runtime baseline for
+    the supplied host/GPU envelope. Larger tiles/concurrency are merely candidates
+    for physical evidence.
     """
     vram = max(0, int(vram_mb or 0))
     threads = max(1, int(cpu_threads))
+    logical = max(threads, int(logical_threads or threads))
     pixels = max(1, int(width)) * max(1, int(height))
 
     tiles = [256]
@@ -101,12 +118,50 @@ def safe_candidates(
     if threads >= 20:
         pipelines.append((4, 2, 4))
 
+    # H9 physical autotune must model Studio's bounded neural host feed. A
+    # 28-thread machine normally gives NCNN about six host feed threads, so GPU
+    # process concurrency is keyed to the machine envelope separately from
+    # load/save concurrency.
+    io_workers = 1 if threads <= 4 else 2
+    # The Studio intentionally caps neural host-feed near six threads. Let the
+    # physical tuner test whether using that full six-thread envelope as
+    # 3 load + 3 save workers keeps the GPU fed better. This is candidate-only;
+    # runtime still needs exact measured evidence before using it.
+    if threads >= 6:
+        io_workers = 3
+    if threads >= 20:
+        io_workers = 4
+    host_feed_ready = threads >= 4
+    if vram >= 7500 and logical >= 12 and host_feed_ready and pixels <= 2560 * 1440:
+        pipelines.append((io_workers, 3, io_workers))
+    if vram >= 12000 and logical >= 8 and host_feed_ready and pixels <= 3840 * 2160:
+        pipelines.append((io_workers, 3, io_workers))
+    if vram >= 20000 and logical >= 12 and host_feed_ready and pixels <= 2560 * 1440:
+        pipelines.append((io_workers, 4, io_workers))
+
     candidates: list[RealEsrganPolicy] = []
     for tile in tiles:
         for load, process, save in pipelines:
             candidates.append(RealEsrganPolicy(tile, load, process, save, max(0, int(gpu_index))))
 
-    fallback = RealEsrganPolicy(256, 2, 2, 2, max(0, int(gpu_index)))
+    baseline_parts = realesrgan_pipeline_threads(
+        threads,
+        logical,
+        vram,
+        width=width,
+        height=height,
+    ).split(":")
+    try:
+        base_load, base_process, base_save = (max(1, int(value)) for value in baseline_parts)
+    except (TypeError, ValueError):
+        base_load, base_process, base_save = 2, 2, 2
+    fallback = RealEsrganPolicy(
+        256,
+        base_load,
+        base_process,
+        base_save,
+        max(0, int(gpu_index)),
+    )
     unique = [fallback]
     seen = {fallback}
     for candidate in candidates:
@@ -148,7 +203,7 @@ def downshift_policy(
 
 
 class RealEsrganTuningStore:
-    VERSION = 1
+    VERSION = 5
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -192,11 +247,31 @@ class RealEsrganTuningStore:
         accepted = [sample for sample in materialized if sample.accepted]
         if not accepted:
             return None
+        if fallback is not None:
+            if (
+                not materialized
+                or materialized[0].policy != fallback
+                or not materialized[0].accepted
+            ):
+                return None
         winner = choose_proven_policy(materialized, fallback=fallback)
         winner_sample = min(
             (sample for sample in accepted if sample.policy == winner),
             key=lambda item: item.wall_seconds,
         )
+        if fallback is not None and winner != fallback:
+            baseline_samples = [
+                sample for sample in accepted if sample.policy == fallback
+            ]
+            if baseline_samples:
+                baseline_sample = min(
+                    baseline_samples,
+                    key=lambda item: item.wall_seconds,
+                )
+                speedup = baseline_sample.wall_seconds / winner_sample.wall_seconds
+                if speedup < MIN_TUNING_SPEEDUP:
+                    winner = fallback
+                    winner_sample = baseline_sample
         payload = self._load()
         records = payload.setdefault("records", {})
         if not isinstance(records, dict):
