@@ -5376,6 +5376,7 @@ class VideoOptimizerStudio:
             save_jobs=fallback_save,
             gpu_index=0,
         )
+        real_component_fingerprint = bootstrap_component_fingerprint("real_esrgan")
         tuning_key = RealEsrganTuningKey(
             self._hardware.gpu or "unknown-gpu",
             int(self._hardware.vram_mb or 0),
@@ -5386,10 +5387,16 @@ class VideoOptimizerStudio:
             2,
             cpu_threads=cpu_threads,
             logical_threads=self._hardware.cpu_threads,
-            component_fingerprint=bootstrap_component_fingerprint("real_esrgan"),
+            component_fingerprint=real_component_fingerprint,
         )
         tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
-        tuned_policy = tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
+        tuned_policy = (
+            tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
+            if real_component_fingerprint
+            else None
+        )
+        if not real_component_fingerprint:
+            self._log("H9 Real-ESRGAN: fingerprint do componente indisponível; tuning físico desativado.")
         live_process_cap = realesrgan_live_process_cap(
             self._hardware.vram_mb,
             vram_free_mb=vram_free_mb,
