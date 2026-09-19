@@ -267,6 +267,34 @@ class GpuCompositorStore:
             and evidence.get("reference_id") == COMPOSITOR_REFERENCE_ID
         )
 
+    def benchmark_due(self, key: GpuCompositorKey, *, cooldown_seconds: float = 21600.0) -> bool:
+        record = self._load().get("records", {}).get(key.token())
+        if not isinstance(record, dict):
+            return True
+        if record.get("accepted"):
+            return False
+        try:
+            updated = float(record.get("updated_unix") or 0.0)
+        except (TypeError, ValueError):
+            return True
+        return (time.time() - updated) >= max(0.0, float(cooldown_seconds))
+
+    def record_rejection(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> None:
+        payload = self._load()
+        records = payload.setdefault("records", {})
+        if not isinstance(records, dict):
+            records = {}
+            payload["records"] = records
+        records[key.token()] = {
+            "key": asdict(key),
+            "accepted": False,
+            "evidence": asdict(evidence),
+            "speedup": evidence.speedup,
+            "updated_unix": time.time(),
+        }
+        payload["version"] = self.VERSION
+        self._atomic_write(payload)
+
     def record(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> bool:
         if not evidence.accepted:
             return False
