@@ -6975,16 +6975,42 @@ class VideoOptimizerStudio:
     def _on_close(self) -> None:
         if self._closing:
             return
-        if self._busy and not messagebox.askyesno(APP_TITLE, "Existe um processamento em andamento. Cancelar e sair?"):
+        composer_done = getattr(self, "_overlay_composer_export_done", None)
+        composer_cancel = getattr(self, "_overlay_composer_export_cancel", None)
+        composer_active = isinstance(composer_done, threading.Event) and not composer_done.is_set()
+        if (self._busy or composer_active) and not messagebox.askyesno(
+            APP_TITLE,
+            "Existe um processamento em andamento. Cancelar e sair?",
+        ):
             return
         if self._busy:
             self._cancel()
+        if composer_active and isinstance(composer_cancel, threading.Event):
+            composer_cancel.set()
         # From this point on no Studio-owned timer is allowed to touch Tk.
         self._closing = True
         self._visual_preview_playing = False
         self._save_queue()
         self._save_ui_state()
         self._cancel_scheduled_callbacks()
+
+        if composer_active:
+            # The Composer owns FFmpeg descendants outside the Stable render
+            # worker. Give its cancellation path a bounded chance to reap them
+            # before tearing Tk/Python down underneath the worker.
+            deadline = time.monotonic() + 15.0
+
+            def finish_close() -> None:
+                if composer_done.is_set() or time.monotonic() >= deadline:
+                    self.root.destroy()
+                    return
+                try:
+                    self.root.after(50, finish_close)
+                except Exception:
+                    self.root.destroy()
+
+            finish_close()
+            return
         self.root.destroy()
 
 
