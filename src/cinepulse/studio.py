@@ -6139,8 +6139,11 @@ class VideoOptimizerStudio:
                     self._run_ffmpeg(extract, chunk_duration, stage_base, weight * fraction_chunk * 0.18)
 
                 extracted = len(list(incoming.glob("*.png")))
-                if extracted < 2:
-                    raise RuntimeError("RIFE recebeu menos de dois quadros no lote.")
+                if extracted != count:
+                    raise RuntimeError(
+                        f"RIFE extração incompleta: {extracted}/{count} quadros fonte; "
+                        "interrompendo a rota neural para evitar lacuna temporal."
+                    )
 
                 next_processed = processed_source + count
                 next_count = source_chunk_count(next_processed, active_chunk_frames) if next_processed < source_count else 0
@@ -6204,7 +6207,7 @@ class VideoOptimizerStudio:
                     raise RuntimeError("RIFE falhou.\n" + "\n".join(recent))
                 neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
-                if len(frames) < max(2, desired - 1):
+                if len(frames) != desired:
                     raise RuntimeError(f"RIFE produziu {len(frames)} de {desired} quadros esperados no lote.")
                 if runtime_reporter is not None:
                     runtime_reporter(len(frames) / neural_elapsed)
