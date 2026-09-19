@@ -5369,7 +5369,11 @@ class VideoOptimizerStudio:
             gpu_index=0,
         )
         conservative_policy = RealEsrganPolicy(
-            tile=256, load_jobs=2, process_jobs=2, save_jobs=2, gpu_index=0
+            tile=256,
+            load_jobs=max(1, min(2, fallback_policy.load_jobs)),
+            process_jobs=max(1, min(2, fallback_policy.process_jobs)),
+            save_jobs=max(1, min(2, fallback_policy.save_jobs)),
+            gpu_index=fallback_policy.gpu_index,
         )
         tuning_key = RealEsrganTuningKey(
             self._hardware.gpu or "unknown-gpu",
