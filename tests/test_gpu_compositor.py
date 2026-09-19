@@ -174,6 +174,20 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertFalse(slower.accepted)
         self.assertFalse(wrong_reference.accepted)
 
+    def test_rejected_exact_contract_has_bounded_rebenchmark_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = GpuCompositorStore(Path(temporary) / "compositor.json")
+            layer = OverlayLayer("logo.png", "png")
+            rejected = GpuCompositorEvidence(
+                10.0, 10.0, 90.0, 1.0, True, True, True, True
+            )
+            exact = key(layer)
+            self.assertTrue(store.benchmark_due(exact))
+            store.record_rejection(exact, rejected)
+            self.assertFalse(store.approved(exact, caps()))
+            self.assertFalse(store.benchmark_due(exact))
+            self.assertTrue(store.benchmark_due(exact, cooldown_seconds=0.0))
+
     def test_runtime_permission_is_exact_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = GpuCompositorStore(Path(temporary) / "compositor.json")
