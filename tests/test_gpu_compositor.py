@@ -100,6 +100,18 @@ class GpuCompositorTests(unittest.TestCase):
                 layer_height=256,
             )
 
+    def test_resident_base_skips_cpu_to_gpu_upload(self) -> None:
+        layer = OverlayLayer("a.png", "png")
+        graph = build_cuda_overlay_stack_filter(
+            (layer,),
+            canvas_width=1920,
+            canvas_height=1080,
+            base_resident=True,
+        )
+        self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+        self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
+        self.assertEqual(1, graph.count("hwdownload"))
+
     def test_stack_is_z_ordered_and_downloads_only_after_last_overlay(self) -> None:
         top = OverlayLayer("top.png", "png", z_order=20, x=0.8)
         bottom = OverlayLayer("bottom.png", "png", z_order=10, opacity=0.75, x=0.2)
