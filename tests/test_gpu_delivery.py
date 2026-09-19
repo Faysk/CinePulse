@@ -83,6 +83,15 @@ class GpuDeliveryTests(unittest.TestCase):
         actual = cinepulse_hevc_nvenc_contract(pixel_format="yuv420p", bitrate_mbps=80, fps=60).ffmpeg_args()
         self.assertEqual(option_map(expected), option_map(actual))
 
+    def test_contract_parity_includes_nonzero_gpu_index(self) -> None:
+        expected = plan().video_args(
+            use_cpu=False, nvenc_available=True, bitrate_mbps=80, fps=60, gpu_index=2
+        )
+        actual = cinepulse_hevc_nvenc_contract(
+            pixel_format="yuv420p", bitrate_mbps=80, fps=60, gpu_index=2
+        ).ffmpeg_args()
+        self.assertEqual(option_map(expected), option_map(actual))
+
     def test_exact_evidence_allows_simple_same_aspect_resident_route(self) -> None:
         store = Store(True)
         route = select(store=store)
