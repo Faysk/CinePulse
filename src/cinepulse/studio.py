@@ -6237,6 +6237,19 @@ class VideoOptimizerStudio:
         paths = RifePaths(RIFE_EXE, RIFE_MODEL)
         if not paths.available:
             raise RuntimeError("RIFE NCNN ou modelo rife-v4.6 não encontrado.")
+        rife_component_fingerprint = (
+            bootstrap_component_fingerprint(
+                "rife",
+                component_root=RIFE_MODEL.parent,
+                critical_files=(
+                    RIFE_EXE,
+                    RIFE_MODEL / "flownet.bin",
+                    RIFE_MODEL / "flownet.param",
+                ),
+            )
+            if not use_cpu
+            else ""
+        )
         source_count = target_frame_count(duration, source_fps)
         total_target_count = target_frame_count(duration, target_fps)
         if total_target_count <= source_count:
@@ -6386,7 +6399,14 @@ class VideoOptimizerStudio:
                     )
 
                 self._set_stage("RIFE 2/3", f"Lote {chunk_index}: gerando {desired} quadros com rife-v4.6.")
-                command = build_rife_command(paths, incoming, outgoing, desired, use_cpu)
+                command = build_rife_command(
+                    paths,
+                    incoming,
+                    outgoing,
+                    desired,
+                    use_cpu,
+                    component_fingerprint=rife_component_fingerprint,
+                )
                 self._log("Comando RIFE: " + subprocess.list2cmdline(command))
                 recent: deque[str] = deque(maxlen=60)
                 neural_started = time.monotonic()
