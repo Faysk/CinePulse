@@ -553,7 +553,6 @@ def export_composer_auto(
         not route.use_gpu
         and route.key is not None
         and route.layers
-        and route.key is not None
         and evidence_store.benchmark_due(route.key)
         and "evidence is absent or stale" in route.reason
     ):
