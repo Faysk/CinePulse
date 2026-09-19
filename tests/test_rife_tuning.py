@@ -89,6 +89,19 @@ class RifeTuningTests(unittest.TestCase):
         self.assertIsNone(self.store.lookup(second))
         self.assertNotEqual(first.token(), second.token())
 
+    def test_gpu_index_change_invalidates_key(self) -> None:
+        fallback = RifePolicy("1:1:1", 0)
+        first = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            gpu_index=0,
+        )
+        second = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            gpu_index=1,
+        )
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(0, fallback.gpu_index)
+
     def test_cpu_change_invalidates_key(self) -> None:
         fallback = RifePolicy("1:1:1")
         first = RifeTuningKey(
