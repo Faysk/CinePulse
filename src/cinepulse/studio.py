@@ -5878,15 +5878,19 @@ class VideoOptimizerStudio:
                             token in failure_text
                             for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
                         )
-                        was_tuned = tuned_policy is not None and policy == tuned_policy
-                        if was_tuned:
-                            current_free_vram = vram_free_mb(policy.gpu_index)
-                            current_cap = realesrgan_live_process_cap(
+                        current_free_vram = vram_free_mb(policy.gpu_index) if oom_like else None
+                        current_cap = (
+                            realesrgan_live_process_cap(
                                 self._hardware.vram_mb,
                                 vram_free_mb=current_free_vram,
                                 width=source_w,
                                 height=source_h,
                             )
+                            if oom_like
+                            else policy.process_jobs
+                        )
+                        was_tuned = tuned_policy is not None and policy == tuned_policy
+                        if was_tuned:
                             integrity_failure = (
                                 "produziu" in failure_text
                                 or "quadros esperados" in failure_text
@@ -5913,13 +5917,29 @@ class VideoOptimizerStudio:
                                     f"evidência obsoleta (VRAM livre={current_free_vram if current_free_vram is not None else 'n/a'} MiB, "
                                     f"cap process={current_cap})."
                                 )
-                        if policy != conservative_policy and conservative_policy not in attempted:
+                        retry_policy = conservative_policy
+                        if oom_like and current_cap < retry_policy.process_jobs:
+                            worker_cap = max(1, min(2, current_cap))
+                            retry_policy = RealEsrganPolicy(
+                                tile=max(32, min(retry_policy.tile, policy.tile)),
+                                load_jobs=min(retry_policy.load_jobs, worker_cap),
+                                process_jobs=max(1, current_cap),
+                                save_jobs=min(retry_policy.save_jobs, worker_cap),
+                                gpu_index=policy.gpu_index,
+                            )
+                            self._log(
+                                "H9 Real-ESRGAN: OOM coincidiu com queda de VRAM; "
+                                f"rollback recalculado para {retry_policy.pipeline} "
+                                f"(VRAM livre={current_free_vram if current_free_vram is not None else 'n/a'} MiB, "
+                                f"cap process={current_cap})."
+                            )
+                        if policy != retry_policy and retry_policy not in attempted:
                             self._log(
                                 f"H3 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'falha/integridade'} "
                                 f"com tile={policy.tile} pipeline={policy.pipeline}; única repetição segura com "
-                                f"tile={conservative_policy.tile} pipeline={conservative_policy.pipeline}."
+                                f"tile={retry_policy.tile} pipeline={retry_policy.pipeline}."
                             )
-                            policy = conservative_policy
+                            policy = retry_policy
                             continue
                         raise
 
