@@ -41,3 +41,14 @@ def test_realesrgan_candidates_receive_logical_machine_envelope() -> None:
     ])
     assert args.cpu_threads == 6
     assert args.logical_threads == 28
+
+
+def test_cpu_benchmark_cli_accepts_overnight_mode() -> None:
+    args = parser().parse_args([
+        "cpu-candidates",
+        "--stage", "encode",
+        "--logical", "28",
+        "--physical", "20",
+        "--mode", "overnight",
+    ])
+    assert args.mode == "overnight"
