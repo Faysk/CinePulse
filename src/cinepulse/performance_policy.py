@@ -86,13 +86,19 @@ def realesrgan_pipeline_threads(
     cpu_threads: int | None,
     logical_threads: int | None,
     vram_mb: int | None = None,
+    *,
+    vram_free_mb: float | int | None = None,
+    width: int = 1920,
+    height: int = 1080,
 ) -> str:
     """Build the Real-ESRGAN NCNN ``-j load:proc:save`` budget.
 
-    Phase 2 deliberately scales CPU-side image feeding/saving more aggressively
-    than GPU processing.  Extra ``proc`` workers can duplicate Vulkan working
-    sets, so cards below 10 GB VRAM stay at two GPU workers until physical
-    telemetry proves a larger value safe.
+    Host load/save workers scale with the CPU envelope. GPU workers normally
+    preserve the historical total-VRAM thresholds, but a render may pass live
+    free-VRAM evidence to opportunistically use a third worker on an 8 GB card
+    for <=1440p sources. Runtime OOM/integrity handling still falls back to the
+    conservative 2:2:2 policy, so utilization can rise without changing model
+    or output-quality contracts.
     """
     logical = _logical_threads(logical_threads)
     threads = clamp_cpu_threads(cpu_threads, logical)
@@ -108,12 +114,38 @@ def realesrgan_pipeline_threads(
         io_workers = 4
 
     memory = max(0, int(vram_mb or 0))
+    try:
+        free_memory = max(0, int(float(vram_free_mb))) if vram_free_mb is not None else 0
+    except (TypeError, ValueError):
+        free_memory = 0
+    pixels = max(1, int(width)) * max(1, int(height))
+
     if memory >= 20_000 and threads >= 12:
         gpu_workers = 4
     elif memory >= 10_000 and threads >= 8:
         gpu_workers = 3
     else:
         gpu_workers = 2 if threads >= 4 else 1
+
+    # H9: live headroom can unlock one additional Vulkan process worker on
+    # common 8 GB RTX cards, but only for source geometries where the PNG and
+    # Vulkan worksets remain bounded. Unknown free VRAM never expands policy.
+    if (
+        gpu_workers == 2
+        and memory >= 7_500
+        and free_memory >= 6_400
+        and threads >= 12
+        and pixels <= 2560 * 1440
+    ):
+        gpu_workers = 3
+
+    # Conversely, do not keep a heuristically aggressive total-VRAM policy when
+    # another application has already consumed most of the adapter.
+    if free_memory > 0:
+        if free_memory < 3_000:
+            gpu_workers = min(gpu_workers, 1)
+        elif free_memory < 5_000:
+            gpu_workers = min(gpu_workers, 2)
 
     return f"{io_workers}:{gpu_workers}:{io_workers}"
 
