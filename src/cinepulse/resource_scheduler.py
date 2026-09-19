@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Iterable, Literal
 
 
-MachineMode = Literal["balanced", "dedicated"]
+MachineMode = Literal["balanced", "dedicated", "overnight"]
 StageKind = Literal[
     "decode",
     "color",
@@ -119,6 +119,8 @@ def detect_cpu_topology() -> CpuTopology:
 
 def _reserve_threads(topology: CpuTopology, mode: MachineMode) -> int:
     logical = topology.logical_cpus
+    if mode == "overnight":
+        return 0
     if logical <= 4:
         return 1 if mode == "balanced" else 0
     if mode == "dedicated":
@@ -137,7 +139,7 @@ def schedule_cpu_threads(
     thermal_constrained: bool = False,
     max_threads: int | None = None,
 ) -> CpuSchedule:
-    if mode not in {"balanced", "dedicated"}:
+    if mode not in {"balanced", "dedicated", "overnight"}:
         raise ValueError(f"Unsupported machine mode: {mode}")
     topology = topology or detect_cpu_topology()
     logical = max(1, topology.logical_cpus)
