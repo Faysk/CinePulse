@@ -173,6 +173,9 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
     hardware = detect_hardware()
     if not hardware.gpu:
         return None, None, None
+    component_fingerprint = bootstrap_component_fingerprint("rife")
+    if not component_fingerprint:
+        return None, None, None
     key = RifeTuningKey(
         hardware.gpu,
         int(hardware.vram_mb or 0),
@@ -180,7 +183,7 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
         model.name or "rife-v4.6",
         width,
         height,
-        bootstrap_component_fingerprint("rife"),
+        component_fingerprint,
     )
     store = RifeTuningStore(PATHS.cache / "hardware" / "rife-tuning.json")
     policy = store.lookup(key, gpu_index=0)
