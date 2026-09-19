@@ -120,12 +120,17 @@ def realesrgan_pipeline_threads(
         free_memory = 0
     pixels = max(1, int(width)) * max(1, int(height))
 
-    if memory >= 20_000 and threads >= 12:
+    # The bounded host feed/extraction budget intentionally stays modest; it
+    # must not be mistaken for the adapter's safe Vulkan process concurrency.
+    # Use the machine logical envelope to establish that enough host capacity
+    # exists while keeping at least four feed threads available.
+    host_feed_ready = threads >= 4
+    if memory >= 20_000 and logical >= 12 and host_feed_ready:
         gpu_workers = 4
-    elif memory >= 10_000 and threads >= 8:
+    elif memory >= 10_000 and logical >= 8 and host_feed_ready:
         gpu_workers = 3
     else:
-        gpu_workers = 2 if threads >= 4 else 1
+        gpu_workers = 2 if host_feed_ready else 1
 
     # H9: live headroom can unlock one additional Vulkan process worker on
     # common 8 GB RTX cards, but only for source geometries where the PNG and
@@ -134,7 +139,8 @@ def realesrgan_pipeline_threads(
         gpu_workers == 2
         and memory >= 7_500
         and free_memory >= 6_400
-        and threads >= 12
+        and logical >= 12
+        and host_feed_ready
         and pixels <= 2560 * 1440
     ):
         gpu_workers = 3
