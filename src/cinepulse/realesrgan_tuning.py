@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .performance_policy import realesrgan_pipeline_threads
+
 
 @dataclass(frozen=True, order=True)
 class RealEsrganPolicy:
@@ -128,7 +130,24 @@ def safe_candidates(
         for load, process, save in pipelines:
             candidates.append(RealEsrganPolicy(tile, load, process, save, max(0, int(gpu_index))))
 
-    fallback = RealEsrganPolicy(256, 2, 2, 2, max(0, int(gpu_index)))
+    baseline_parts = realesrgan_pipeline_threads(
+        threads,
+        logical,
+        vram,
+        width=width,
+        height=height,
+    ).split(":")
+    try:
+        base_load, base_process, base_save = (max(1, int(value)) for value in baseline_parts)
+    except (TypeError, ValueError):
+        base_load, base_process, base_save = 2, 2, 2
+    fallback = RealEsrganPolicy(
+        256,
+        base_load,
+        base_process,
+        base_save,
+        max(0, int(gpu_index)),
+    )
     unique = [fallback]
     seen = {fallback}
     for candidate in candidates:
