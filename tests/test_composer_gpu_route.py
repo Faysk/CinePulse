@@ -10,6 +10,7 @@ from cinepulse.overlay_composer import ComposerItem, OverlayComposerState, Visua
 
 CAPS = GpuCompositorCapabilities("ffmpeg", "abc123", True, True, True, True)
 GPU = HardwareProfile("cpu", 28, "RTX Test", 8192, "999.1")
+GPU_1 = HardwareProfile("cpu", 28, "RTX Test", 8192, "999.1", gpu_index=1)
 NO_GPU = HardwareProfile("cpu", 28, None, None, None)
 
 
@@ -73,6 +74,21 @@ class ComposerGpuRouteTests(unittest.TestCase):
         self.assertEqual("RTX Test", result.key.gpu_name)
         self.assertEqual(30000, result.key.fps_milli)
         self.assertEqual(1, len(store.keys))
+
+    def test_same_gpu_model_on_different_adapter_has_distinct_key(self) -> None:
+        layer = OverlayLayer("logo.png", "png")
+        first = build_compositor_stack_key(
+            hardware=GPU, caps=CAPS, width=1920, height=1080, fps=30.0,
+            pixel_format="yuv420p", primaries="bt709", transfer="bt709",
+            matrix="bt709", color_range="tv", layers=(layer,),
+        )
+        second = build_compositor_stack_key(
+            hardware=GPU_1, caps=CAPS, width=1920, height=1080, fps=30.0,
+            pixel_format="yuv420p", primaries="bt709", transfer="bt709",
+            matrix="bt709", color_range="tv", layers=(layer,),
+        )
+        self.assertNotEqual(first.token(), second.token())
+        self.assertEqual(1, second.gpu_index)
 
     def test_resident_base_has_separate_exact_evidence_key(self) -> None:
         layer = OverlayLayer("logo.png", "png")
