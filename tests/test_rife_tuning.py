@@ -108,6 +108,34 @@ class RifeTuningTests(unittest.TestCase):
         self.assertIsNone(self.store.lookup(second))
         self.assertNotEqual(first.token(), second.token())
 
+    def test_recording_keeps_rife_baseline_for_sub_three_percent_gain(self) -> None:
+        fallback = RifePolicy("2:2:2")
+        candidate = RifePolicy("3:2:3")
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),
+                RifeSample(candidate, 9.85, True, output_frames=20, expected_frames=20),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, fallback)
+        self.assertEqual(self.store.lookup(self.key), fallback)
+
+    def test_recording_promotes_rife_after_meaningful_speedup(self) -> None:
+        fallback = RifePolicy("2:2:2")
+        candidate = RifePolicy("3:2:3")
+        recorded = self.store.record_samples(
+            self.key,
+            (
+                RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),
+                RifeSample(candidate, 9.0, True, output_frames=20, expected_frames=20),
+            ),
+            fallback=fallback,
+        )
+        self.assertEqual(recorded, candidate)
+        self.assertEqual(self.store.lookup(self.key), candidate)
+
     def test_driver_change_invalidates_key(self) -> None:
         fallback = RifePolicy("1:1:1")
         self.store.record_samples(
