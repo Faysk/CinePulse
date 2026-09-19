@@ -3599,6 +3599,8 @@ class VideoOptimizerStudio:
             cache_quota_gb=settings.cache_quota_gb,
             ai_chunk_budget_gb=preflight_ai_budget.chunk_budget_gb,
             rife_chunk_budget_gb=preflight_rife_budget.chunk_budget_gb,
+            ai_inflight_chunks=preflight_ai_budget.max_inflight_chunks,
+            rife_inflight_chunks=2 if preflight_rife_budget.overlap_extract else 1,
         )
         temp_gb = storage_estimate.peak_scratch_gb
         output_path = Path(settings.output).expanduser() if settings.output else PREVIEW_DIR / "preview.mp4"
@@ -4468,6 +4470,8 @@ class VideoOptimizerStudio:
                 cache_quota_gb=settings.cache_quota_gb,
                 ai_chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                 rife_chunk_budget_gb=rife_budget.chunk_budget_gb,
+                ai_inflight_chunks=realesrgan_budget.max_inflight_chunks,
+                rife_inflight_chunks=2 if rife_budget.overlap_extract else 1,
             )
             if history is not None:
                 history.write_contracts(
