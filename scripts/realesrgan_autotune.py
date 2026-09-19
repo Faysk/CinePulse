@@ -53,9 +53,12 @@ def main() -> int:
     cpu_threads = max(1, int(args.cpu_threads or default_feed))
     logical_threads = max(1, int(hardware.cpu_threads or topology.logical_cpus or cpu_threads))
     scale = max(1, int(args.scale))
+    model_bin = args.model_dir / f"{args.model}-x{scale}.bin"
+    model_param = args.model_dir / f"{args.model}-x{scale}.param"
     component_fingerprint = bootstrap_component_fingerprint(
         "real_esrgan",
         component_root=args.executable.parent,
+        critical_files=(args.executable, model_bin, model_param),
     )
     if not component_fingerprint:
         raise SystemExit("Real-ESRGAN component fingerprint is unavailable; refusing to record tuning evidence")
