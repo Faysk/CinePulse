@@ -6157,7 +6157,10 @@ class VideoOptimizerStudio:
         if not all(locate(name) for name in ("bass", "drums", "vocals", "other")):
             self._set_stage("Demucs", "Separando baixo, bateria, voz e instrumentos para dirigir os VFX.")
             cache_root.mkdir(parents=True, exist_ok=True)
-            command = build_demucs_command(ai_suite.VENV_PYTHON, model_repo, cache_root, source, use_cpu)
+            demucs_staging = cache_root / f".demucs-partial-{os.getpid()}-{time.time_ns()}"
+            safe_rmtree(demucs_staging)
+            demucs_staging.mkdir(parents=True, exist_ok=True)
+            command = build_demucs_command(ai_suite.VENV_PYTHON, model_repo, demucs_staging, source, use_cpu)
             self._log("Comando Demucs: " + subprocess.list2cmdline(command))
             process = subprocess.Popen(
                 command,
@@ -6169,20 +6172,54 @@ class VideoOptimizerStudio:
                 **popen_group_kwargs(),
             )
             self._process = process
-            assert process.stdout is not None
             recent: deque[str] = deque(maxlen=80)
-            for line in process.stdout:
-                clean = line.strip()
-                if clean:
-                    recent.append(clean)
-                    self._log(clean)
-                if self._cancelled and process.poll() is None:
-                    terminate_process_tree(process, self._log)
-            code = process.wait()
-            if self._cancelled:
-                raise InterruptedError
-            if code:
-                raise RuntimeError("Demucs falhou.\n" + "\n".join(recent))
+
+            def demucs_reader() -> None:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    clean = line.strip()
+                    if clean:
+                        recent.append(clean)
+                        self._log(clean)
+
+            reader_thread = threading.Thread(
+                target=demucs_reader,
+                name="cinepulse-demucs-output",
+                daemon=True,
+            )
+            reader_thread.start()
+            try:
+                while process.poll() is None:
+                    if self._cancelled:
+                        terminate_process_tree(process, self._log)
+                        break
+                    time.sleep(0.10)
+                code = process.wait()
+                reader_thread.join(timeout=2.0)
+                if self._cancelled:
+                    raise InterruptedError
+                if code:
+                    raise RuntimeError("Demucs falhou.\n" + "\n".join(recent))
+
+                staged_separated = demucs_staging / "htdemucs_ft" / source.stem
+                required_stems = tuple(
+                    staged_separated / f"{name}.wav"
+                    for name in ("bass", "drums", "vocals", "other")
+                )
+                invalid = [
+                    path.name
+                    for path in required_stems
+                    if not path.is_file() or path.stat().st_size <= 44
+                ]
+                if invalid:
+                    raise RuntimeError(
+                        "Demucs terminou sem stems WAV válidos: " + ", ".join(invalid)
+                    )
+                separated.parent.mkdir(parents=True, exist_ok=True)
+                safe_rmtree(separated)
+                os.replace(staged_separated, separated)
+            finally:
+                safe_rmtree(demucs_staging)
 
         stems = [locate(name) for name in selected]
         if not all(stems):
