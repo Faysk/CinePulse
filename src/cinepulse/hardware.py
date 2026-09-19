@@ -17,6 +17,7 @@ class HardwareProfile:
     vram_mb: int | None
     driver: str | None
     gpu_index: int = 0
+    vram_free_mb: int | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -34,10 +35,11 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
     requested_gpu_index = None if gpu_index is None else max(0, int(gpu_index))
     gpu = driver = None
     vram_mb = None
+    free_vram_mb = None
     selected_gpu_index = requested_gpu_index if requested_gpu_index is not None else 0
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,driver_version,memory.total", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=index,name,driver_version,memory.total,memory.free", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -46,17 +48,22 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
             creationflags=CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and result.stdout.strip():
-            adapters: list[tuple[int, str, str, int]] = []
+            adapters: list[tuple[int, str, str, int, int | None]] = []
             for raw in result.stdout.splitlines():
-                parts = [part.strip() for part in raw.split(",", 3)]
-                if len(parts) != 4:
+                parts = [part.strip() for part in raw.split(",")]
+                if len(parts) < 4:
                     continue
                 try:
                     index = max(0, int(parts[0]))
                     memory = max(0, int(float(parts[3])))
+                    free_memory = (
+                        max(0, int(float(parts[4])))
+                        if len(parts) >= 5 and parts[4]
+                        else None
+                    )
                 except ValueError:
                     continue
-                adapters.append((index, parts[1], parts[2], memory))
+                adapters.append((index, parts[1], parts[2], memory, free_memory))
             if adapters:
                 if requested_gpu_index is None:
                     # Prefer the adapter with the largest physical VRAM envelope.
@@ -79,8 +86,9 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
                             vram_mb=None,
                             driver=None,
                             gpu_index=requested_index,
+                            vram_free_mb=None,
                         )
-                selected_index, gpu, driver, vram_mb = selected_adapter
+                selected_index, gpu, driver, vram_mb, free_vram_mb = selected_adapter
                 selected_gpu_index = selected_index
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
@@ -91,5 +99,6 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
         vram_mb=vram_mb,
         driver=driver,
         gpu_index=selected_gpu_index,
+        vram_free_mb=free_vram_mb,
     )
 
