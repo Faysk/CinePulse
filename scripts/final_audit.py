@@ -112,6 +112,9 @@ def main() -> int:
     installer_acceptance = (ROOT / ".github/workflows/installer-v2-acceptance.yml").read_text(encoding="utf-8")
     publisher_workflow = (ROOT / ".github/workflows/publish-release.yml").read_text(encoding="utf-8")
     update_manager_text = (ROOT / "src" / "cinepulse" / "update_manager.py").read_text(encoding="utf-8")
+    composer_export_text = (ROOT / "src" / "cinepulse" / "composer_export.py").read_text(encoding="utf-8")
+    composer_gpu_route_text = (ROOT / "src" / "cinepulse" / "composer_gpu_route.py").read_text(encoding="utf-8")
+    composer_preflight_text = (ROOT / "src" / "cinepulse" / "composer_preflight.py").read_text(encoding="utf-8")
 
     h8_paths = (
         ROOT / "src" / "cinepulse" / "overnight_runtime.py",
@@ -248,6 +251,54 @@ def main() -> int:
         token not in render_plan_text
         for token in ("OverlayComposerState", "composer_export", "gpu_compositor", "TensorRt")
     )
+    composer_audio_export_parity = all(token in composer_export_text for token in (
+        "load_bound_visualizer_envelopes",
+        "_resolve_audio_envelopes",
+        "request.audio_sources",
+        "composer_audio_features",
+    ))
+    composer_cancel_tree_safe = all(token in composer_export_text for token in (
+        "_run_cancellable_command",
+        "terminate_process_tree",
+        "popen_group_kwargs",
+        'cancel_message="composer export cancelled"',
+    ))
+    composer_resource_preflight_present = (
+        "validate_composer_resources(request.profile, output.parent)" in composer_export_text
+        and "required_free_disk_bytes" in composer_preflight_text
+        and "estimated_peak_ram_bytes" in composer_preflight_text
+    )
+    composer_still_gpu_fail_closed = all(token in composer_gpu_route_text for token in (
+        "base_is_still",
+        "still-image base has no dedicated H6 physical parity evidence",
+    ))
+    composer_gpu_changes_trigger_physical_gate = all(token in gpu_workflow for token in (
+        "'src/cinepulse/composer_*.py'",
+        "'src/cinepulse/gpu_compositor.py'",
+        "'src/cinepulse/ui/composer_view.py'",
+        "'tests/test_composer_*.py'",
+    ))
+    quality_declared_python_range_covered = all(
+        version in quality_workflow for version in ("'3.11'", "'3.12'", "'3.13'", "'3.14.7'")
+    )
+    permanent_workflow_text = "\n".join((
+        gpu_workflow,
+        rc_workflow,
+        quality_workflow,
+        installer_acceptance,
+        publisher_workflow,
+        (ROOT / ".github/workflows/recovery-reliability.yml").read_text(encoding="utf-8"),
+    ))
+    actions_pinned_to_commit = not re.search(
+        r"uses:\s*actions/(?:checkout|setup-python|upload-artifact)@v\d+",
+        permanent_workflow_text,
+    )
+    publisher_ffmpeg_hash_locked = all(token in publisher_workflow for token in (
+        "installer/bootstrap-manifest.json",
+        "Get-FileHash -Algorithm SHA256",
+        "$Spec.sha256",
+        "Expand-Archive",
+    )) and "choco install ffmpeg" not in publisher_workflow
 
     checks = {
         "pytest_src_path_configured": "src" in pytest_config.get("pythonpath", []),
@@ -276,10 +327,18 @@ def main() -> int:
         "h8_no_realtime_or_silent_global_mutation": h8_no_global_or_realtime_mutations,
         "h8_sustained_resource_guard_present": h8_sustained_guard_present,
         "preview_composer_isolated_from_stable_render_plan": preview_composer_isolated_from_stable_plan,
+        "composer_audio_preview_export_parity_guard": composer_audio_export_parity,
+        "composer_cancel_uses_process_tree": composer_cancel_tree_safe,
+        "composer_resource_preflight_present": composer_resource_preflight_present,
+        "composer_still_gpu_route_fails_closed": composer_still_gpu_fail_closed,
+        "composer_changes_trigger_physical_gpu_gate": composer_gpu_changes_trigger_physical_gate,
+        "quality_covers_declared_python_range": quality_declared_python_range_covered,
+        "permanent_actions_pinned_to_commit_sha": actions_pinned_to_commit,
+        "publisher_uses_hash_locked_ffmpeg": publisher_ffmpeg_hash_locked,
     }
 
     payload = {
-        "schema": 6,
+        "schema": 7,
         "project_version": project_version,
         "declared_versions": declared_versions,
         "studio_lines": _line_count(studio_path),
