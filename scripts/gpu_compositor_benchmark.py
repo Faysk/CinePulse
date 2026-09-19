@@ -182,6 +182,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--y", type=float, default=0.5)
     result.add_argument("--opacity", type=float, default=1.0)
     result.add_argument("--resident-base", action="store_true", help="Benchmark NVDEC-resident base frames instead of CPU decode + hwupload.")
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--timeout", type=float, default=900.0)
     return result
 
@@ -230,7 +231,7 @@ def main() -> int:
     caps = detect_gpu_compositor_capabilities(ffmpeg)
     if not cuda_stack_eligible(layers, caps):
         raise SystemExit("layer stack is outside the bounded H6 CUDA envelope")
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu:
         raise SystemExit("NVIDIA GPU required; no H6 physical evidence recorded")
 
@@ -266,6 +267,7 @@ def main() -> int:
         vram_mb=int(hardware.vram_mb or 0),
         cpu_name=hardware.cpu,
         cpu_threads=int(hardware.cpu_threads or 0),
+        gpu_index=hardware.gpu_index,
     )
 
     with tempfile.TemporaryDirectory(prefix="cinepulse-h6-") as temporary:
@@ -306,11 +308,15 @@ def main() -> int:
             canvas_height=height,
             base_resident=args.resident_base,
         ) + ";[vout]format=rgba[vfinal]"
-        candidate_cmd = [ffmpeg, "-y", "-hide_banner", "-nostdin"]
+        candidate_cmd = [
+            ffmpeg, "-y", "-hide_banner", "-nostdin",
+            "-init_hw_device", f"cuda=cinepulse_gpu:{hardware.gpu_index}",
+            "-filter_hw_device", "cinepulse_gpu",
+        ]
         if args.resident_base:
             candidate_cmd += [
                 "-hwaccel", "cuda",
-                "-hwaccel_device", "0",
+                "-hwaccel_device", str(hardware.gpu_index),
                 "-hwaccel_output_format", "cuda",
                 "-c:v", resident_decoder,
             ]
