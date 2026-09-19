@@ -36,12 +36,14 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("cpu-integration:", text)
         self.assertIn("media-integration:", text)
         self.assertIn("'3.11'", text)
+        self.assertIn("'3.12'", text)
         self.assertIn("'3.13'", text)
         self.assertIn("'3.14.7'", text)
         self.assertGreaterEqual(text.count("python-version: '3.14.7'"), 2)
         self.assertIn("--profile cpu", text)
         self.assertIn("--profile media", text)
-        self.assertIn("actions/upload-artifact@v7", text)
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", text)
+        self.assertNotIn("actions/upload-artifact@v7", text)
 
     def test_release_candidate_builds_and_tests_both_distribution_modes(self) -> None:
         text = (ROOT / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
