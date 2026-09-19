@@ -288,8 +288,17 @@ def main() -> int:
             )
             for sample in args.sample
         )
+        baseline_candidates = realesrgan_candidates(
+            vram_mb=args.vram_mb,
+            cpu_threads=args.cpu_threads,
+            logical_threads=args.logical_threads,
+            gpu_index=max(0, args.gpu_index),
+            width=max(1, args.width),
+            height=max(1, args.height),
+        )
+        fallback = baseline_candidates[0]
         store = RealEsrganTuningStore(args.cache)
-        chosen = store.record_samples(key, samples)
+        chosen = store.record_samples(key, samples, fallback=fallback)
         if chosen is None:
             payload = {
                 "recorded": False,
