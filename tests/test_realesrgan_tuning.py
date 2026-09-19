@@ -127,6 +127,24 @@ class RealEsrganTuningTests(unittest.TestCase):
         self.assertEqual(recorded, winner)
         self.assertEqual(self.store.lookup(self.key), winner)
 
+    def test_component_fingerprint_change_invalidates_cache_key(self) -> None:
+        policy = RealEsrganPolicy(320, 3, 2, 3)
+        first = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, component_fingerprint="real_esrgan:v1:" + "a" * 64,
+        )
+        second = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, component_fingerprint="real_esrgan:v2:" + "b" * 64,
+        )
+        self.store.record_samples(
+            first,
+            (RealEsrganSample(policy, 7.0, True, output_frames=10, expected_frames=10),),
+        )
+        self.assertEqual(self.store.lookup(first), policy)
+        self.assertIsNone(self.store.lookup(second))
+        self.assertNotEqual(first.token(), second.token())
+
     def test_driver_change_invalidates_cache_key(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3)
         self.store.record_samples(
