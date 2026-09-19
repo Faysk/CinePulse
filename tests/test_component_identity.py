@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from cinepulse.component_identity import bootstrap_component_fingerprint
@@ -53,6 +54,39 @@ def test_critical_file_change_invalidates_installed_component_fingerprint(tmp_pa
     )
     assert first
     assert second
+    assert first != second
+
+
+def test_critical_file_hash_changes_even_when_size_and_mtime_are_preserved(tmp_path: Path) -> None:
+    component = tmp_path / "components" / "rife"
+    component.mkdir(parents=True)
+    (component / ".cinepulse-component.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "key": "rife",
+            "version": "installed-version",
+            "sha256": "a" * 64,
+        }),
+        encoding="utf-8",
+    )
+    binary = component / "rife-ncnn-vulkan.exe"
+    binary.write_bytes(b"AAAA")
+    stamp = binary.stat().st_mtime_ns
+    first = bootstrap_component_fingerprint(
+        "rife",
+        component_root=component,
+        critical_files=(binary,),
+    )
+
+    binary.write_bytes(b"BBBB")
+    os.utime(binary, ns=(stamp, stamp))
+    second = bootstrap_component_fingerprint(
+        "rife",
+        component_root=component,
+        critical_files=(binary,),
+    )
+    assert binary.stat().st_size == 4
+    assert binary.stat().st_mtime_ns == stamp
     assert first != second
 
 
