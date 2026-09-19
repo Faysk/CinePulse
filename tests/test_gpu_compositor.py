@@ -15,6 +15,7 @@ from cinepulse.gpu_compositor import (
     build_cuda_overlay_filter,
     build_cuda_overlay_stack_filter,
     canonical_overlay_stack,
+    compositor_vram_floor_mb,
     cuda_layer_eligible,
     cuda_stack_eligible,
     overlay_cuda_position,
@@ -62,6 +63,14 @@ class GpuCompositorTests(unittest.TestCase):
             self.assertEqual(mode == "normal", cuda_layer_eligible(layer, caps()))
         with self.assertRaises(ValueError):
             OverlayLayer("a.png", "png", blend="difference")  # type: ignore[arg-type]
+
+    def test_compositor_vram_floor_scales_with_canvas_and_stack_depth(self) -> None:
+        hd_one = compositor_vram_floor_mb(1920, 1080, 1)
+        uhd_one = compositor_vram_floor_mb(3840, 2160, 1)
+        uhd_four = compositor_vram_floor_mb(3840, 2160, 4)
+        self.assertGreaterEqual(hd_one, 512.0)
+        self.assertGreater(uhd_one, hd_one)
+        self.assertGreater(uhd_four, uhd_one)
 
     def test_initial_cuda_envelope_rejects_unproven_scale_rotation_and_reactivity(self) -> None:
         self.assertTrue(cuda_layer_eligible(OverlayLayer("a.png", "png"), caps()))
