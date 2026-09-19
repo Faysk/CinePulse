@@ -77,7 +77,8 @@ from .pipeline_budget import derive_pipeline_budget
 from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
 from .gpu_media import (
     GpuMediaKey, GpuMediaPolicy, GpuMediaTuningStore, detect_gpu_media_capabilities,
-    invalidate_on_runtime_failure as invalidate_gpu_media_policy, select_proven_policy as select_gpu_media_policy,
+    gpu_media_vram_floor_mb, invalidate_on_runtime_failure as invalidate_gpu_media_policy,
+    select_proven_policy as select_gpu_media_policy,
 )
 from .gpu_encode import ResidentEncodeStore
 from .gpu_failure import looks_like_gpu_runtime_failure
@@ -5491,6 +5492,16 @@ class VideoOptimizerStudio:
                 capabilities=gpu_caps,
                 profile=gpu_media_profile,
             )
+            if gpu_media_policy is not None:
+                decode_floor_mb = gpu_media_vram_floor_mb(gpu_media_key)
+                decode_free_mb = vram_free_mb(gpu_media_policy.gpu_index)
+                if decode_free_mb is None or decode_free_mb < decode_floor_mb:
+                    self._log(
+                        "H5 CUDA decode: evidência exata preservada, mas VRAM livre atual "
+                        f"({decode_free_mb if decode_free_mb is not None else 'n/a'} MiB) não cobre "
+                        f"o piso de surfaces ({decode_floor_mb:.0f} MiB); CPU usada neste render."
+                    )
+                    gpu_media_policy = None
         except Exception as exc:
             self._log(f"H5 CUDA decode: capability/evidence probe indisponível; CPU preservada ({exc}).")
             gpu_media_policy = None
