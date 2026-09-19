@@ -23,6 +23,12 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
         self.assertIn("driver=self._hardware.driver", self.block)
         self.assertIn("operation=\"decode\"", self.block)
 
+    def test_cuda_decode_requires_live_vram_headroom_without_deleting_evidence(self) -> None:
+        self.assertIn("gpu_media_vram_floor_mb(gpu_media_key)", self.block)
+        self.assertIn("decode_free_mb = vram_free_mb(gpu_media_policy.gpu_index)", self.block)
+        self.assertIn("evidência exata preservada", self.block)
+        self.assertIn("gpu_media_policy = None", self.block)
+
     def test_cuda_frames_are_downloaded_without_gpu_color_conversion(self) -> None:
         self.assertIn("policy.input_args()", self.block)
         self.assertIn("hwdownload,format={gpu_media_profile.pixel_format},fps=", self.block)
