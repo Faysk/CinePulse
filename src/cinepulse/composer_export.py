@@ -23,6 +23,7 @@ from .composer_audio_binding import composer_audio_features, load_bound_visualiz
 from .composer_base_probe import ComposerBaseProfile
 from .composer_decode_stream import ComposerMediaDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
+from .composer_preflight import validate_composer_resources
 from .composer_runtime import ComposerFrameInputs, render_composer_frame
 from .overlay_composer import OverlayComposerState
 from .process_control import popen_group_kwargs, terminate_process_tree
@@ -211,6 +212,7 @@ def export_composer_reference(
     frames = max(1, round(request.profile.duration * request.profile.fps))
     frame_bytes = request.profile.width * request.profile.height * 4
     output.parent.mkdir(parents=True, exist_ok=True)
+    validate_composer_resources(request.profile, output.parent)
 
     decoder_layers = {
         item.id: (item.media, infos[item.id])
