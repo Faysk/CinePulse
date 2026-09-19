@@ -100,11 +100,22 @@ class CiReleaseGateTests(unittest.TestCase):
             "src/cinepulse/pipeline_budget.py",
             "src/cinepulse/realesrgan_tuning.py",
             "src/cinepulse/rife_tuning.py",
+            "src/cinepulse/gpu_media.py",
+            "src/cinepulse/gpu_delivery.py",
+            "src/cinepulse/process_control.py",
+            "src/cinepulse/storage_engine.py",
+            "src/cinepulse/component_identity.py",
             "src/cinepulse/studio.py",
             "tests/test_performance_policy.py",
             "tests/test_pipeline_budget.py",
             "tests/test_realesrgan_tuning.py",
             "tests/test_rife_tuning.py",
+            "tests/test_gpu_media.py",
+            "tests/test_gpu_delivery.py",
+            "tests/test_process_control.py",
+            "tests/test_storage_engine.py",
+            "tests/test_component_identity.py",
+            "tests/test_ai_cache_identity.py",
         ):
             self.assertIn(path, text, f"GPU acceptance must trigger for {path}")
 
