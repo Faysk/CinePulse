@@ -24,15 +24,16 @@ class H8AdaptiveIntegrationTests(unittest.TestCase):
         self.assertEqual(1.0, decision.cpu_scale)
         self.assertTrue(decision.allow_extract_overlap)
 
-    def test_overnight_power_pressure_requires_measured_slowdown(self) -> None:
+    def test_overnight_power_and_slowdown_do_not_throttle_full_mode(self) -> None:
         controller = AdaptiveRuntimeController(overnight=True, overnight_window=2, allow_extract_overlap=True, allow_pack_overlap=True)
         self.warmup(controller)
         for _ in range(2):
             controller.record_throughput(90.0)
             decision = controller.observe(sample(power=139.0, limit=140.0, util=70.0))
-        self.assertEqual(2, decision.level)
-        self.assertFalse(decision.allow_extract_overlap)
-        self.assertLess(decision.cpu_scale, 1.0)
+        self.assertEqual(0, decision.level)
+        self.assertTrue(decision.allow_extract_overlap)
+        self.assertTrue(decision.allow_pack_overlap)
+        self.assertEqual(1.0, decision.cpu_scale)
 
     def test_overnight_hot_but_fast_stays_at_proven_envelope(self) -> None:
         controller = AdaptiveRuntimeController(overnight=True, overnight_window=2, allow_extract_overlap=True, allow_pack_overlap=True)
