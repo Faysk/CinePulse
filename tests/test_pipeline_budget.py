@@ -58,6 +58,20 @@ class PipelineBudgetTests(unittest.TestCase):
         self.assertTrue(budget.overlap_extract)
         self.assertTrue(budget.overlap_pack)
 
+    def test_concurrent_worksets_keep_aggregate_ram_bounded(self) -> None:
+        budget = derive_pipeline_budget(
+            "realesrgan",
+            ram_available_gb=40.0,
+            vram_free_mb=12000,
+            scratch_free_gb=500.0,
+            scratch_write_mbps=1800.0,
+            dedicated=True,
+        )
+        # 40 GiB available -> 35.2 GiB after reserve; dedicated concurrent
+        # worksets are bounded to 72% of that usable envelope.
+        self.assertEqual(budget.max_inflight_chunks, 3)
+        self.assertLessEqual(budget.chunk_budget_gb * budget.max_inflight_chunks, 35.2 * 0.72 + 0.01)
+
     def test_balanced_mode_never_claims_two_inflight_while_scheduling_three_worksets(self) -> None:
         budget = derive_pipeline_budget(
             "realesrgan",
