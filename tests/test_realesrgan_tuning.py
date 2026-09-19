@@ -203,6 +203,17 @@ class RealEsrganTuningTests(unittest.TestCase):
         self.assertIsNone(self.store.lookup(second))
         self.assertNotEqual(first.token(), second.token())
 
+    def test_gpu_index_change_invalidates_cache_key(self) -> None:
+        first = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, gpu_index=0,
+        )
+        second = RealEsrganTuningKey(
+            "RTX Test", 8192, "999.1", "realesr-animevideov3", 1920, 1080, 2,
+            cpu_threads=6, logical_threads=28, gpu_index=1,
+        )
+        self.assertNotEqual(first.token(), second.token())
+
     def test_cpu_identity_change_invalidates_cache_key(self) -> None:
         policy = RealEsrganPolicy(320, 3, 2, 3)
         first = RealEsrganTuningKey(
