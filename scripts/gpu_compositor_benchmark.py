@@ -263,6 +263,9 @@ def main() -> int:
         base_mode="nvdec-resident" if args.resident_base else "cpu-upload",
         base_codec=base_codec if args.resident_base else "",
         base_decoder=resident_decoder,
+        vram_mb=int(hardware.vram_mb or 0),
+        cpu_name=hardware.cpu,
+        cpu_threads=int(hardware.cpu_threads or 0),
     )
 
     with tempfile.TemporaryDirectory(prefix="cinepulse-h6-") as temporary:
