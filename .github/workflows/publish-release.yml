@@ -68,11 +68,28 @@ jobs:
           "RELEASE_NOTES_FILE=$NotesFile" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "CINEPULSE_RELEASE_VERSION_OK $ProjectVersion notes=$NotesFile"
 
-      - name: Install FFmpeg
+      - name: Install hash-locked FFmpeg
         shell: pwsh
         run: |
-          choco install ffmpeg -y --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg install failed.' }
+          $Manifest = Get-Content -LiteralPath 'installer/bootstrap-manifest.json' -Raw | ConvertFrom-Json
+          $Spec = $Manifest.ffmpeg
+          if (-not $Spec.url -or -not $Spec.sha256 -or -not $Spec.version) { throw 'FFmpeg bootstrap contract is incomplete.' }
+          $Archive = Join-Path $env:RUNNER_TEMP "cinepulse-ffmpeg-$($Spec.version).zip"
+          $Root = Join-Path $env:RUNNER_TEMP "cinepulse-ffmpeg-$($Spec.version)"
+          Invoke-WebRequest -Uri $Spec.url -OutFile $Archive
+          $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+          if ($Actual -ne ([string]$Spec.sha256).ToLowerInvariant()) {
+            throw "FFmpeg hash mismatch: expected=$($Spec.sha256) actual=$Actual"
+          }
+          if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
+          Expand-Archive -LiteralPath $Archive -DestinationPath $Root -Force
+          $Ffmpeg = Get-ChildItem -LiteralPath $Root -Recurse -Filter 'ffmpeg.exe' -File | Select-Object -First 1
+          if (-not $Ffmpeg) { throw 'Hash-locked FFmpeg package did not contain ffmpeg.exe.' }
+          $Bin = $Ffmpeg.Directory.FullName
+          if (-not (Test-Path -LiteralPath (Join-Path $Bin 'ffprobe.exe'))) { throw 'Hash-locked FFmpeg package did not contain ffprobe.exe.' }
+          $Bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $Bin 'ffmpeg.exe') -version
+          if ($LASTEXITCODE -ne 0) { throw 'Hash-locked FFmpeg smoke test failed.' }
 
       - name: Install hash-locked project runtime
         shell: pwsh
