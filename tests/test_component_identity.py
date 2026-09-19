@@ -24,6 +24,55 @@ def test_component_fingerprint_uses_version_and_sha256(tmp_path: Path) -> None:
     assert bootstrap_component_fingerprint("rife", root=tmp_path) == f"rife:ncnn-test:{digest}"
 
 
+def test_installed_component_marker_is_preferred_over_release_manifest(tmp_path: Path) -> None:
+    manifest_digest = "a" * 64
+    installed_digest = "b" * 64
+    _write_manifest(
+        tmp_path,
+        {"real_esrgan": {"version": "manifest-version", "sha256": manifest_digest}},
+    )
+    component = tmp_path / "components" / "real-esrgan"
+    component.mkdir(parents=True)
+    (component / ".cinepulse-component.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "key": "real-esrgan",
+            "version": "installed-version",
+            "sha256": installed_digest,
+        }),
+        encoding="utf-8",
+    )
+    assert bootstrap_component_fingerprint(
+        "real_esrgan",
+        root=tmp_path,
+        component_root=component,
+    ) == f"real_esrgan:installed-version:{installed_digest}"
+
+
+def test_wrong_component_marker_key_falls_back_to_manifest(tmp_path: Path) -> None:
+    manifest_digest = "a" * 64
+    _write_manifest(
+        tmp_path,
+        {"rife": {"version": "manifest-version", "sha256": manifest_digest}},
+    )
+    component = tmp_path / "components" / "rife"
+    component.mkdir(parents=True)
+    (component / ".cinepulse-component.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "key": "real-esrgan",
+            "version": "wrong",
+            "sha256": "b" * 64,
+        }),
+        encoding="utf-8",
+    )
+    assert bootstrap_component_fingerprint(
+        "rife",
+        root=tmp_path,
+        component_root=component,
+    ) == f"rife:manifest-version:{manifest_digest}"
+
+
 def test_component_fingerprint_fails_closed_on_invalid_manifest(tmp_path: Path) -> None:
     _write_manifest(
         tmp_path,
