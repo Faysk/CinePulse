@@ -59,11 +59,11 @@ from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
 from .performance_policy import (
     PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads,
-    realesrgan_live_process_cap, realesrgan_pipeline_threads,
+    realesrgan_pipeline_threads,
 )
 from .resource_scheduler import detect_cpu_topology, schedule_cpu_threads
 from .cpu_tuning import CpuTuningKey, CpuTuningStore
-from .realesrgan_tuning import RealEsrganPolicy, RealEsrganTuningKey, RealEsrganTuningStore
+from .realesrgan_tuning import RealEsrganPolicy
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -77,13 +77,13 @@ from .pipeline_budget import derive_pipeline_budget
 from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
 from .gpu_media import (
     GpuMediaKey, GpuMediaPolicy, GpuMediaTuningStore, detect_gpu_media_capabilities,
-    gpu_media_vram_floor_mb, invalidate_on_runtime_failure as invalidate_gpu_media_policy,
+    invalidate_on_runtime_failure as invalidate_gpu_media_policy,
     select_proven_policy as select_gpu_media_policy,
 )
 from .gpu_encode import ResidentEncodeStore
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_delivery import select_resident_delivery_route
-from .pipeline_runtime import BackgroundCommand, measure_resource_headroom, vram_free_mb
+from .pipeline_runtime import BackgroundCommand, measure_resource_headroom
 from .audio_mastering import analyze_loudness, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
@@ -4942,7 +4942,7 @@ class VideoOptimizerStudio:
                         target_fps=target_fps, delivery_plan=delivery_plan,
                         bitrate_mbps=bitrate_mbps, use_cpu=settings.use_cpu,
                         color_already_final=color_ready,
-                        vram_free_mb=vram_free_mb(self._hardware.gpu_index),
+                        vram_free_mb=None,
                         gpu_index=self._hardware.gpu_index,
                     )
                 except Exception as exc:
@@ -5464,73 +5464,22 @@ class VideoOptimizerStudio:
             save_jobs=fallback_save,
             gpu_index=self._hardware.gpu_index,
         )
-        real_component_fingerprint = bootstrap_component_fingerprint(
-            "real_esrgan",
-            component_root=REAL_ESRGAN.parent,
-            critical_files=(
-                REAL_ESRGAN,
-                REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.bin",
-                REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.param",
-            ),
-        )
-        tuning_key = RealEsrganTuningKey(
-            self._hardware.gpu or "unknown-gpu",
-            int(self._hardware.vram_mb or 0),
-            self._hardware.driver or "unknown-driver",
-            "realesr-animevideov3",
-            source_w,
-            source_h,
-            2,
-            cpu_threads=cpu_threads,
-            logical_threads=self._hardware.cpu_threads,
-            component_fingerprint=real_component_fingerprint,
-            cpu_name=self._hardware.cpu,
-            gpu_index=self._hardware.gpu_index,
-        )
-        tuning_store = RealEsrganTuningStore(PATHS.cache / "hardware" / "realesrgan-tuning.json")
-        tuned_policy = (
-            tuning_store.lookup(tuning_key, gpu_index=fallback_policy.gpu_index)
-            if real_component_fingerprint
-            else None
-        )
-        if not real_component_fingerprint:
-            self._log("H9 Real-ESRGAN: fingerprint do componente indisponível; tuning físico desativado.")
-        live_process_cap = realesrgan_live_process_cap(
-            self._hardware.vram_mb,
-            vram_free_mb=vram_free_mb,
-            width=source_w,
-            height=source_h,
-        )
-        tuned_limited_by_headroom = bool(
-            tuned_policy is not None and tuned_policy.process_jobs > live_process_cap
-        )
-        active_policy = fallback_policy if tuned_limited_by_headroom else (tuned_policy or fallback_policy)
-        recovery_policy = tuned_policy or fallback_policy
+        # 1.2.4 full-utilization: the first attempt is the fixed maximum
+        # envelope derived from CPU count + total adapter size. Historical
+        # tuning and live headroom do not lower the initial load.
+        active_policy = fallback_policy
         conservative_policy = RealEsrganPolicy(
             tile=max(32, min(256, active_policy.tile)),
-            load_jobs=max(1, min(2, fallback_policy.load_jobs, active_policy.load_jobs)),
-            process_jobs=max(1, min(2, fallback_policy.process_jobs, active_policy.process_jobs)),
-            save_jobs=max(1, min(2, fallback_policy.save_jobs, active_policy.save_jobs)),
+            load_jobs=max(1, min(2, active_policy.load_jobs)),
+            process_jobs=max(1, min(2, active_policy.process_jobs - 1 if active_policy.process_jobs > 1 else 1)),
+            save_jobs=max(1, min(2, active_policy.save_jobs)),
             gpu_index=active_policy.gpu_index,
         )
-        if tuned_policy is not None and not tuned_limited_by_headroom:
-            self._log(
-                f"H3 Real-ESRGAN: política física aprovada carregada tile={active_policy.tile} "
-                f"pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}."
-            )
-        elif tuned_limited_by_headroom:
-            self._log(
-                f"H9 Real-ESRGAN: tuning físico {tuned_policy.pipeline} preservado no cache, "
-                f"mas o teto de VRAM livre atual é process={live_process_cap}; "
-                f"este render usa {fallback_policy.pipeline}."
-            )
-        else:
-            self._log(
-                f"H3/H9 Real-ESRGAN: sem evidência física exata; política dinâmica "
-                f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index} "
-                f"(VRAM livre inicial={vram_free_mb if vram_free_mb is not None else 'n/a'} MiB; "
-                f"rollback conservador={conservative_policy.pipeline})."
-            )
+        self._log(
+            f"FULL Real-ESRGAN: primeiro attempt no envelope máximo fixo "
+            f"tile={active_policy.tile} pipeline={active_policy.pipeline} gpu={active_policy.gpu_index}; "
+            f"fallback pós-falha={conservative_policy.pipeline}."
+        )
         chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))
         temp_dirs.append(chunk_root)
         chunks: list[Path] = []
@@ -5550,8 +5499,7 @@ class VideoOptimizerStudio:
         gpu_media_key: GpuMediaKey | None = None
         gpu_media_policy: GpuMediaPolicy | None = None
         gpu_media_profile: ColorProfile | None = None
-        decode_floor_mb: float | None = None
-        gpu_media_headroom_suppressed = False
+        gpu_media_runtime_disabled = False
         try:
             gpu_probe = probe_media(video)
             gpu_stream = next(
@@ -5579,16 +5527,6 @@ class VideoOptimizerStudio:
                 capabilities=gpu_caps,
                 profile=gpu_media_profile,
             )
-            if gpu_media_policy is not None:
-                decode_floor_mb = gpu_media_vram_floor_mb(gpu_media_key)
-                decode_free_mb = vram_free_mb(gpu_media_policy.gpu_index)
-                if decode_free_mb is None or decode_free_mb < decode_floor_mb:
-                    gpu_media_headroom_suppressed = True
-                    self._log(
-                        "H5 CUDA decode: evidência exata preservada, mas VRAM livre atual "
-                        f"({decode_free_mb if decode_free_mb is not None else 'n/a'} MiB) não cobre "
-                        f"o piso de surfaces ({decode_floor_mb:.0f} MiB); CPU usada até o headroom recuperar."
-                    )
         except Exception as exc:
             self._log(f"H5 CUDA decode: capability/evidence probe indisponível; CPU preservada ({exc}).")
             gpu_media_policy = None
@@ -5599,52 +5537,35 @@ class VideoOptimizerStudio:
             )
 
         def current_gpu_extract_policy() -> GpuMediaPolicy | None:
-            nonlocal gpu_media_headroom_suppressed
-            policy = gpu_media_policy
-            if policy is None or decode_floor_mb is None:
+            if gpu_media_runtime_disabled:
                 return None
-            current_free = vram_free_mb(policy.gpu_index)
-            if current_free is None or current_free < decode_floor_mb:
-                if not gpu_media_headroom_suppressed:
-                    self._log(
-                        "H5 CUDA decode: VRAM caiu abaixo do piso; suspendendo CUDA por lote "
-                        f"({current_free if current_free is not None else 'n/a'} MiB < {decode_floor_mb:.0f} MiB)."
-                    )
-                gpu_media_headroom_suppressed = True
-                return None
-            if gpu_media_headroom_suppressed:
-                self._log(
-                    "H5 CUDA decode: headroom recuperado; restaurando NVDEC para os próximos lotes "
-                    f"({current_free:.0f} MiB livres)."
-                )
-                gpu_media_headroom_suppressed = False
-            return policy
+            return gpu_media_policy
 
         def invalidate_gpu_extract(reason: BaseException | str) -> None:
-            nonlocal gpu_media_policy, gpu_media_headroom_suppressed
+            nonlocal gpu_media_policy, gpu_media_runtime_disabled
             if gpu_media_policy is None or gpu_media_key is None:
                 return
-            gpu_specific = looks_like_gpu_runtime_failure(reason)
-            current_free = vram_free_mb(gpu_media_policy.gpu_index)
-            low_headroom = bool(
-                decode_floor_mb is not None
-                and (current_free is None or current_free < decode_floor_mb)
+            text = str(reason).lower()
+            oom_like = any(
+                token in text
+                for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
             )
-            should_invalidate = gpu_specific and not low_headroom
-            if should_invalidate:
+            gpu_specific = looks_like_gpu_runtime_failure(reason)
+            # One concrete failure disables this fast path for the rest of the
+            # render so we do not repeatedly OOM. OOM preserves physical
+            # evidence; non-OOM GPU failures invalidate it.
+            gpu_media_runtime_disabled = True
+            if gpu_specific and not oom_like:
                 invalidate_gpu_media_policy(gpu_media_store, gpu_media_key)
-                evidence_text = "evidência invalidada"
                 gpu_media_policy = None
-                gpu_media_headroom_suppressed = False
+                evidence_text = "evidência invalidada"
+            elif oom_like:
+                evidence_text = "evidência preservada; fallback após OOM real"
             else:
-                evidence_text = (
-                    "evidência preservada; pressão transitória de VRAM"
-                    if low_headroom
-                    else "evidência preservada; falha não classificada como GPU"
-                )
+                evidence_text = "evidência preservada; falha não classificada como GPU"
             self._log(
                 "H5 CUDA decode: fast path falhou em produção; "
-                f"{evidence_text}. Este lote será repetido uma vez pela CPU. Motivo: {reason}"
+                f"{evidence_text}. CPU usada no restante deste render. Motivo: {reason}"
             )
 
         def extraction_command(
@@ -5728,28 +5649,6 @@ class VideoOptimizerStudio:
                     overlap_pack = baseline_overlap_pack and decision.allow_pack_overlap
                     active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
                     active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
-                    if decision.level > 0 and active_policy.process_jobs > conservative_policy.process_jobs:
-                        self._log(
-                            "H9 VRAM guard: pressão detectada; reduzindo Real-ESRGAN para "
-                            f"{conservative_policy.pipeline} antes de uma possível OOM."
-                        )
-                        active_policy = conservative_policy
-                    elif decision.level == 0 and active_policy != recovery_policy:
-                        recovery_free_vram = vram_free_mb(recovery_policy.gpu_index)
-                        recovery_cap = realesrgan_live_process_cap(
-                            self._hardware.vram_mb,
-                            vram_free_mb=recovery_free_vram,
-                            width=source_w,
-                            height=source_h,
-                        )
-                        if recovery_policy.process_jobs <= recovery_cap:
-                            self._log(
-                                "H9 VRAM recovery: headroom sustentado voltou; restaurando "
-                                f"Real-ESRGAN {active_policy.pipeline} -> {recovery_policy.pipeline} "
-                                f"(VRAM livre={recovery_free_vram if recovery_free_vram is not None else 'n/a'} MiB, "
-                                f"cap process={recovery_cap})."
-                            )
-                            active_policy = recovery_policy
                 else:
                     active_chunk_frames = chunk_frames
                     active_cpu_threads = cpu_threads
@@ -5925,66 +5824,12 @@ class VideoOptimizerStudio:
                             token in failure_text
                             for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
                         )
-                        current_free_vram = vram_free_mb(policy.gpu_index) if oom_like else None
-                        current_cap = (
-                            realesrgan_live_process_cap(
-                                self._hardware.vram_mb,
-                                vram_free_mb=current_free_vram,
-                                width=source_w,
-                                height=source_h,
-                            )
-                            if oom_like
-                            else policy.process_jobs
-                        )
-                        was_tuned = tuned_policy is not None and policy == tuned_policy
-                        if was_tuned:
-                            integrity_failure = (
-                                "produziu" in failure_text
-                                or "quadros esperados" in failure_text
-                                or "integrity" in failure_text
-                            )
-                            gpu_failure = looks_like_gpu_runtime_failure(exc)
-                            headroom_dropped = bool(
-                                oom_like and policy.process_jobs > current_cap
-                            )
-                            should_invalidate = integrity_failure or (
-                                gpu_failure and not headroom_dropped
-                            )
-                            if should_invalidate:
-                                if tuning_store.invalidate(tuning_key, reason=str(exc)):
-                                    self._log(
-                                        "H3 Real-ESRGAN: política física aprovada falhou em GPU/integridade "
-                                        "e foi invalidada para esta chave exata."
-                                    )
-                                tuned_policy = None
-                                recovery_policy = fallback_policy
-                            else:
-                                self._log(
-                                    "H9 Real-ESRGAN: tuning físico preservado; falha atual não prova "
-                                    f"evidência obsoleta (VRAM livre={current_free_vram if current_free_vram is not None else 'n/a'} MiB, "
-                                    f"cap process={current_cap})."
-                                )
                         retry_policy = conservative_policy
-                        if oom_like and current_cap < retry_policy.process_jobs:
-                            worker_cap = max(1, min(2, current_cap))
-                            retry_policy = RealEsrganPolicy(
-                                tile=max(32, min(retry_policy.tile, policy.tile)),
-                                load_jobs=min(retry_policy.load_jobs, worker_cap),
-                                process_jobs=max(1, current_cap),
-                                save_jobs=min(retry_policy.save_jobs, worker_cap),
-                                gpu_index=policy.gpu_index,
-                            )
-                            self._log(
-                                "H9 Real-ESRGAN: OOM coincidiu com queda de VRAM; "
-                                f"rollback recalculado para {retry_policy.pipeline} "
-                                f"(VRAM livre={current_free_vram if current_free_vram is not None else 'n/a'} MiB, "
-                                f"cap process={current_cap})."
-                            )
                         if policy != retry_policy and retry_policy not in attempted:
                             self._log(
-                                f"H3 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'falha/integridade'} "
-                                f"com tile={policy.tile} pipeline={policy.pipeline}; única repetição segura com "
-                                f"tile={retry_policy.tile} pipeline={retry_policy.pipeline}."
+                                f"H3 Real-ESRGAN: {'OOM real' if oom_like else 'falha/integridade'} "
+                                f"com tile={policy.tile} pipeline={policy.pipeline}; repetindo uma vez "
+                                f"com fallback fixo {retry_policy.pipeline}, sem nova medição de recursos."
                             )
                             policy = retry_policy
                             continue
