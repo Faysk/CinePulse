@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .hardware import detect_hardware
 from .paths import PATHS
+from .pipeline_runtime import vram_free_mb
 from .rife_tuning import RifePolicy, RifeTuningKey, RifeTuningStore, fallback_policy
 
 
@@ -184,6 +185,43 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
     return policy, key, store
 
 
+def _limit_policy_by_live_vram(
+    tuned: RifePolicy | None,
+    *,
+    uhd: bool,
+    free_vram_mb: float | None,
+    gpu_index: int = 0,
+) -> tuple[RifePolicy, bool, str]:
+    """Select a per-invocation RIFE policy from current VRAM headroom.
+
+    Physical tuning proves an exact hardware/driver/geometry policy, but VRAM
+    occupancy can change between renders. Missing live telemetry therefore
+    fails closed to the historical fallback. Very low headroom uses 1:1:1 even
+    for non-UHD so rollback never increases GPU pressure.
+    """
+
+    base = fallback_policy(uhd=uhd, gpu_index=max(0, int(gpu_index)))
+    if free_vram_mb is None:
+        return base, False, "live VRAM unavailable"
+    free = max(0.0, float(free_vram_mb))
+    if free < 3000.0:
+        serial = RifePolicy("1:1:1", max(0, int(gpu_index)))
+        return serial, False, f"live VRAM low ({free:.0f} MiB)"
+    if tuned is None:
+        return base, False, f"no tuned policy; live VRAM {free:.0f} MiB"
+
+    process_jobs = tuned.pressure[0]
+    required = 6500.0 if process_jobs >= 3 else 4000.0 if process_jobs >= 2 else 2500.0
+    if uhd:
+        required = max(required, 5000.0)
+    if free < required:
+        return base, False, (
+            f"tuned policy {tuned.jobs} needs >= {required:.0f} MiB live headroom; "
+            f"{free:.0f} MiB available"
+        )
+    return tuned, True, f"tuned policy admitted with {free:.0f} MiB live VRAM"
+
+
 def _native_command(
     *,
     rife_executable: Path,
@@ -286,9 +324,29 @@ def run_safe_rife(
     tuned: RifePolicy | None = None
     tuning_key: RifeTuningKey | None = None
     tuning_store: RifeTuningStore | None = None
+    selected_policy: RifePolicy | None = None
+    selected_measured = False
+    live_reason = ""
     if device == "gpu":
         tuned, tuning_key, tuning_store = _hardware_tuning_policy(width, height, model)
-    fallback_spec = fallback_policy(uhd=uhd, gpu_index=0)
+        live_free = vram_free_mb(0)
+        selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
+            tuned,
+            uhd=uhd,
+            free_vram_mb=live_free,
+            gpu_index=0,
+        )
+        print(
+            "CINEPULSE_RIFE_SAFE LIVE_VRAM "
+            f"free={live_free if live_free is not None else 'n/a'} "
+            f"selected={selected_policy.jobs} measured={selected_measured} reason={live_reason}",
+            flush=True,
+        )
+    fallback_spec = (
+        _limit_policy_by_live_vram(None, uhd=uhd, free_vram_mb=vram_free_mb(0), gpu_index=0)[0]
+        if device == "gpu"
+        else fallback_policy(uhd=uhd, gpu_index=0)
+    )
     fallback = execution_policy(
         len(input_frames), width, height, requested_target, device,
         jobs_override=fallback_spec.jobs if device == "gpu" else "",
@@ -297,9 +355,9 @@ def run_safe_rife(
     )
     policy = execution_policy(
         len(input_frames), width, height, requested_target, device,
-        jobs_override=tuned.jobs if tuned is not None else fallback.jobs,
-        gpu_index=tuned.gpu_index if tuned is not None else fallback.gpu_index,
-        measured=tuned is not None,
+        jobs_override=selected_policy.jobs if selected_policy is not None else fallback.jobs,
+        gpu_index=selected_policy.gpu_index if selected_policy is not None else fallback.gpu_index,
+        measured=selected_measured,
     )
     outgoing.mkdir(parents=True, exist_ok=True)
     if any(outgoing.iterdir()):
