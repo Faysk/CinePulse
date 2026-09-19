@@ -28,7 +28,10 @@ def demucs_model_identity(model_repo: Path | None, state_file: Path | None = Non
         if isinstance(state, dict):
             payload["runtime"] = {
                 key: state.get(key)
-                for key in ("schema", "python", "demucs", "torch", "soundfile", "cuda_runtime", "torch_index")
+                for key in (
+                    "schema", "python", "demucs", "torch", "soundfile",
+                    "cuda_runtime", "torch_index", "weights_fingerprint",
+                )
             }
     if model_repo is not None:
         root = Path(model_repo)
