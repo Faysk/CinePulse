@@ -89,6 +89,25 @@ class RifeTuningTests(unittest.TestCase):
         self.assertIsNone(self.store.lookup(second))
         self.assertNotEqual(first.token(), second.token())
 
+    def test_cpu_change_invalidates_key(self) -> None:
+        fallback = RifePolicy("1:1:1")
+        first = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            "rife:v1:" + "a" * 64, cpu_name="CPU A", cpu_threads=28,
+        )
+        second = RifeTuningKey(
+            "RTX Test", 8192, "999.1", "rife-v4.6", 3840, 2160,
+            "rife:v1:" + "a" * 64, cpu_name="CPU B", cpu_threads=16,
+        )
+        self.store.record_samples(
+            first,
+            (RifeSample(fallback, 10.0, True, output_frames=20, expected_frames=20),),
+            fallback=fallback,
+        )
+        self.assertEqual(self.store.lookup(first), fallback)
+        self.assertIsNone(self.store.lookup(second))
+        self.assertNotEqual(first.token(), second.token())
+
     def test_driver_change_invalidates_key(self) -> None:
         fallback = RifePolicy("1:1:1")
         self.store.record_samples(
