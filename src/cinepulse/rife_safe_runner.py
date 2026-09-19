@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .component_identity import bootstrap_component_fingerprint
 from .gpu_failure import looks_like_gpu_runtime_failure
-from .hardware import detect_hardware
+from .hardware import HardwareProfile, detect_hardware
 from .paths import PATHS
 from .pipeline_runtime import vram_free_mb
 from .rife_tuning import RifePolicy, RifeTuningKey, RifeTuningStore, fallback_policy
@@ -175,8 +175,8 @@ def _hardware_tuning_policy(
     height: int,
     model: Path,
     executable: Path,
+    hardware: HardwareProfile,
 ) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
-    hardware = detect_hardware()
     if not hardware.gpu:
         return None, None, None
     component_fingerprint = bootstrap_component_fingerprint(
@@ -429,7 +429,7 @@ def run_safe_rife(
         runtime_hardware = detect_hardware()
         active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
         tuned, tuning_key, tuning_store = _hardware_tuning_policy(
-            width, height, model, rife_executable
+            width, height, model, rife_executable, runtime_hardware
         )
         live_free = vram_free_mb(active_gpu_index)
         selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
