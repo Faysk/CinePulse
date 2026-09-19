@@ -70,13 +70,22 @@ def test_nvidia_sampler_falls_back_when_video_engine_fields_are_unsupported() ->
         returncode=0,
         stdout="0, RTX Legacy, 555.1, 80, 40, 8192, 4096, 4096, 120, 180, 65, 2200, 9000, P2\n",
     )
-    with patch("cinepulse.hardware_telemetry.subprocess.run", side_effect=(failed, base)) as run:
-        samples = NvidiaSmiSampler("nvidia-smi").sample()
-    assert len(samples) == 1
-    assert samples[0].utilization_percent == 80
-    assert samples[0].encoder_utilization_percent is None
-    assert samples[0].decoder_utilization_percent is None
-    assert run.call_count == 2
+    sampler = NvidiaSmiSampler("nvidia-smi")
+    with patch(
+        "cinepulse.hardware_telemetry.subprocess.run",
+        side_effect=(failed, base, base),
+    ) as run:
+        first = sampler.sample()
+        second = sampler.sample()
+    assert len(first) == 1
+    assert len(second) == 1
+    assert first[0].utilization_percent == 80
+    assert first[0].encoder_utilization_percent is None
+    assert first[0].decoder_utilization_percent is None
+    assert second[0].utilization_percent == 80
+    # First sample probes ENGINE_QUERY then falls back; later samples remember
+    # the unsupported fields and go straight to BASE_QUERY.
+    assert run.call_count == 3
 
 
 def test_active_gpu_selection_counts_nvenc_nvdec_activity() -> None:
