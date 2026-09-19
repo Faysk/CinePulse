@@ -54,6 +54,34 @@ class StorageEngineTests(unittest.TestCase):
         self.assertGreater(estimate.peak_scratch_gb, 0)
         self.assertLessEqual(estimate.ai_chunk_frames, 240)
 
+    def test_separate_dynamic_ai_and_rife_budgets_are_reflected_in_preflight(self):
+        plan = self._plan(
+            source_width=1920, source_height=1080, source_fps=30,
+            target_width=3840, target_height=2160, target_fps=60,
+        )
+        legacy = estimate_storage(plan, duration=30, output_gb=1.2, chunk_budget_gb=4.0)
+        dynamic = estimate_storage(
+            plan, duration=30, output_gb=1.2,
+            ai_chunk_budget_gb=16.0, rife_chunk_budget_gb=12.0,
+        )
+        self.assertGreaterEqual(dynamic.ai_chunk_frames, legacy.ai_chunk_frames)
+        self.assertGreaterEqual(dynamic.rife_chunk_frames, legacy.rife_chunk_frames)
+        self.assertGreaterEqual(dynamic.peak_scratch_gb, legacy.peak_scratch_gb)
+        by_key = {stage.key: stage for stage in dynamic.stages}
+        self.assertGreater(by_key["enhancement"].working_set_gb, 0.0)
+        self.assertGreater(by_key["rife_base"].working_set_gb, 0.0)
+
+    def test_legacy_chunk_budget_remains_backward_compatible(self):
+        plan = self._plan()
+        old_style = estimate_storage(plan, duration=20, output_gb=1.0, chunk_budget_gb=3.0)
+        split_style = estimate_storage(
+            plan, duration=20, output_gb=1.0,
+            ai_chunk_budget_gb=3.0, rife_chunk_budget_gb=3.0,
+        )
+        self.assertEqual(old_style.ai_chunk_frames, split_style.ai_chunk_frames)
+        self.assertEqual(old_style.rife_chunk_frames, split_style.rife_chunk_frames)
+        self.assertAlmostEqual(old_style.peak_scratch_gb, split_style.peak_scratch_gb, places=6)
+
     def test_music_loop_uses_clip_duration_before_timeline_expansion(self):
         plan = self._plan(
             source_width=1280, source_height=720, source_fps=24,
