@@ -38,7 +38,10 @@ def main() -> int:
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     if not ffmpeg:
         raise SystemExit("FFmpeg is required for the RIFE black-frame and quality-parity gates")
-    component_fingerprint = bootstrap_component_fingerprint("rife")
+    component_fingerprint = bootstrap_component_fingerprint(
+        "rife",
+        component_root=args.rife.parent,
+    )
     if not component_fingerprint:
         raise SystemExit("RIFE component fingerprint is unavailable; refusing to record tuning evidence")
     candidates = safe_candidates(
