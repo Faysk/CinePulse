@@ -26,7 +26,7 @@ from typing import Iterable, Literal
 from .gpu_media import CREATE_NO_WINDOW
 
 
-COMPOSITOR_SCHEMA = 4
+COMPOSITOR_SCHEMA = 5
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 80.0
 COMPOSITOR_SSIM_FLOOR = 0.999999
@@ -179,6 +179,9 @@ class GpuCompositorKey:
     space: str
     color_range: str
     layer_contract: str
+    base_mode: str = "cpu-upload"
+    base_codec: str = ""
+    base_decoder: str = ""
 
     def token(self) -> str:
         return "|".join(
@@ -194,6 +197,9 @@ class GpuCompositorKey:
                 self.space.strip().lower() or "unknown",
                 self.color_range.strip().lower() or "unknown",
                 self.layer_contract.strip().lower(),
+                self.base_mode.strip().lower() or "cpu-upload",
+                self.base_codec.strip().lower() or "unknown-codec",
+                self.base_decoder.strip().lower() or "none",
             )
         )
 
@@ -372,6 +378,7 @@ def build_cuda_overlay_stack_filter(
     *,
     canvas_width: int,
     canvas_height: int,
+    base_resident: bool = False,
 ) -> str:
     """Build a bounded, deterministic CUDA overlay stack.
 
@@ -386,8 +393,10 @@ def build_cuda_overlay_stack_filter(
     if any(not _static_layer_supported(layer) for layer in ordered):
         raise ValueError("stack contains an unproven transform/blend outside H6 CUDA envelope")
 
-    chains: list[str] = ["[0:v]format=yuv420p,hwupload_cuda[basegpu]"]
-    previous = "basegpu"
+    chains: list[str] = []
+    previous = "0:v" if base_resident else "basegpu"
+    if not base_resident:
+        chains.append("[0:v]format=yuv420p,hwupload_cuda[basegpu]")
     for index, layer in enumerate(ordered, start=1):
         prep = ["format=yuva420p"]
         if layer.opacity < 0.999999:
