@@ -26,7 +26,7 @@ from typing import Iterable, Literal
 from .gpu_media import CREATE_NO_WINDOW
 
 
-COMPOSITOR_SCHEMA = 3
+COMPOSITOR_SCHEMA = 4
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 80.0
 COMPOSITOR_SSIM_FLOOR = 0.999999
@@ -78,7 +78,12 @@ class OverlayLayer:
         return abs(float(self.rotation_degrees)) > 1e-9 or abs(float(self.spin_rpm)) > 1e-9
 
     def contract_token(self) -> str:
-        raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        raw = json.dumps(
+            _layer_contract_payload(self),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
@@ -87,9 +92,28 @@ def canonical_overlay_stack(layers: Iterable[OverlayLayer]) -> tuple[OverlayLaye
     return tuple(layer for _index, layer in sorted(indexed, key=lambda item: (item[1].z_order, item[0])))
 
 
+def _layer_contract_payload(layer: OverlayLayer) -> dict[str, object]:
+    payload = asdict(layer)
+    source = Path(layer.source)
+    try:
+        resolved = source.resolve()
+    except OSError:
+        resolved = source
+    identity: dict[str, object] = {"path": str(resolved)}
+    try:
+        stat = source.stat()
+        identity["size"] = int(stat.st_size)
+        identity["mtime"] = int(stat.st_mtime_ns)
+    except OSError:
+        identity["size"] = 0
+        identity["mtime"] = 0
+    payload["source"] = identity
+    return payload
+
+
 def overlay_stack_contract_token(layers: Iterable[OverlayLayer]) -> str:
     ordered = canonical_overlay_stack(layers)
-    payload = [asdict(layer) for layer in ordered]
+    payload = [_layer_contract_payload(layer) for layer in ordered]
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
