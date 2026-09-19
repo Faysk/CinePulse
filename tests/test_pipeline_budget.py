@@ -41,7 +41,22 @@ class PipelineBudgetTests(unittest.TestCase):
         self.assertTrue(budget.overlap_extract)
         self.assertTrue(budget.overlap_pack)
         self.assertEqual(budget.max_inflight_chunks, 3)
-        self.assertLessEqual(budget.chunk_budget_gb, 8.0)
+        self.assertLessEqual(budget.chunk_budget_gb, 16.0)
+        self.assertGreater(budget.chunk_budget_gb, 8.0)
+
+    def test_high_ram_8gb_gpu_can_use_host_cache_without_vram_capping_chunk(self) -> None:
+        budget = derive_pipeline_budget(
+            "realesrgan",
+            ram_available_gb=56.0,
+            vram_free_mb=7000,
+            scratch_free_gb=800.0,
+            scratch_write_mbps=1600.0,
+            dedicated=True,
+        )
+        self.assertGreater(budget.chunk_budget_gb, 8.0)
+        self.assertLessEqual(budget.chunk_budget_gb, 16.0)
+        self.assertTrue(budget.overlap_extract)
+        self.assertTrue(budget.overlap_pack)
 
     def test_slow_scratch_disables_overlap_even_with_ram(self) -> None:
         budget = derive_pipeline_budget(
@@ -67,7 +82,7 @@ class PipelineBudgetTests(unittest.TestCase):
         ai = derive_pipeline_budget("realesrgan", **common)
         rife = derive_pipeline_budget("rife", **common)
         self.assertLessEqual(rife.chunk_budget_gb, ai.chunk_budget_gb)
-        self.assertLessEqual(rife.chunk_budget_gb, 6.0)
+        self.assertLessEqual(rife.chunk_budget_gb, 12.0)
 
     def test_inflight_queue_is_hard_bounded(self) -> None:
         budget = derive_pipeline_budget(
