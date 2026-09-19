@@ -76,6 +76,22 @@ class CpuTuningTests(unittest.TestCase):
         self.assertIsNone(self.store.lookup(other_cpu, max_threads=20))
         self.assertNotEqual(self.key.token(), other_cpu.token())
 
+    def test_overnight_does_not_reuse_dedicated_cpu_tuning(self) -> None:
+        self.store.record_samples(
+            self.key,
+            (CpuTuningSample(12, 10.0, True),),
+            fallback_threads=12,
+        )
+        overnight = CpuTuningKey.from_topology(
+            "encode",
+            self.topology,
+            mode="overnight",
+            gpu_active=True,
+            cpu_name="CPU Test A",
+        )
+        self.assertIsNone(self.store.lookup(overnight, max_threads=20))
+        self.assertNotEqual(self.key.token(), overnight.token())
+
     def test_topology_or_stage_mismatch_does_not_reuse_policy(self) -> None:
         self.store.record_samples(
             self.key,
