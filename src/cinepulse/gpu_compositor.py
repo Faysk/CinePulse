@@ -150,11 +150,33 @@ def _probe(ffmpeg: str, *args: str) -> str:
     return result.stdout or ""
 
 
+def _ffmpeg_binary_identity(ffmpeg: str) -> str:
+    path = Path(str(ffmpeg))
+    if not path.is_file():
+        import shutil
+        discovered = shutil.which(str(ffmpeg))
+        if discovered:
+            path = Path(discovered)
+    try:
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+    except OSError:
+        return "unresolved"
+    return f"{resolved.name}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+
+
 def detect_gpu_compositor_capabilities(ffmpeg: str) -> GpuCompositorCapabilities:
     version = _probe(ffmpeg, "-version")
     filters = _probe(ffmpeg, "-filters").lower()
     hwaccels = _probe(ffmpeg, "-hwaccels").lower()
-    fingerprint = hashlib.sha256(version.encode("utf-8", errors="replace")).hexdigest()[:20]
+    fingerprint_payload = (
+        version
+        + "\nCINEPULSE_FFMPEG_BINARY="
+        + _ffmpeg_binary_identity(ffmpeg)
+    )
+    fingerprint = hashlib.sha256(
+        fingerprint_payload.encode("utf-8", errors="replace")
+    ).hexdigest()[:20]
     return GpuCompositorCapabilities(
         ffmpeg=str(ffmpeg),
         fingerprint=fingerprint,
