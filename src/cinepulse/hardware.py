@@ -31,9 +31,10 @@ class HardwareProfile:
 
 
 def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
+    requested_gpu_index = None if gpu_index is None else max(0, int(gpu_index))
     gpu = driver = None
     vram_mb = None
-    gpu_index = 0
+    selected_gpu_index = requested_gpu_index if requested_gpu_index is not None else 0
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=index,name,driver_version,memory.total", "--format=csv,noheader,nounits"],
@@ -57,7 +58,7 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
                     continue
                 adapters.append((index, parts[1], parts[2], memory))
             if adapters:
-                if gpu_index is None:
+                if requested_gpu_index is None:
                     # Prefer the adapter with the largest physical VRAM envelope.
                     # Live headroom gates still decide per-operation admission.
                     selected_adapter = max(
@@ -65,7 +66,7 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
                         key=lambda item: (item[3], -item[0]),
                     )
                 else:
-                    requested_index = max(0, int(gpu_index))
+                    requested_index = requested_gpu_index
                     selected_adapter = next(
                         (item for item in adapters if item[0] == requested_index),
                         None,
@@ -80,7 +81,7 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
                             gpu_index=requested_index,
                         )
                 selected_index, gpu, driver, vram_mb = selected_adapter
-                gpu_index = selected_index
+                selected_gpu_index = selected_index
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return HardwareProfile(
@@ -89,6 +90,6 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
         gpu=gpu,
         vram_mb=vram_mb,
         driver=driver,
-        gpu_index=gpu_index,
+        gpu_index=selected_gpu_index,
     )
 
