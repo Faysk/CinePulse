@@ -15,8 +15,8 @@ def test_detect_hardware_selects_nvidia_adapter_with_largest_vram() -> None:
     result = SimpleNamespace(
         returncode=0,
         stdout=(
-            "0, RTX 4070, 999.1, 8192\n"
-            "1, RTX 3090, 999.1, 24576\n"
+            "0, RTX 4070, 999.1, 8192, 7100\n"
+            "1, RTX 3090, 999.1, 24576, 22000\n"
         ),
     )
     with (
@@ -28,6 +28,7 @@ def test_detect_hardware_selects_nvidia_adapter_with_largest_vram() -> None:
     assert profile.gpu == "RTX 3090"
     assert profile.vram_mb == 24576
     assert profile.gpu_index == 1
+    assert profile.vram_free_mb == 22000
     assert profile.cpu_threads == 28
 
 
