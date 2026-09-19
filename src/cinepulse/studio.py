@@ -3566,7 +3566,30 @@ class VideoOptimizerStudio:
         bitrate = self._estimated_bitrate_mbps(target_w, target_h, target_fps)
         output_gb = bitrate * project_duration / 8 / 1024 * 1.08
         scratch_path = resolve_scratch_dir(settings.scratch_dir, WORK_DIR)
+        scratch_probe = probe_scratch(scratch_path)
         cache_current_gb = cache_usage_bytes(PATHS.cache) / (1024 ** 3)
+
+        # H9 preflight must use the same live hardware envelope as the render.
+        # Otherwise a 64 GB machine could pass a legacy 4 GiB storage estimate
+        # and then legitimately select a 16 GiB neural workset at runtime.
+        preflight_topology = detect_cpu_topology()
+        preflight_dedicated_threshold = max(
+            1, preflight_topology.logical_cpus - (2 if preflight_topology.logical_cpus >= 8 else 1)
+        )
+        preflight_mode = "dedicated" if settings.cpu_threads >= preflight_dedicated_threshold else "balanced"
+        preflight_headroom = measure_resource_headroom(
+            scratch_path, gpu_index=0, probe_write=False
+        )
+        preflight_common = dict(
+            ram_available_gb=preflight_headroom.ram_available_gb,
+            vram_free_mb=preflight_headroom.vram_free_mb,
+            scratch_free_gb=scratch_probe.free_gb,
+            scratch_write_mbps=scratch_probe.write_mbps,
+            dedicated=(preflight_mode == "dedicated"),
+        )
+        preflight_ai_budget = derive_pipeline_budget("realesrgan", **preflight_common)
+        preflight_rife_budget = derive_pipeline_budget("rife", **preflight_common)
+
         storage_estimate = estimate_storage(
             render_plan,
             clip_duration=source_duration,
@@ -3574,6 +3597,8 @@ class VideoOptimizerStudio:
             output_gb=output_gb,
             cache_current_gb=cache_current_gb,
             cache_quota_gb=settings.cache_quota_gb,
+            ai_chunk_budget_gb=preflight_ai_budget.chunk_budget_gb,
+            rife_chunk_budget_gb=preflight_rife_budget.chunk_budget_gb,
         )
         temp_gb = storage_estimate.peak_scratch_gb
         output_path = Path(settings.output).expanduser() if settings.output else PREVIEW_DIR / "preview.mp4"
@@ -3586,7 +3611,6 @@ class VideoOptimizerStudio:
             cache=PATHS.cache,
             cache_growth_gb=storage_estimate.cache_growth_gb,
         )
-        scratch_probe = probe_scratch(scratch_path)
         warnings: list[str] = []
         if cache_current_gb > settings.cache_quota_gb:
             warnings.append(
@@ -4397,23 +4421,6 @@ class VideoOptimizerStudio:
 
             estimated_bitrate = self._estimated_bitrate_mbps(target_w, target_h, target_fps)
             estimated_output_gb = estimated_bitrate * project_duration / 8 / 1024 * 1.08
-            storage_contract = estimate_storage(
-                render_plan, clip_duration=video_duration, project_duration=project_duration,
-                output_gb=estimated_output_gb,
-                cache_current_gb=cache_usage_bytes(PATHS.cache) / (1024 ** 3),
-                cache_quota_gb=settings.cache_quota_gb,
-            )
-            if history is not None:
-                history.write_contracts(
-                    color=color_plan, delivery=delivery_plan, storage=storage_contract,
-                    verification_expected={
-                        "width": target_w, "height": target_h, "fps": target_fps,
-                        "duration": project_duration, "expect_audio": expected_audio,
-                        "audio_channels": expected_audio_channels,
-                        "audio_sample_rate": expected_audio_sample_rate,
-                        "deep": bool(settings.deep_verify and not preview),
-                    },
-                )
 
             cpu_topology = detect_cpu_topology()
             dedicated_threshold = max(1, cpu_topology.logical_cpus - (2 if cpu_topology.logical_cpus >= 8 else 1))
@@ -4451,6 +4458,28 @@ class VideoOptimizerStudio:
             )
             self._log(f"H4 Real-ESRGAN budget: {realesrgan_budget.reason}")
             self._log(f"H4 RIFE budget: {rife_budget.reason}")
+
+            # Persist the exact storage contract selected for this render, not
+            # the legacy 4 GiB default used by older versions.
+            storage_contract = estimate_storage(
+                render_plan, clip_duration=video_duration, project_duration=project_duration,
+                output_gb=estimated_output_gb,
+                cache_current_gb=cache_usage_bytes(PATHS.cache) / (1024 ** 3),
+                cache_quota_gb=settings.cache_quota_gb,
+                ai_chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
+                rife_chunk_budget_gb=rife_budget.chunk_budget_gb,
+            )
+            if history is not None:
+                history.write_contracts(
+                    color=color_plan, delivery=delivery_plan, storage=storage_contract,
+                    verification_expected={
+                        "width": target_w, "height": target_h, "fps": target_fps,
+                        "duration": project_duration, "expect_audio": expected_audio,
+                        "audio_channels": expected_audio_channels,
+                        "audio_sample_rate": expected_audio_sample_rate,
+                        "deep": bool(settings.deep_verify and not preview),
+                    },
+                )
 
             h5_ai_controller = AdaptiveRuntimeController(
                 gpu_index=0,
