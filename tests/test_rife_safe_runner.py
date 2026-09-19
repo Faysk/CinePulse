@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cinepulse.rife_safe_runner import execution_policy, validate_png, validate_png_sequence
+from cinepulse.rife_safe_runner import (
+    _limit_policy_by_live_vram,
+    execution_policy,
+    validate_png,
+    validate_png_sequence,
+)
+from cinepulse.rife_tuning import RifePolicy
 
 
 def _fake_png(width: int = 64, height: int = 36, *, complete: bool = True) -> bytes:
@@ -36,6 +42,36 @@ class RifeSafeRunnerTests(unittest.TestCase):
         policy = execution_policy(8, 1920, 1080, 16, "gpu")
         self.assertFalse(policy.uhd)
         self.assertEqual("2:2:2", policy.jobs)
+
+    def test_tuned_policy_is_suppressed_when_live_vram_is_unknown(self) -> None:
+        tuned = RifePolicy("3:3:3", 0)
+        selected, measured, reason = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=None, gpu_index=0
+        )
+        self.assertEqual(selected, RifePolicy("2:2:2", 0))
+        self.assertFalse(measured)
+        self.assertIn("unavailable", reason)
+
+    def test_low_live_vram_forces_serial_policy(self) -> None:
+        tuned = RifePolicy("3:3:3", 0)
+        selected, measured, _reason = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=2500, gpu_index=0
+        )
+        self.assertEqual(selected, RifePolicy("1:1:1", 0))
+        self.assertFalse(measured)
+
+    def test_three_process_tuning_requires_live_headroom(self) -> None:
+        tuned = RifePolicy("3:3:3", 0)
+        limited, measured_limited, _ = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=6000, gpu_index=0
+        )
+        admitted, measured_admitted, _ = _limit_policy_by_live_vram(
+            tuned, uhd=False, free_vram_mb=7000, gpu_index=0
+        )
+        self.assertEqual(limited, RifePolicy("2:2:2", 0))
+        self.assertFalse(measured_limited)
+        self.assertEqual(admitted, tuned)
+        self.assertTrue(measured_admitted)
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
