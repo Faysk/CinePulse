@@ -176,10 +176,11 @@ def _hardware_tuning_policy(
     model: Path,
     executable: Path,
     hardware: HardwareProfile,
+    component_fingerprint: str = "",
 ) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
     if not hardware.gpu:
         return None, None, None
-    component_fingerprint = bootstrap_component_fingerprint(
+    component_fingerprint = str(component_fingerprint or "").strip() or bootstrap_component_fingerprint(
         "rife",
         component_root=model.parent,
         critical_files=(
@@ -411,6 +412,7 @@ def run_safe_rife(
     requested_target: int,
     device: str,
     ffmpeg: str = "",
+    component_fingerprint: str = "",
 ) -> RifeExecutionPolicy:
     input_frames = validate_png_sequence(incoming, len(list(incoming.glob("*.png"))))
     if len(input_frames) < 2:
@@ -429,7 +431,8 @@ def run_safe_rife(
         runtime_hardware = detect_hardware()
         active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
         tuned, tuning_key, tuning_store = _hardware_tuning_policy(
-            width, height, model, rife_executable, runtime_hardware
+            width, height, model, rife_executable, runtime_hardware,
+            component_fingerprint=component_fingerprint,
         )
         live_free = vram_free_mb(active_gpu_index)
         selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
@@ -528,6 +531,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frames", required=True, type=int)
     parser.add_argument("--device", choices=("gpu", "cpu"), default="gpu")
     parser.add_argument("--ffmpeg", default="")
+    parser.add_argument("--component-fingerprint", default="")
     return parser
 
 
@@ -542,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
             requested_target=args.frames,
             device=args.device,
             ffmpeg=args.ffmpeg,
+            component_fingerprint=args.component_fingerprint,
         )
         return 0
     except Exception as exc:
