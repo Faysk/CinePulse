@@ -156,6 +156,26 @@ jobs:
           if (-not (Test-Path -LiteralPath $Cache)) { throw 'RIFE tuning evidence cache was not created.' }
           if (-not (Test-Path -LiteralPath $Evidence)) { throw 'RIFE tuning evidence report was not created.' }
           if (Test-Path -LiteralPath $Work) { Remove-Item -LiteralPath $Work -Recurse -Force }
+      - name: Physical Composer CUDA acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Ffprobe = Join-Path $PWD 'components/ffmpeg/bin/ffprobe.exe'
+          $Root = Join-Path $PWD 'artifacts/gpu/composer-h6'
+          $Base = Join-Path $Root 'base.mkv'
+          $Layer = Join-Path $Root 'layer.png'
+          $Cache = Join-Path $PWD 'cache/hardware/gpu-compositor.json'
+          $Evidence = Join-Path $PWD 'artifacts/gpu/composer-h6.json'
+          New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'format=yuv420p' -c:v ffv1 -level 3 -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 base sample.' }
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'color=c=red@0.55:s=512x288:d=1' -frames:v 1 -vf 'format=rgba' $Layer
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 alpha layer.' }
+          python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --timeout 300 | Tee-Object -FilePath $Evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Physical Composer CUDA acceptance failed.' }
+          if (-not (Test-Path -LiteralPath $Cache)) { throw 'Composer GPU evidence cache was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence)) { throw 'Composer GPU evidence report was not created.' }
       - name: GPU gate
         run: python scripts/ci_gate.py --profile gpu --output artifacts/ci/gpu-windows.json
       - name: Recovery RIFE 8K UHD acceptance
@@ -170,6 +190,7 @@ jobs:
             artifacts/gpu/*.json
             cache/hardware/realesrgan-tuning.json
             cache/hardware/rife-tuning.json
+            cache/hardware/gpu-compositor.json
             data/test-runs/**/report.json
             data/logs/installer.log
           if-no-files-found: warn
