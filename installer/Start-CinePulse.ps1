@@ -256,9 +256,16 @@ function Install-VerifiedArchive {
             foreach ($RequiredFile in $RequiredFiles) {
                 if (-not (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile))) { $Complete = $false }
             }
+            $StateKey = ([string]$State.key).Trim().ToLowerInvariant()
+            $ExpectedKey = $Key.Trim().ToLowerInvariant()
             $StateHash = ([string]$State.sha256).ToLowerInvariant()
             $ManifestHash = ([string]$Manifest.sha256).ToLowerInvariant()
-            if ($State.version -eq $Manifest.version -and $StateHash -eq $ManifestHash -and $Complete) { return }
+            if (
+                $StateKey -eq $ExpectedKey -and
+                $State.version -eq $Manifest.version -and
+                $StateHash -eq $ManifestHash -and
+                $Complete
+            ) { return }
         } catch { }
     }
     $StagingRoot = Join-Path $ComponentsRoot ".staging\$Key"
