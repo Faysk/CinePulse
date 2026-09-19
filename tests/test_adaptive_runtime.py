@@ -16,113 +16,53 @@ def sample(*, ram: float | None = 40.0, temperature: float | None = 60.0, vram_f
 
 
 class AdaptiveRuntimeControllerTests(unittest.TestCase):
-    def test_healthy_sample_preserves_h4_envelope(self) -> None:
+    def test_healthy_sample_preserves_full_envelope(self) -> None:
         controller = AdaptiveRuntimeController(allow_extract_overlap=True, allow_pack_overlap=True)
         decision = controller.observe(sample())
+        self.assertEqual(0, decision.level)
+        self.assertEqual(1.0, decision.chunk_scale)
+        self.assertEqual(1.0, decision.cpu_scale)
+        self.assertTrue(decision.allow_extract_overlap)
+        self.assertTrue(decision.allow_pack_overlap)
+
+    def test_critical_ram_and_vram_do_not_preemptively_throttle(self) -> None:
+        controller = AdaptiveRuntimeController(allow_extract_overlap=True, allow_pack_overlap=True)
+        decision = controller.observe(sample(ram=99.9, temperature=99.0, vram_free=1.0))
+        self.assertEqual(0, decision.level)
+        self.assertEqual(100, decision.limit_chunk_frames(100))
+        self.assertEqual(28, decision.limit_cpu_threads(28))
+        self.assertTrue(decision.allow_extract_overlap)
+        self.assertTrue(decision.allow_pack_overlap)
+        self.assertEqual((), decision.reasons)
+
+    def test_missing_telemetry_does_not_change_full_envelope(self) -> None:
+        controller = AdaptiveRuntimeController(allow_extract_overlap=True, allow_pack_overlap=True)
+        decision = controller.observe(sample(ram=None, vram_free=None))
         self.assertEqual(0, decision.level)
         self.assertEqual(1.0, decision.chunk_scale)
         self.assertTrue(decision.allow_extract_overlap)
         self.assertTrue(decision.allow_pack_overlap)
 
-    def test_temperature_alone_never_downshifts(self) -> None:
-        controller = AdaptiveRuntimeController(allow_extract_overlap=True, allow_pack_overlap=True)
-        decision = controller.observe(sample(temperature=95.0))
+    def test_overnight_pressure_measurements_do_not_reduce_runtime() -> None:
+        controller = AdaptiveRuntimeController(
+            allow_extract_overlap=True,
+            allow_pack_overlap=True,
+            overnight=True,
+            overnight_window=3,
+        )
+        controller.record_throughput(100.0)
+        controller.record_throughput(10.0)
+        controller.record_instability()
+        decision = controller.observe(sample(ram=99.0, temperature=99.0, vram_free=1.0))
         self.assertEqual(0, decision.level)
-        self.assertTrue(decision.allow_extract_overlap)
+        self.assertEqual(1.0, decision.cpu_scale)
         self.assertEqual(1.0, decision.chunk_scale)
-
-    def test_capacity_caution_disables_overlap_and_reduces_future_chunks(self) -> None:
-        controller = AdaptiveRuntimeController(allow_extract_overlap=True, allow_pack_overlap=True)
-        decision = controller.observe(sample(ram=90.0))
-        self.assertEqual(1, decision.level)
-        self.assertFalse(decision.allow_extract_overlap)
-        self.assertEqual(75, decision.limit_chunk_frames(100))
-        self.assertIn("RAM 90.0%", decision.reasons)
-
-    def test_critical_capacity_pressure_halves_future_chunk_limit(self) -> None:
-        controller = AdaptiveRuntimeController(allow_extract_overlap=True, allow_pack_overlap=True)
-        decision = controller.observe(sample(ram=95.0, temperature=95.0, vram_free=300.0))
-        self.assertEqual(2, decision.level)
-        self.assertEqual(50, decision.limit_chunk_frames(100))
-        self.assertFalse(decision.allow_extract_overlap)
-
-    def test_controller_recovers_capacity_only_downshift_after_healthy_hysteresis(self) -> None:
-        controller = AdaptiveRuntimeController(
-            allow_extract_overlap=True,
-            allow_pack_overlap=True,
-            recovery_window=4,
-        )
-        self.assertEqual(1, controller.observe(sample(ram=90.0)).level)
-        for _ in range(3):
-            healthy = controller.observe(sample(temperature=60.0, ram=30.0, vram_free=7000.0))
-            self.assertEqual(1, healthy.level)
-            self.assertFalse(healthy.allow_extract_overlap)
-        recovered = controller.observe(sample(temperature=60.0, ram=30.0, vram_free=7000.0))
-        self.assertEqual(0, recovered.level)
-        self.assertTrue(recovered.allow_extract_overlap)
-        self.assertTrue(recovered.allow_pack_overlap)
-
-    def test_missing_telemetry_never_counts_as_recovery_headroom(self) -> None:
-        controller = AdaptiveRuntimeController(
-            allow_extract_overlap=True,
-            allow_pack_overlap=True,
-            recovery_window=3,
-        )
-        self.assertEqual(1, controller.observe(sample(ram=90.0)).level)
-        for _ in range(6):
-            unknown_vram = controller.observe(sample(ram=30.0, vram_free=None))
-        self.assertEqual(1, unknown_vram.level)
-        self.assertFalse(unknown_vram.allow_extract_overlap)
-
-        for _ in range(6):
-            unknown_ram = controller.observe(sample(ram=None, vram_free=7000.0))
-        self.assertEqual(1, unknown_ram.level)
-        self.assertFalse(unknown_ram.allow_extract_overlap)
-
-    def test_recovery_requires_deep_headroom_not_threshold_flapping(self) -> None:
-        controller = AdaptiveRuntimeController(
-            allow_extract_overlap=True,
-            allow_pack_overlap=True,
-            recovery_window=3,
-        )
-        self.assertEqual(1, controller.observe(sample(ram=90.0)).level)
-        for _ in range(6):
-            near_threshold = controller.observe(sample(ram=86.0, vram_free=1200.0))
-        self.assertEqual(1, near_threshold.level)
-        self.assertFalse(near_threshold.allow_extract_overlap)
-
-    def test_critical_pressure_recovers_one_level_per_window(self) -> None:
-        controller = AdaptiveRuntimeController(
-            allow_extract_overlap=True,
-            allow_pack_overlap=True,
-            recovery_window=3,
-        )
-        self.assertEqual(2, controller.observe(sample(ram=95.0, vram_free=300.0)).level)
-        for _ in range(3):
-            decision = controller.observe(sample(ram=30.0, vram_free=7000.0))
-        self.assertEqual(1, decision.level)
-        self.assertFalse(decision.allow_extract_overlap)
-        for _ in range(3):
-            decision = controller.observe(sample(ram=30.0, vram_free=7000.0))
-        self.assertEqual(0, decision.level)
         self.assertTrue(decision.allow_extract_overlap)
+        self.assertTrue(decision.allow_pack_overlap)
 
-    def test_configured_gpu_is_used_for_capacity_evidence(self) -> None:
-        controller = AdaptiveRuntimeController(gpu_index=1, allow_extract_overlap=True, allow_pack_overlap=True)
-        payload = HardwareSample(
-            timestamp=1.0, monotonic=1.0, stage="RIFE 2/3", cpu_total_percent=20.0,
-            cpu_per_logical_percent=(), ram_total_mb=65536.0, ram_used_mb=None,
-            ram_available_mb=None, ram_percent=40.0, disk_read_mbps=None, disk_write_mbps=None,
-            gpus=(
-                GpuSample(index=0, name="GPU0", temperature_c=95.0, vram_free_mb=100.0),
-                GpuSample(index=1, name="GPU1", temperature_c=65.0, vram_free_mb=5000.0),
-            ),
-        )
-        self.assertEqual(0, controller.observe(payload).level)
-
-    def test_rife_minimum_can_be_kept_at_two_frames_under_capacity_pressure(self) -> None:
+    def test_minimum_frame_contract_is_still_respected() -> None:
         controller = AdaptiveRuntimeController(allow_extract_overlap=True)
-        decision = controller.observe(sample(vram_free=300.0))
+        decision = controller.observe(sample(vram_free=1.0))
         self.assertEqual(2, decision.limit_chunk_frames(2, minimum=2))
 
 
