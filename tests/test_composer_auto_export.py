@@ -88,6 +88,7 @@ class ComposerAutoExportTests(unittest.TestCase):
             request = make_request(Path(temp))
             with (
                 patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=route(request, use_gpu=True)),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
                 patch("cinepulse.composer_auto_export._export_gpu", return_value=ComposerExportResult(request.output, 24)) as gpu,
                 patch("cinepulse.composer_auto_export.export_composer_reference") as cpu,
             ):
@@ -97,6 +98,30 @@ class ComposerAutoExportTests(unittest.TestCase):
             gpu.assert_called_once()
             cpu.assert_not_called()
 
+    def test_low_live_vram_preserves_evidence_and_skips_gpu_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            store = Store()
+            selected = route(request, use_gpu=True)
+            with (
+                patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=selected),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=128.0),
+                patch("cinepulse.composer_auto_export._export_gpu") as gpu,
+                patch(
+                    "cinepulse.composer_auto_export.export_composer_reference",
+                    return_value=ComposerExportResult(request.output, 24),
+                ) as cpu,
+            ):
+                result = export_composer_auto(
+                    request, hardware=GPU, capabilities=CAPS, store=store
+                )
+            self.assertEqual("cpu-reference", result.backend)
+            self.assertFalse(result.gpu_attempted)
+            self.assertEqual("insufficient-live-vram", result.gpu_failure)
+            self.assertEqual([], store.invalidated)
+            gpu.assert_not_called()
+            cpu.assert_called_once()
+
     def test_gpu_failure_invalidates_exact_key_and_retries_cpu_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
@@ -104,6 +129,7 @@ class ComposerAutoExportTests(unittest.TestCase):
             selected = route(request, use_gpu=True)
             with (
                 patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=selected),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
                 patch("cinepulse.composer_auto_export._export_gpu", side_effect=RuntimeError("cuda exploded")),
                 patch("cinepulse.composer_auto_export.export_composer_reference", return_value=ComposerExportResult(request.output, 24)) as cpu,
             ):
@@ -120,6 +146,7 @@ class ComposerAutoExportTests(unittest.TestCase):
             store = Store()
             with (
                 patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=route(request, use_gpu=True)),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
                 patch("cinepulse.composer_auto_export._export_gpu", side_effect=InterruptedError("cancelled")),
                 patch("cinepulse.composer_auto_export.export_composer_reference") as cpu,
             ):
