@@ -172,8 +172,10 @@ class AdaptiveRuntimeController:
         # which avoids flapping around 88% RAM / 768 MiB free VRAM.
         deeply_healthy = bool(
             requested < self._level
-            and (ram_percent is None or ram_percent <= 82.0)
-            and (vram_free is None or vram_free >= 1536.0)
+            and ram_percent is not None
+            and vram_free is not None
+            and ram_percent <= 82.0
+            and vram_free >= 1536.0
         )
         if deeply_healthy:
             self._healthy_streak += 1
