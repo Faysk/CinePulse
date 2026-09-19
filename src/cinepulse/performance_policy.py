@@ -82,6 +82,41 @@ def profile_for_threads(requested: int | None, logical_threads: int | None) -> s
     return exact.get(value, "Manual")
 
 
+def realesrgan_live_process_cap(
+    vram_mb: int | None,
+    *,
+    vram_free_mb: float | int | None,
+    width: int = 1920,
+    height: int = 1080,
+) -> int:
+    """Return the maximum GPU process concurrency live headroom can sustain.
+
+    This is a *ceiling only*. It never grants a faster policy by itself; callers
+    may use it to admit an already physically-proven tuning record or to
+    downshift an existing baseline. Missing live telemetry fails closed to the
+    historical total-VRAM envelope.
+    """
+    total = max(0, int(vram_mb or 0))
+    try:
+        free = max(0, int(float(vram_free_mb))) if vram_free_mb is not None else 0
+    except (TypeError, ValueError):
+        free = 0
+    pixels = max(1, int(width)) * max(1, int(height))
+
+    baseline = 4 if total >= 20_000 else 3 if total >= 10_000 else 2
+    cap = baseline
+    if total >= 7_500 and pixels <= 2560 * 1440 and free >= 6_400:
+        cap = max(cap, 3)
+    if free > 0:
+        if free < 3_000:
+            cap = min(cap, 1)
+        elif free < 5_000:
+            cap = min(cap, 2)
+        elif free < 7_500:
+            cap = min(cap, 3)
+    return max(1, cap)
+
+
 def realesrgan_pipeline_threads(
     cpu_threads: int | None,
     logical_threads: int | None,
@@ -132,28 +167,16 @@ def realesrgan_pipeline_threads(
     else:
         gpu_workers = 2 if host_feed_ready else 1
 
-    # H9: live headroom can unlock one additional Vulkan process worker on
-    # common 8 GB RTX cards, but only for source geometries where the PNG and
-    # Vulkan worksets remain bounded. Unknown free VRAM never expands policy.
-    if (
-        gpu_workers == 2
-        and memory >= 7_500
-        and free_memory >= 6_400
-        and logical >= 12
-        and host_feed_ready
-        and pixels <= 2560 * 1440
-    ):
-        gpu_workers = 3
-
-    # Conversely, do not keep a heuristically aggressive total-VRAM policy when
-    # another application has already consumed most of the adapter.
-    if free_memory > 0:
-        if free_memory < 3_000:
-            gpu_workers = min(gpu_workers, 1)
-        elif free_memory < 5_000:
-            gpu_workers = min(gpu_workers, 2)
-        elif free_memory < 7_500:
-            gpu_workers = min(gpu_workers, 3)
+    # Live headroom is a ceiling, never an authorization. Extra concurrency
+    # beyond this baseline must come from an exact physically-proven tuning
+    # record; headroom alone may only reduce pressure.
+    live_cap = realesrgan_live_process_cap(
+        memory,
+        vram_free_mb=free_memory if vram_free_mb is not None else None,
+        width=width,
+        height=height,
+    )
+    gpu_workers = min(gpu_workers, live_cap)
 
     return f"{io_workers}:{gpu_workers}:{io_workers}"
 
