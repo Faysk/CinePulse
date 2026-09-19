@@ -239,6 +239,8 @@ def estimate_storage(
     cache_current_gb: float = 0.0,
     cache_quota_gb: float = DEFAULT_CACHE_QUOTA_GB,
     chunk_budget_gb: float = DEFAULT_CHUNK_BUDGET_GB,
+    ai_chunk_budget_gb: float | None = None,
+    rife_chunk_budget_gb: float | None = None,
 ) -> StorageEstimate:
     """Estimate scratch/cache pressure from the durations each stage materializes.
 
@@ -252,6 +254,9 @@ def estimate_storage(
     RIFE and delivery operate on the expanded project timeline.  Treating every
     stage as project-long was the 1.1.2 false-terabyte preflight bug.
     """
+
+    ai_budget = max(0.5, float(chunk_budget_gb if ai_chunk_budget_gb is None else ai_chunk_budget_gb))
+    rife_budget = max(0.5, float(chunk_budget_gb if rife_chunk_budget_gb is None else rife_chunk_budget_gb))
 
     if project_duration is None:
         project_duration = duration
@@ -306,7 +311,7 @@ def estimate_storage(
     ai_chunk = MAX_CHUNK_FRAMES
     if ai.attempts and ai.input_spec and ai.output_spec and ai.materializes_frames:
         seconds = stage_duration("enhancement")
-        ai_chunk = choose_chunk_frames(ai.input_spec, ai.output_spec, budget_gb=chunk_budget_gb)
+        ai_chunk = choose_chunk_frames(ai.input_spec, ai.output_spec, budget_gb=ai_budget)
         working = _neural_chunk_gb(ai.input_spec, ai.output_spec, ai_chunk)
         enhanced = _compressed_gb(ai.output_spec, seconds, lossless=True)
         # Chunk videos coexist with the assembled cache only during concat.
@@ -327,7 +332,7 @@ def estimate_storage(
         seconds = stage_duration("rife_base")
         ratio = rife_base.output_spec.fps / max(1.0, rife_base.input_spec.fps)
         rife_chunk = choose_chunk_frames(
-            rife_base.input_spec, rife_base.output_spec, budget_gb=chunk_budget_gb,
+            rife_base.input_spec, rife_base.output_spec, budget_gb=rife_budget,
             output_frames_per_input=ratio,
         )
         working = _neural_chunk_gb(
@@ -391,7 +396,7 @@ def estimate_storage(
         seconds = stage_duration("rife_final")
         ratio = rife.output_spec.fps / max(1.0, rife.input_spec.fps)
         rife_chunk = choose_chunk_frames(
-            rife.input_spec, rife.output_spec, budget_gb=chunk_budget_gb,
+            rife.input_spec, rife.output_spec, budget_gb=rife_budget,
             output_frames_per_input=ratio,
         )
         working = _neural_chunk_gb(
