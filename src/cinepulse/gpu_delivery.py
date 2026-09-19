@@ -194,6 +194,7 @@ def select_resident_delivery_route(
         color_range=source_profile.range,
         scaler=scaler or "none",
         encode_contract=contract.token(),
+        gpu_index=max(0, int(gpu_index)),
     )
     if not store.approved(key):
         return ResidentDeliveryRoute(False, "exact resident decode/scale/encode evidence is absent or stale", key, contract, decoder, scaler, gpu_index)
