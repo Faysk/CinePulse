@@ -264,7 +264,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cache", type=Path, required=True)
     result.add_argument("--ffmpeg", default="ffmpeg")
     result.add_argument("--ffprobe", default="ffprobe")
-    result.add_argument("--gpu-index", type=int, default=0)
+    result.add_argument("--gpu-index", type=int, default=None)
     result.add_argument("--scale-width", type=int, default=0)
     result.add_argument("--scale-height", type=int, default=0)
     result.add_argument("--seek-seconds", type=float, default=1.0, help="Non-zero chunk seek used for alignment proof.")
@@ -294,12 +294,13 @@ def main() -> int:
     hardware = detect_hardware()
     if not hardware.gpu:
         raise SystemExit("No NVIDIA GPU detected; no physical H5 evidence recorded")
+    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
     capabilities = detect_gpu_media_capabilities(ffmpeg)
     candidates = safe_candidate_policies(
         capabilities,
         codec=codec,
         profile=profile,
-        gpu_index=max(0, args.gpu_index),
+        gpu_index=gpu_index,
         allow_scale=do_scale,
     )
     if not candidates:
@@ -317,6 +318,7 @@ def main() -> int:
         target_height=height,
         profile=profile,
         operation=operation,
+        gpu_index=gpu_index,
     )
 
     with tempfile.TemporaryDirectory(prefix="cinepulse-h5-") as temporary:
