@@ -57,6 +57,8 @@ def main() -> int:
         width,
         height,
         component_fingerprint,
+        cpu_name=hardware.cpu,
+        cpu_threads=hardware.cpu_threads,
     )
     store = RifeTuningStore(args.cache)
     winner, samples = benchmark_and_record(
