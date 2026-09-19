@@ -5565,6 +5565,7 @@ class VideoOptimizerStudio:
                 target_height=source_h,
                 profile=gpu_media_profile,
                 operation="decode",
+                gpu_index=self._hardware.gpu_index,
             )
             gpu_media_policy = select_gpu_media_policy(
                 store=gpu_media_store,
