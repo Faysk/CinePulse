@@ -18,6 +18,7 @@ class CpuTuningKey:
     physical_cores: int
     mode: MachineMode
     gpu_active: bool = False
+    cpu_name: str = ""
 
     def token(self) -> str:
         return ":".join(
@@ -27,6 +28,7 @@ class CpuTuningKey:
                 str(max(1, int(self.physical_cores))),
                 self.mode,
                 "gpu" if self.gpu_active else "cpu",
+                " ".join(str(self.cpu_name or "unknown-cpu").split()).lower(),
             )
         )
 
@@ -38,6 +40,7 @@ class CpuTuningKey:
         *,
         mode: MachineMode,
         gpu_active: bool = False,
+        cpu_name: str = "",
     ) -> "CpuTuningKey":
         return cls(
             stage=stage,
@@ -45,6 +48,7 @@ class CpuTuningKey:
             physical_cores=max(1, topology.physical_cores),
             mode=mode,
             gpu_active=bool(gpu_active),
+            cpu_name=cpu_name,
         )
 
 
@@ -67,7 +71,7 @@ class CpuTuningStore:
     CPU ceiling.
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
