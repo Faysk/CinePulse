@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.4 — 2026-09-19
+
+- muda a prioridade do runtime para utilização total antes de limitação preventiva;
+- todos os perfis de CPU passam a disponibilizar 100% dos threads lógicos ao render;
+- Real-ESRGAN deixa de reduzir concorrência por VRAM livre/geometria e usa envelope estático agressivo pelo porte total do adaptador;
+- budgets de Real-ESRGAN/RIFE deixam de depender de RAM disponível, VRAM livre e benchmark de scratch: Real-ESRGAN usa 16 GiB/3 worksets com extract+pack overlap; RIFE usa 12 GiB/2 worksets com extract overlap;
+- o controlador adaptativo deixa de reduzir chunks, overlap ou CPU por RAM%, VRAM livre, temperatura, throughput ou instabilidade medida;
+- RIFE inicia em 3:3:3 abaixo de UHD e 2:2:2 em UHD sem gating por VRAM livre; somente uma falha/OOM real aciona o fallback conservador;
+- permanecem ativos os contratos de integridade de PNG/mídia, AtomicOutput, cancelamento e validação final;
+- telemetria pode continuar registrada para diagnóstico/histórico, mas não governa mais throttling preventivo nesta versão.
+
 ## 1.2.3 — 2026-09-19
 
 - amplia a utilização segura de GPU/VRAM/RAM sem alterar modelo, escala, FPS, cor/HDR ou qualidade do encoder;
