@@ -71,6 +71,38 @@ class StorageEngineTests(unittest.TestCase):
         self.assertGreater(by_key["enhancement"].working_set_gb, 0.0)
         self.assertGreater(by_key["rife_base"].working_set_gb, 0.0)
 
+    def test_concurrent_neural_worksets_raise_peak_scratch_reservation(self):
+        plan = self._plan(
+            source_width=1920, source_height=1080, source_fps=30,
+            target_width=3840, target_height=2160, target_fps=60,
+        )
+        one = estimate_storage(
+            plan, duration=30, output_gb=1.2,
+            ai_chunk_budget_gb=16.0, rife_chunk_budget_gb=12.0,
+            ai_inflight_chunks=1, rife_inflight_chunks=1,
+        )
+        overlapped = estimate_storage(
+            plan, duration=30, output_gb=1.2,
+            ai_chunk_budget_gb=16.0, rife_chunk_budget_gb=12.0,
+            ai_inflight_chunks=3, rife_inflight_chunks=2,
+        )
+        self.assertGreater(overlapped.peak_scratch_gb, one.peak_scratch_gb)
+        details = " ".join(stage.detail for stage in overlapped.stages)
+        self.assertIn("até 3 lote(s) coexistem", details)
+        self.assertIn("até 2 lote(s) coexistem", details)
+
+    def test_inflight_storage_inputs_are_hard_capped(self):
+        plan = self._plan()
+        capped = estimate_storage(
+            plan, duration=20, output_gb=1.0,
+            ai_inflight_chunks=99, rife_inflight_chunks=99,
+        )
+        explicit = estimate_storage(
+            plan, duration=20, output_gb=1.0,
+            ai_inflight_chunks=3, rife_inflight_chunks=3,
+        )
+        self.assertAlmostEqual(capped.peak_scratch_gb, explicit.peak_scratch_gb, places=6)
+
     def test_legacy_chunk_budget_remains_backward_compatible(self):
         plan = self._plan()
         old_style = estimate_storage(plan, duration=20, output_gb=1.0, chunk_budget_gb=3.0)
