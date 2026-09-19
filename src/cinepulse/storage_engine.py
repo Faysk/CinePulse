@@ -325,7 +325,7 @@ def estimate_storage(
         stage_peak = max(current_persistent + concurrent_working, current_persistent + enhanced * 2.05)
         cache_growth = min(enhanced, cache_quota_gb) if cache_quota_gb > 0 else 0.0
         stages.append(StorageStageEstimate(
-            "enhancement", "Real-ESRGAN em chunks", 0.0, working, stage_peak, seconds,
+            "enhancement", "Real-ESRGAN em chunks", 0.0, concurrent_working, stage_peak, seconds,
             f"{ai_chunk} quadro(s)/lote; até {ai_inflight} lote(s) coexistem; PNGs são descartados e o master (~{enhanced:.2f} GB) é promovido ao cache.",
         ))
         # The assembled AI master is atomically moved to cache and the optional
@@ -349,7 +349,7 @@ def estimate_storage(
         interpolated = _compressed_gb(rife_base.output_spec, seconds, lossless=True)
         stage_peak = max(current_persistent + concurrent_working, current_persistent + interpolated * 2.05)
         stages.append(StorageStageEstimate(
-            "rife_base", "RIFE do clipe reutilizável", interpolated, working, stage_peak, seconds,
+            "rife_base", "RIFE do clipe reutilizável", interpolated, concurrent_working, stage_peak, seconds,
             f"{rife_chunk} quadro(s) fonte/lote; até {rife_inflight} lote(s) coexistem; o master neural cobre apenas o clipe reutilizável.",
         ))
         current_persistent = interpolated
@@ -414,7 +414,7 @@ def estimate_storage(
         interpolated = _compressed_gb(rife.output_spec, seconds, lossless=True)
         stage_peak = max(current_persistent + concurrent_working, current_persistent + interpolated * 2.05)
         stages.append(StorageStageEstimate(
-            "rife_final", "RIFE em chunks", interpolated, working, stage_peak, seconds,
+            "rife_final", "RIFE em chunks", interpolated, concurrent_working, stage_peak, seconds,
             f"{rife_chunk} quadro(s) fonte/lote; até {rife_inflight} lote(s) coexistem; entrada/saída PNG não cobrem mais o projeto inteiro.",
         ))
         current_persistent = interpolated
