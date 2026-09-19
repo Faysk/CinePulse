@@ -170,13 +170,23 @@ def _move_native_frames(native_dir: Path, output_dir: Path, expected: int) -> No
     validate_png_sequence(output_dir, expected)
 
 
-def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
+def _hardware_tuning_policy(
+    width: int,
+    height: int,
+    model: Path,
+    executable: Path,
+) -> tuple[RifePolicy | None, RifeTuningKey | None, RifeTuningStore | None]:
     hardware = detect_hardware()
     if not hardware.gpu:
         return None, None, None
     component_fingerprint = bootstrap_component_fingerprint(
         "rife",
         component_root=model.parent,
+        critical_files=(
+            executable,
+            model / "flownet.bin",
+            model / "flownet.param",
+        ),
     )
     if not component_fingerprint:
         return None, None, None
@@ -386,7 +396,9 @@ def run_safe_rife(
     live_reason = ""
     live_free: float | None = None
     if device == "gpu":
-        tuned, tuning_key, tuning_store = _hardware_tuning_policy(width, height, model)
+        tuned, tuning_key, tuning_store = _hardware_tuning_policy(
+            width, height, model, rife_executable
+        )
         live_free = vram_free_mb(0)
         selected_policy, selected_measured, live_reason = _limit_policy_by_live_vram(
             tuned,
