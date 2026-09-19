@@ -32,6 +32,7 @@ class ComposerGpuRoute:
     layer: OverlayLayer | None = None
     key: GpuCompositorKey | None = None
     layers: tuple[OverlayLayer, ...] = ()
+    base_decoder: str | None = None
 
 
 def build_compositor_stack_key(
@@ -47,6 +48,9 @@ def build_compositor_stack_key(
     matrix: str,
     color_range: str,
     layers: Iterable[OverlayLayer],
+    base_mode: str = "cpu-upload",
+    base_codec: str = "",
+    base_decoder: str = "",
 ) -> GpuCompositorKey:
     ordered = canonical_overlay_stack(layers)
     if not ordered:
@@ -64,6 +68,9 @@ def build_compositor_stack_key(
         space=str(matrix or "unknown"),
         color_range=str(color_range or "unknown"),
         layer_contract=overlay_stack_contract_token(ordered),
+        base_mode=base_mode,
+        base_codec=base_codec,
+        base_decoder=base_decoder,
     )
 
 
