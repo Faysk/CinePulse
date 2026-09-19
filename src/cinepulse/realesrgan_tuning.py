@@ -87,8 +87,9 @@ def safe_candidates(
     """Return bounded benchmark candidates; the caller must benchmark before use.
 
     Candidate generation intentionally does not declare any option faster or safe on
-    physical hardware. The legacy 256 / 2:2:2 policy is always included first as the
-    known fallback. Larger tiles/concurrency are merely candidates for H2 evidence.
+    physical hardware. Candidate zero is the exact current runtime baseline for
+    the supplied host/GPU envelope. Larger tiles/concurrency are merely candidates
+    for physical evidence.
     """
     vram = max(0, int(vram_mb or 0))
     threads = max(1, int(cpu_threads))
