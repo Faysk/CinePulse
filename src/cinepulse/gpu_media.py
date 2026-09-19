@@ -29,7 +29,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 # Schema 2 intentionally invalidates H5 records written before non-zero seek
 # alignment became a mandatory acceptance gate. Old evidence was correct for
 # frame-zero playback but is insufficient for CinePulse's chunked runtime.
-GPU_MEDIA_SCHEMA = 2
+GPU_MEDIA_SCHEMA = 3
 DEFAULT_PSNR_FLOOR_DB = 55.0
 DEFAULT_SSIM_FLOOR = 0.999
 DECODE_PSNR_FLOOR_DB = 80.0
@@ -167,6 +167,7 @@ class GpuMediaKey:
     operation: str
     target_width: int = 0
     target_height: int = 0
+    gpu_index: int = 0
 
     def token(self) -> str:
         target_width = max(1, int(self.target_width or self.width))
@@ -185,6 +186,7 @@ class GpuMediaKey:
             str(self.space).strip().lower() or "unknown",
             str(self.color_range).strip().lower() or "unknown",
             str(self.operation).strip().lower(),
+            f"gpu{max(0, int(self.gpu_index))}",
         )
         return "|".join(values)
 
@@ -202,6 +204,7 @@ class GpuMediaKey:
         operation: str,
         target_width: int | None = None,
         target_height: int | None = None,
+        gpu_index: int = 0,
     ) -> "GpuMediaKey":
         return cls(
             gpu_name=gpu_name,
@@ -219,6 +222,7 @@ class GpuMediaKey:
             operation=operation,
             target_width=target_width or width,
             target_height=target_height or height,
+            gpu_index=max(0, int(gpu_index)),
         )
 
 
@@ -337,6 +341,8 @@ class GpuMediaTuningStore:
             )
         except (KeyError, TypeError, ValueError):
             return None
+        if policy.gpu_index != max(0, int(key.gpu_index)):
+            return None
         if not capabilities.cuda or policy.decoder not in capabilities.decoders:
             return None
         if policy.scaler and policy.scaler not in capabilities.filters:
@@ -346,7 +352,11 @@ class GpuMediaTuningStore:
         return policy
 
     def record(self, key: GpuMediaKey, evidence: GpuMediaEvidence) -> bool:
-        if evidence.policy.operation != key.operation or not evidence.accepted:
+        if (
+            evidence.policy.operation != key.operation
+            or evidence.policy.gpu_index != max(0, int(key.gpu_index))
+            or not evidence.accepted
+        ):
             return False
         payload = self._load()
         records = payload.setdefault("records", {})
