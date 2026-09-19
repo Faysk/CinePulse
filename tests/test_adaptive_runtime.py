@@ -62,6 +62,23 @@ class AdaptiveRuntimeControllerTests(unittest.TestCase):
         self.assertTrue(recovered.allow_extract_overlap)
         self.assertTrue(recovered.allow_pack_overlap)
 
+    def test_missing_telemetry_never_counts_as_recovery_headroom(self) -> None:
+        controller = AdaptiveRuntimeController(
+            allow_extract_overlap=True,
+            allow_pack_overlap=True,
+            recovery_window=3,
+        )
+        self.assertEqual(1, controller.observe(sample(ram=90.0)).level)
+        for _ in range(6):
+            unknown_vram = controller.observe(sample(ram=30.0, vram_free=None))
+        self.assertEqual(1, unknown_vram.level)
+        self.assertFalse(unknown_vram.allow_extract_overlap)
+
+        for _ in range(6):
+            unknown_ram = controller.observe(sample(ram=None, vram_free=7000.0))
+        self.assertEqual(1, unknown_ram.level)
+        self.assertFalse(unknown_ram.allow_extract_overlap)
+
     def test_recovery_requires_deep_headroom_not_threshold_flapping(self) -> None:
         controller = AdaptiveRuntimeController(
             allow_extract_overlap=True,
