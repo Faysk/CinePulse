@@ -4552,6 +4552,7 @@ class VideoOptimizerStudio:
                     chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                     overlap_extract=realesrgan_budget.overlap_extract,
                     overlap_pack=realesrgan_budget.overlap_pack,
+                    vram_free_mb=neural_headroom.vram_free_mb,
                     runtime_guard=h5_ai_guard,
                     runtime_reporter=h5_ai_controller.record_throughput,
                 )
@@ -5277,7 +5278,7 @@ class VideoOptimizerStudio:
         source_w: int, source_h: int, temp_paths: list[Path], temp_dirs: list[Path],
         cpu_threads: int, base: float, weight: float, *, cache_source_video: str | None = None,
         cache_quota_gb: float = 50.0, chunk_budget_gb: float = 4.0, overlap_extract: bool = False,
-        overlap_pack: bool = False,
+        overlap_pack: bool = False, vram_free_mb: float | None = None,
         runtime_guard: Callable[[], RuntimePressureDecision] | None = None,
         runtime_reporter: Callable[[float], None] | None = None,
     ) -> tuple[str, int, int]:
@@ -5320,7 +5321,12 @@ class VideoOptimizerStudio:
             budget_gb=max(0.5, float(chunk_budget_gb)),
         )
         pipeline_parts = realesrgan_pipeline_threads(
-            cpu_threads, self._hardware.cpu_threads, self._hardware.vram_mb
+            cpu_threads,
+            self._hardware.cpu_threads,
+            self._hardware.vram_mb,
+            vram_free_mb=vram_free_mb,
+            width=source_w,
+            height=source_h,
         ).split(":")
         try:
             fallback_load, fallback_proc, fallback_save = (max(1, int(value)) for value in pipeline_parts)
@@ -5355,8 +5361,10 @@ class VideoOptimizerStudio:
             )
         else:
             self._log(
-                f"H3 Real-ESRGAN: sem evidência física exata; preservando política Phase 2 "
-                f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index}."
+                f"H3/H9 Real-ESRGAN: sem evidência física exata; política dinâmica "
+                f"tile={fallback_policy.tile} pipeline={fallback_policy.pipeline} gpu={fallback_policy.gpu_index} "
+                f"(VRAM livre inicial={vram_free_mb if vram_free_mb is not None else 'n/a'} MiB; "
+                "fallback 2:2:2 permanece ativo)."
             )
         chunk_root = Path(tempfile.mkdtemp(prefix="studio_ai_chunks_", dir=output_dir))
         temp_dirs.append(chunk_root)
@@ -5502,6 +5510,12 @@ class VideoOptimizerStudio:
                     overlap_pack = overlap_pack and decision.allow_pack_overlap
                     active_chunk_frames = decision.limit_chunk_frames(chunk_frames)
                     active_cpu_threads = decision.limit_cpu_threads(cpu_threads)
+                    if decision.level > 0 and active_policy.process_jobs > conservative_policy.process_jobs:
+                        self._log(
+                            "H9 VRAM guard: pressão detectada; reduzindo Real-ESRGAN para "
+                            f"{conservative_policy.pipeline} antes de uma possível OOM."
+                        )
+                        active_policy = conservative_policy
                 else:
                     active_chunk_frames = chunk_frames
                     active_cpu_threads = cpu_threads
