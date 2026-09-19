@@ -77,6 +77,14 @@ def derive_pipeline_budget(
         max_inflight = 2
     if overlap_extract and overlap_pack and dedicated and ram >= 16.0 and scratch >= chunk_budget * 6.0:
         max_inflight = 3
+
+    # The runtime represents extract/pack overlap as independent booleans.
+    # Allowing both while claiming inflight=2 would actually materialize the
+    # current neural chunk + one prefetched chunk + one background pack = 3.
+    # Keep the advertised hard bound truthful.
+    if max_inflight < 3 and overlap_extract and overlap_pack:
+        overlap_pack = False
+
     # Hard backpressure: H4 never allows an unbounded queue.
     max_inflight = max(1, min(3, max_inflight))
 
