@@ -89,7 +89,19 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         self.assertIn("tuned_policy.process_jobs > fallback_policy.process_jobs", studio)
         self.assertIn("tuning físico", studio)
         self.assertIn("preservado no cache", studio)
-        self.assertIn("process_jobs=max(1, min(2, fallback_policy.process_jobs))", studio)
+        self.assertIn("tile=max(32, min(256, active_policy.tile))", studio)
+        self.assertIn(
+            "process_jobs=max(1, min(2, fallback_policy.process_jobs, active_policy.process_jobs))",
+            studio,
+        )
+        self.assertIn(
+            "load_jobs=max(1, min(2, fallback_policy.load_jobs, active_policy.load_jobs))",
+            studio,
+        )
+        self.assertIn(
+            "save_jobs=max(1, min(2, fallback_policy.save_jobs, active_policy.save_jobs))",
+            studio,
+        )
 
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
