@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.3 — 2026-09-19
+
+- amplia a utilização segura de GPU/VRAM/RAM sem alterar modelo, escala, FPS, cor/HDR ou qualidade do encoder;
+- separa corretamente o host-feed de CPU da concorrência Vulkan do Real-ESRGAN e admite políticas maiores somente com headroom atual e/ou evidência física exata;
+- torna budgets de chunks Real-ESRGAN/RIFE dinâmicos por RAM, scratch e VRAM, com limites rígidos de worksets concorrentes e preflight alinhado ao runtime;
+- adiciona telemetria NVIDIA de NVENC/NVDEC e seleção multi-GPU mais fiel à atividade real;
+- endurece cache/tuning com identidade exata de componente, CPU, GPU, driver e geometria, preservando evidência válida quando a falha decorre apenas de pressão transitória de VRAM;
+- corrige staging do mix reativo do Demucs para manter extensão WAV válida no FFmpeg, rejeita caches WAV inválidos e impede reutilização de árvores `.demucs-partial-*` nunca promovidas;
+- corrige rollback do RIFE para permitir downshift do baseline `2:2:2` para `1:1:1` quando a VRAM livre despenca durante a execução;
+- mantém GPU Acceptance físico separado dos gates hospedados; nenhuma alegação de desempenho físico é promovida sem runner NVIDIA real.
+
 ## 1.2.2 — 2026-09-19
 
 - corrige o export CPU do Overlay Composer para carregar a mesma análise musical da prévia; Spectrum/Wave/Circular e pulse/beat reaction deixam de cair silenciosamente para envelopes zerados no vídeo final;
