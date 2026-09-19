@@ -188,6 +188,8 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
         width,
         height,
         component_fingerprint,
+        cpu_name=hardware.cpu,
+        cpu_threads=hardware.cpu_threads,
     )
     store = RifeTuningStore(PATHS.cache / "hardware" / "rife-tuning.json")
     policy = store.lookup(key, gpu_index=0)
