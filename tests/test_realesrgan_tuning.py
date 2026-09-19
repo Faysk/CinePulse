@@ -26,8 +26,31 @@ class RealEsrganTuningTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_legacy_fallback_is_always_first_candidate(self) -> None:
-        candidates = safe_candidates(vram_mb=8192, cpu_threads=20, gpu_index=1, width=1920, height=1080)
+        candidates = safe_candidates(
+            vram_mb=8192, cpu_threads=20, logical_threads=28,
+            gpu_index=1, width=1920, height=1080,
+        )
         self.assertEqual(candidates[0], RealEsrganPolicy(256, 2, 2, 2, 1))
+
+    def test_first_candidate_matches_runtime_baseline_for_large_gpu(self) -> None:
+        candidates = safe_candidates(
+            vram_mb=24576,
+            cpu_threads=6,
+            logical_threads=28,
+            width=1920,
+            height=1080,
+        )
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 2, 4, 2, 0))
+
+    def test_first_candidate_matches_runtime_baseline_for_small_host_feed(self) -> None:
+        candidates = safe_candidates(
+            vram_mb=8192,
+            cpu_threads=4,
+            logical_threads=28,
+            width=1920,
+            height=1080,
+        )
+        self.assertEqual(candidates[0], RealEsrganPolicy(256, 1, 2, 1, 0))
 
     def test_high_resolution_does_not_offer_512_tile(self) -> None:
         candidates = safe_candidates(vram_mb=24576, cpu_threads=28, width=7680, height=4320)
