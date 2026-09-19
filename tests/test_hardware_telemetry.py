@@ -65,7 +65,11 @@ def test_nvidia_sampler_reads_video_engine_utilization() -> None:
 
 
 def test_nvidia_sampler_falls_back_when_video_engine_fields_are_unsupported() -> None:
-    failed = SimpleNamespace(returncode=1, stdout="")
+    failed = SimpleNamespace(
+        returncode=1,
+        stdout="",
+        stderr="Field 'utilization.encoder' is not a valid field to query.",
+    )
     base = SimpleNamespace(
         returncode=0,
         stdout="0, RTX Legacy, 555.1, 80, 40, 8192, 4096, 4096, 120, 180, 65, 2200, 9000, P2\n",
@@ -85,6 +89,31 @@ def test_nvidia_sampler_falls_back_when_video_engine_fields_are_unsupported() ->
     assert second[0].utilization_percent == 80
     # First sample probes ENGINE_QUERY then falls back; later samples remember
     # the unsupported fields and go straight to BASE_QUERY.
+    assert run.call_count == 3
+
+
+def test_transient_extended_query_failure_is_retried_next_sample() -> None:
+    transient = SimpleNamespace(returncode=1, stdout="", stderr="GPU is temporarily unavailable")
+    base = SimpleNamespace(
+        returncode=0,
+        stdout="0, RTX Test, 999.1, 40, 20, 8192, 2048, 6144, 80, 180, 60, 2100, 9000, P2\n",
+        stderr="",
+    )
+    extended = SimpleNamespace(
+        returncode=0,
+        stdout="0, RTX Test, 999.1, 60, 30, 8192, 3000, 5192, 100, 180, 63, 2200, 9500, P2, 44, 22\n",
+        stderr="",
+    )
+    sampler = NvidiaSmiSampler("nvidia-smi")
+    with patch(
+        "cinepulse.hardware_telemetry.subprocess.run",
+        side_effect=(transient, base, extended),
+    ) as run:
+        first = sampler.sample()
+        second = sampler.sample()
+    assert first[0].encoder_utilization_percent is None
+    assert second[0].encoder_utilization_percent == 44
+    assert second[0].decoder_utilization_percent == 22
     assert run.call_count == 3
 
 
