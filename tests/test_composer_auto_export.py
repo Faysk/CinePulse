@@ -83,6 +83,66 @@ class ComposerAutoExportTests(unittest.TestCase):
             gpu.assert_not_called()
             cpu.assert_called_once()
 
+    def test_missing_exact_evidence_can_be_learned_then_promoted_to_gpu(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            missing = route(request, use_gpu=False)
+            missing = ComposerGpuRoute(
+                False,
+                "exact H6 GPU/driver/FFmpeg/profile/ordered-stack evidence is absent or stale",
+                missing.layer,
+                missing.key,
+                missing.layers,
+            )
+            with (
+                patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=missing),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
+                patch("cinepulse.composer_auto_export._learn_exact_gpu_route", return_value=True) as learn,
+                patch(
+                    "cinepulse.composer_auto_export._export_gpu",
+                    return_value=ComposerExportResult(request.output, 24),
+                ) as gpu,
+                patch("cinepulse.composer_auto_export.export_composer_reference") as cpu,
+            ):
+                result = export_composer_auto(
+                    request, hardware=GPU, capabilities=CAPS, store=Store()
+                )
+            self.assertEqual("cuda", result.backend)
+            self.assertTrue(result.gpu_attempted)
+            learn.assert_called_once()
+            gpu.assert_called_once()
+            cpu.assert_not_called()
+
+    def test_rejected_on_demand_learning_keeps_cpu_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            missing = route(request, use_gpu=False)
+            missing = ComposerGpuRoute(
+                False,
+                "exact H6 GPU/driver/FFmpeg/profile/ordered-stack evidence is absent or stale",
+                missing.layer,
+                missing.key,
+                missing.layers,
+            )
+            with (
+                patch("cinepulse.composer_auto_export.select_gpu_export_route", return_value=missing),
+                patch("cinepulse.composer_auto_export.vram_free_mb", return_value=4096.0),
+                patch("cinepulse.composer_auto_export._learn_exact_gpu_route", return_value=False) as learn,
+                patch("cinepulse.composer_auto_export._export_gpu") as gpu,
+                patch(
+                    "cinepulse.composer_auto_export.export_composer_reference",
+                    return_value=ComposerExportResult(request.output, 24),
+                ) as cpu,
+            ):
+                result = export_composer_auto(
+                    request, hardware=GPU, capabilities=CAPS, store=Store()
+                )
+            self.assertEqual("cpu-reference", result.backend)
+            self.assertFalse(result.gpu_attempted)
+            learn.assert_called_once()
+            gpu.assert_not_called()
+            cpu.assert_called_once()
+
     def test_approved_route_uses_gpu_and_does_not_touch_cpu(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
