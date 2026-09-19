@@ -168,7 +168,7 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
 
             with (
                 patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
-                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=3000.0),
+                patch("cinepulse.rife_safe_runner.vram_free_mb", return_value=2500.0),
             ):
                 applied = _run_native_with_rollback(
                     rife_executable=root / "rife.exe",
@@ -180,8 +180,8 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
                     tuning_key=key,
                     tuning_store=store,
                 )
-            self.assertEqual(applied.jobs, "2:2:2")
-            self.assertEqual(calls, ["3:3:3", "2:2:2"])
+            self.assertEqual(applied.jobs, "1:1:1")
+            self.assertEqual(calls, ["3:3:3", "1:1:1"])
             self.assertEqual(store.lookup(key), tuned)
 
     def test_unrelated_io_failure_does_not_delete_measured_tuning(self) -> None:
