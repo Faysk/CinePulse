@@ -72,11 +72,28 @@ class RealEsrganTuningTests(unittest.TestCase):
         rtx4070 = safe_candidates(
             vram_mb=8192, cpu_threads=6, logical_threads=28, width=1920, height=1080
         )
-        self.assertIn(RealEsrganPolicy(256, 2, 3, 2, 0), rtx4070)
+        self.assertEqual(rtx4070[0], RealEsrganPolicy(256, 2, 2, 2, 0))
+        self.assertIn(RealEsrganPolicy(256, 3, 3, 3, 0), rtx4070)
         rtx3090 = safe_candidates(
             vram_mb=24576, cpu_threads=6, logical_threads=28, width=1920, height=1080
         )
-        self.assertIn(RealEsrganPolicy(256, 2, 4, 2, 0), rtx3090)
+        self.assertEqual(rtx3090[0], RealEsrganPolicy(256, 2, 4, 2, 0))
+        self.assertIn(RealEsrganPolicy(256, 3, 4, 3, 0), rtx3090)
+
+    def test_six_thread_host_feed_can_probe_three_load_and_save_workers(self) -> None:
+        candidates = safe_candidates(
+            vram_mb=12288,
+            cpu_threads=6,
+            logical_threads=28,
+            width=1920,
+            height=1080,
+        )
+        self.assertTrue(
+            any(item.load_jobs == 3 and item.save_jobs == 3 for item in candidates)
+        )
+        self.assertFalse(
+            any(item.load_jobs > 3 or item.save_jobs > 3 for item in candidates)
+        )
 
     def test_tuning_key_changes_with_host_feed_budget(self) -> None:
         six = RealEsrganTuningKey(
