@@ -10,6 +10,7 @@ reference; cancellation never triggers a surprise retry.
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+import json
 import re
 import subprocess
 import tempfile
@@ -221,6 +222,64 @@ _PSNR_RE = re.compile(r"average:([0-9]+(?:\.[0-9]+)?|inf)", re.IGNORECASE)
 _SSIM_RE = re.compile(r"All:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 
+def _probe_benchmark_contract(ffprobe: str, path: Path) -> dict[str, object]:
+    try:
+        result = subprocess.run(
+            [
+                str(ffprobe), "-v", "error", "-count_frames",
+                "-show_entries",
+                "stream=codec_type,width,height,pix_fmt,color_range,color_space,color_transfer,color_primaries,avg_frame_rate,r_frame_rate,nb_read_frames,nb_frames:format=duration",
+                "-of", "json", str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"Composer H6 ffprobe failed: {exc}") from exc
+    if result.returncode:
+        raise RuntimeError((result.stderr or "")[-2000:] or "Composer H6 ffprobe failed")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Composer H6 ffprobe returned invalid JSON") from exc
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    rows = streams if isinstance(streams, list) else []
+    video = next((row for row in rows if isinstance(row, dict) and row.get("codec_type") == "video"), {})
+    audio = next((row for row in rows if isinstance(row, dict) and row.get("codec_type") == "audio"), None)
+
+    frame_count = None
+    for field in ("nb_read_frames", "nb_frames"):
+        raw = video.get(field) if isinstance(video, dict) else None
+        if raw not in (None, "", "N/A"):
+            try:
+                frame_count = int(raw)
+                break
+            except (TypeError, ValueError):
+                pass
+    signature = tuple(
+        video.get(field) if isinstance(video, dict) else None
+        for field in (
+            "width", "height", "pix_fmt", "color_range", "color_space",
+            "color_transfer", "color_primaries", "avg_frame_rate", "r_frame_rate",
+        )
+    )
+    try:
+        duration = float(payload.get("format", {}).get("duration"))
+    except (AttributeError, TypeError, ValueError):
+        duration = None
+    return {
+        "frame_count": frame_count,
+        "signature": signature,
+        "duration": duration,
+        "has_audio": audio is not None,
+    }
+
+
 def _comparison_metric(
     request: ComposerExportRequest,
     baseline: Path,
@@ -321,19 +380,31 @@ def _learn_exact_gpu_route(
             candidate_request, baseline, candidate, "ssim",
             cancelled=cancelled, log=log, scratch=root,
         )
-        expected_frames = max(1, round(duration * profile.fps))
+        baseline_contract = _probe_benchmark_contract(str(request.ffprobe), baseline)
+        candidate_contract = _probe_benchmark_contract(str(request.ffprobe), candidate)
+        baseline_duration = baseline_contract["duration"]
+        candidate_duration = candidate_contract["duration"]
+        frame_count_ok = bool(
+            baseline_contract["frame_count"] is not None
+            and baseline_contract["frame_count"] == candidate_contract["frame_count"]
+            and baseline_result.frames == candidate_result.frames
+        )
+        metadata_ok = baseline_contract["signature"] == candidate_contract["signature"]
+        audio_sync_ok = bool(
+            baseline_contract["has_audio"] == candidate_contract["has_audio"]
+            and baseline_duration is not None
+            and candidate_duration is not None
+            and abs(float(baseline_duration) - float(candidate_duration)) <= 0.020
+        )
         evidence = GpuCompositorEvidence(
             baseline_seconds=baseline_seconds,
             candidate_seconds=candidate_seconds,
             psnr_db=psnr,
             ssim=ssim,
-            frame_count_ok=(
-                baseline_result.frames == expected_frames
-                and candidate_result.frames == expected_frames
-            ),
-            metadata_ok=True,
+            frame_count_ok=frame_count_ok,
+            metadata_ok=metadata_ok,
             alpha_contract_ok=psnr >= 80.0 and ssim >= 0.999999,
-            audio_sync_ok=True,
+            audio_sync_ok=audio_sync_ok,
         )
         recorded = store.record(route.key, evidence)
         log(
