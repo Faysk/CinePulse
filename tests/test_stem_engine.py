@@ -69,6 +69,37 @@ class StemEngineTests(unittest.TestCase):
                 demucs_model_identity(None, None),
             )
 
+    def test_cache_changes_when_verified_weight_fingerprint_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            audio = root / "music.wav"
+            audio.write_bytes(b"audio")
+            repo = root / "repo"
+            repo.mkdir()
+            state = root / "demucs-install-state.json"
+            for name in (
+                "htdemucs_ft.yaml",
+                "f7e0c4bc-ba3fe64a.th",
+                "d12395a8-e57c48e6.th",
+                "92cfc3b6-ef3bcb9c.th",
+                "04573f0d-f3cf25b2.th",
+            ):
+                (repo / name).write_bytes(name.encode("utf-8"))
+
+            state.write_text(
+                '{"schema": 3, "python": "3.14.7", "demucs": "4.1.0", '
+                '"torch": "2.13.0+cu132", "weights_fingerprint": "a.th:' + "a" * 64 + '"}',
+                encoding="utf-8",
+            )
+            first = stem_cache_key(audio, model_repo=repo, state_file=state)
+            state.write_text(
+                '{"schema": 3, "python": "3.14.7", "demucs": "4.1.0", '
+                '"torch": "2.13.0+cu132", "weights_fingerprint": "a.th:' + "b" * 64 + '"}',
+                encoding="utf-8",
+            )
+            second = stem_cache_key(audio, model_repo=repo, state_file=state)
+            self.assertNotEqual(first, second)
+
     def test_cache_changes_with_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             audio = Path(temporary) / "music.wav"
