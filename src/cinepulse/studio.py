@@ -5770,11 +5770,38 @@ class VideoOptimizerStudio:
                         )
                         was_tuned = tuned_policy is not None and policy == tuned_policy
                         if was_tuned:
-                            if tuning_store.invalidate(tuning_key, reason=str(exc)):
+                            current_free_vram = vram_free_mb(policy.gpu_index)
+                            current_cap = realesrgan_live_process_cap(
+                                self._hardware.vram_mb,
+                                vram_free_mb=current_free_vram,
+                                width=source_w,
+                                height=source_h,
+                            )
+                            integrity_failure = (
+                                "produziu" in failure_text
+                                or "quadros esperados" in failure_text
+                                or "integrity" in failure_text
+                            )
+                            gpu_failure = looks_like_gpu_runtime_failure(exc)
+                            headroom_dropped = bool(
+                                oom_like and policy.process_jobs > current_cap
+                            )
+                            should_invalidate = integrity_failure or (
+                                gpu_failure and not headroom_dropped
+                            )
+                            if should_invalidate:
+                                if tuning_store.invalidate(tuning_key, reason=str(exc)):
+                                    self._log(
+                                        "H3 Real-ESRGAN: política física aprovada falhou em GPU/integridade "
+                                        "e foi invalidada para esta chave exata."
+                                    )
+                                tuned_policy = None
+                            else:
                                 self._log(
-                                    "H3 Real-ESRGAN: política física aprovada falhou e foi invalidada para esta chave exata."
+                                    "H9 Real-ESRGAN: tuning físico preservado; falha atual não prova "
+                                    f"evidência obsoleta (VRAM livre={current_free_vram if current_free_vram is not None else 'n/a'} MiB, "
+                                    f"cap process={current_cap})."
                                 )
-                            tuned_policy = None
                         if policy != conservative_policy and conservative_policy not in attempted:
                             self._log(
                                 f"H3 Real-ESRGAN: {'OOM/pressão de VRAM' if oom_like else 'falha/integridade'} "
