@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 from dataclasses import asdict
 from pathlib import Path
 
@@ -227,6 +228,7 @@ def main() -> int:
             topology,
             mode=args.mode,
             gpu_active=args.gpu_active,
+            cpu_name=platform.processor() or "unknown-cpu",
         )
         store = CpuTuningStore(args.cache)
         chosen = store.record_samples(key, args.sample, fallback_threads=args.fallback_threads)
