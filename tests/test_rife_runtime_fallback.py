@@ -4,10 +4,12 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cinepulse.rife_safe_runner import RifeExecutionPolicy, _run_native_with_rollback
 from cinepulse.rife_tuning import RifeTuningKey, RifeTuningStore
+from cinepulse.studio import VideoOptimizerStudio
 
 
 def fake_png(width: int = 64, height: int = 36) -> bytes:
@@ -75,6 +77,54 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
             self.assertEqual(applied.jobs, "1:1:1")
             self.assertEqual(calls, ["1:2:1", "1:1:1"])
             self.assertIsNone(store.lookup(key))
+
+    def test_studio_rife_aborts_on_short_source_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rife_exe = root / "rife.exe"
+            rife_exe.write_bytes(b"x")
+            rife_model = root / "rife-v4.6"
+            rife_model.mkdir()
+            studio = VideoOptimizerStudio.__new__(VideoOptimizerStudio)
+            studio._cancelled = False
+            studio._process = None
+            studio._log = lambda *_args, **_kwargs: None
+            studio._set_stage = lambda *_args, **_kwargs: None
+            studio._push_progress = lambda *_args, **_kwargs: None
+
+            def fake_ffmpeg(command, *_args, **_kwargs):
+                requested = int(command[command.index("-frames:v") + 1])
+                pattern = Path(command[-1])
+                pattern.parent.mkdir(parents=True, exist_ok=True)
+                # Reproduce the regression: FFmpeg exits successfully but the
+                # chunk contains one fewer frame than requested.
+                for index in range(max(0, requested - 1)):
+                    (pattern.parent / f"{index:08d}.png").write_bytes(b"x")
+
+            studio._run_ffmpeg = fake_ffmpeg
+            color_plan = SimpleNamespace(working_pix_fmt="yuv420p")
+            with (
+                patch("cinepulse.studio.RIFE_EXE", rife_exe),
+                patch("cinepulse.studio.RIFE_MODEL", rife_model),
+                patch("cinepulse.studio.probe_media", return_value={}),
+                patch("cinepulse.studio.first_video_size", return_value=(64, 36)),
+                patch("cinepulse.studio.choose_chunk_frames", return_value=4),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extração incompleta"):
+                    studio._interpolate_rife(
+                        "input.mp4",
+                        root,
+                        0.0,
+                        1.0,
+                        8.0,
+                        16.0,
+                        False,
+                        4,
+                        [],
+                        0.0,
+                        100.0,
+                        color_plan=color_plan,
+                    )
 
     def test_baseline_failure_is_not_retried_forever(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
