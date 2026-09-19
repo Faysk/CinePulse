@@ -30,7 +30,7 @@ class HardwareProfile:
         return "Rápido"
 
 
-def detect_hardware() -> HardwareProfile:
+def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
     gpu = driver = None
     vram_mb = None
     gpu_index = 0
@@ -57,12 +57,30 @@ def detect_hardware() -> HardwareProfile:
                     continue
                 adapters.append((index, parts[1], parts[2], memory))
             if adapters:
-                # Prefer the adapter with the largest physical VRAM envelope.
-                # Live headroom gates still decide per-operation admission.
-                gpu_index, gpu, driver, vram_mb = max(
-                    adapters,
-                    key=lambda item: (item[3], -item[0]),
-                )
+                if gpu_index is None:
+                    # Prefer the adapter with the largest physical VRAM envelope.
+                    # Live headroom gates still decide per-operation admission.
+                    selected_adapter = max(
+                        adapters,
+                        key=lambda item: (item[3], -item[0]),
+                    )
+                else:
+                    requested_index = max(0, int(gpu_index))
+                    selected_adapter = next(
+                        (item for item in adapters if item[0] == requested_index),
+                        None,
+                    )
+                    if selected_adapter is None:
+                        return HardwareProfile(
+                            cpu=platform.processor() or "CPU não identificada",
+                            cpu_threads=os.cpu_count() or 1,
+                            gpu=None,
+                            vram_mb=None,
+                            driver=None,
+                            gpu_index=requested_index,
+                        )
+                selected_index, gpu, driver, vram_mb = selected_adapter
+                gpu_index = selected_index
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return HardwareProfile(
