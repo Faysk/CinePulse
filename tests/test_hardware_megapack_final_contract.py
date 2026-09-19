@@ -142,6 +142,17 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         self.assertIn("minimum=1", studio)
         self.assertIn("lote mínimo de 2 quadros excede o envelope de RAM seguro", studio)
 
+    def test_rife_pack_applies_adaptive_cpu_thread_budget(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn(
+            "active_cpu_threads = decision.limit_cpu_threads(cpu_threads)",
+            studio,
+        )
+        self.assertIn(
+            '"-threads", str(active_cpu_threads)',
+            studio,
+        )
+
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
         for token in (
