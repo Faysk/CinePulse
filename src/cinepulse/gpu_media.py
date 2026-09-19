@@ -111,13 +111,30 @@ def _names_from_listing(text: str) -> frozenset[str]:
     return frozenset(names)
 
 
+def _ffmpeg_binary_identity(ffmpeg: str) -> str:
+    path = Path(str(ffmpeg))
+    try:
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+    except OSError:
+        return "unresolved"
+    return f"{resolved.name}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+
+
 def detect_gpu_media_capabilities(ffmpeg: str) -> GpuMediaCapabilities:
     version = _run_probe(ffmpeg, "-version")
     hwaccels_text = _run_probe(ffmpeg, "-hwaccels")
     decoders_text = _run_probe(ffmpeg, "-decoders")
     filters_text = _run_probe(ffmpeg, "-filters")
     encoders_text = _run_probe(ffmpeg, "-encoders")
-    fingerprint = hashlib.sha256(version.encode("utf-8", errors="replace")).hexdigest()[:20]
+    fingerprint_payload = (
+        version
+        + "\nCINEPULSE_FFMPEG_BINARY="
+        + _ffmpeg_binary_identity(ffmpeg)
+    )
+    fingerprint = hashlib.sha256(
+        fingerprint_payload.encode("utf-8", errors="replace")
+    ).hexdigest()[:20]
     return GpuMediaCapabilities(
         ffmpeg=str(ffmpeg),
         fingerprint=fingerprint,
