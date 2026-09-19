@@ -132,6 +132,16 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         )
         self.assertIn('"RECOVERY"', studio)
 
+    def test_neural_minimum_workset_is_checked_in_preflight_and_runtime(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        self.assertIn("minimum_ai_gb = neural_chunk_workset_gb(", studio)
+        self.assertIn("minimum_rife_gb = neural_chunk_workset_gb(", studio)
+        self.assertIn("blocking_reasons.extend(neural_ram_blockers)", studio)
+        self.assertIn("minimum_ai_workset_gb = neural_chunk_workset_gb(", studio)
+        self.assertIn("minimum_rife_workset_gb = neural_chunk_workset_gb(", studio)
+        self.assertIn("minimum=1", studio)
+        self.assertIn("lote mínimo de 2 quadros excede o envelope de RAM seguro", studio)
+
     def test_preview_acceleration_does_not_enter_stable_render_plan(self) -> None:
         render_plan = self.text("src/cinepulse/render_plan.py")
         for token in (
