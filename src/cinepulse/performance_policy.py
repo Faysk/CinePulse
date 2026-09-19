@@ -96,9 +96,9 @@ def realesrgan_pipeline_threads(
     Host load/save workers scale with the CPU envelope. GPU workers normally
     preserve the historical total-VRAM thresholds, but a render may pass live
     free-VRAM evidence to opportunistically use a third worker on an 8 GB card
-    for <=1440p sources. Runtime OOM/integrity handling still falls back to the
-    conservative 2:2:2 policy, so utilization can rise without changing model
-    or output-quality contracts.
+    for <=1440p sources. Runtime OOM/integrity handling still falls back to a
+    lower-or-equal pressure policy, so utilization can rise without changing
+    model or output-quality contracts.
     """
     logical = _logical_threads(logical_threads)
     threads = clamp_cpu_threads(cpu_threads, logical)
