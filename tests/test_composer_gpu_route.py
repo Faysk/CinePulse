@@ -27,7 +27,7 @@ def state_with(layer: OverlayLayer) -> OverlayComposerState:
     return OverlayComposerState([ComposerItem("media", media=layer)])
 
 
-def route(state, *, hardware=GPU, store=None):
+def route(state, *, hardware=GPU, store=None, base_is_still=False):
     return select_gpu_export_route(
         state,
         hardware=hardware,
@@ -41,10 +41,22 @@ def route(state, *, hardware=GPU, store=None):
         transfer="bt709",
         matrix="bt709",
         color_range="tv",
+        base_is_still=base_is_still,
     )
 
 
 class ComposerGpuRouteTests(unittest.TestCase):
+    def test_still_image_base_never_queries_evidence_without_physical_parity(self) -> None:
+        store = Store(True)
+        result = route(
+            state_with(OverlayLayer("logo.png", "png")),
+            store=store,
+            base_is_still=True,
+        )
+        self.assertFalse(result.use_gpu)
+        self.assertEqual([], store.keys)
+        self.assertIn("still-image", result.reason)
+
     def test_capability_without_exact_evidence_stays_cpu(self) -> None:
         result = route(state_with(OverlayLayer("logo.png", "png")), store=Store(False))
         self.assertFalse(result.use_gpu)
