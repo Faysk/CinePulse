@@ -21,7 +21,12 @@ GIB = 1024 ** 3
 DEFAULT_CACHE_QUOTA_GB = 50.0
 DEFAULT_CHUNK_BUDGET_GB = 4.0
 MIN_CHUNK_FRAMES = 2
-MAX_CHUNK_FRAMES = 240
+# The byte/GiB workset budget is the primary safety boundary. 240 frames was a
+# legacy process-churn cap that prevented 64+ GiB systems from using the RAM
+# budget already approved by H4/H9 at 720p/1080p. 480 keeps retry/cancel
+# granularity bounded while allowing common neural stages to reach their
+# concurrency-aware host-memory envelope.
+MAX_CHUNK_FRAMES = 480
 
 
 @dataclass(frozen=True)
