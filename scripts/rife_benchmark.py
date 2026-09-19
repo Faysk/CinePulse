@@ -32,10 +32,10 @@ def main() -> int:
         raise SystemExit("RIFE benchmark requires at least two PNG input frames")
     width, height = validate_png(frames[0])
     uhd = max(width, height) >= 3840 or width * height >= 3840 * 2160
-    hardware = detect_hardware()
+    hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu:
         raise SystemExit("No NVIDIA GPU was detected; physical RIFE GPU tuning was not recorded")
-    gpu_index = hardware.gpu_index if args.gpu_index is None else max(0, int(args.gpu_index))
+    gpu_index = hardware.gpu_index
     ffmpeg = shutil.which(args.ffmpeg) or (str(args.ffmpeg) if Path(args.ffmpeg).is_file() else "")
     if not ffmpeg:
         raise SystemExit("FFmpeg is required for the RIFE black-frame and quality-parity gates")
