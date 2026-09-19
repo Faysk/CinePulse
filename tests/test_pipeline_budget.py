@@ -98,6 +98,19 @@ class PipelineBudgetTests(unittest.TestCase):
         self.assertFalse(budget.overlap_pack)
         self.assertEqual(budget.max_inflight_chunks, 1)
 
+    def test_rife_never_reserves_nonexistent_pack_overlap(self) -> None:
+        budget = derive_pipeline_budget(
+            "rife",
+            ram_available_gb=64.0,
+            vram_free_mb=24000,
+            scratch_free_gb=500.0,
+            scratch_write_mbps=1200.0,
+            dedicated=True,
+        )
+        self.assertTrue(budget.overlap_extract)
+        self.assertFalse(budget.overlap_pack)
+        self.assertEqual(budget.max_inflight_chunks, 2)
+
     def test_rife_budget_is_tighter_than_realesrgan(self) -> None:
         common = dict(
             ram_available_gb=64.0,
