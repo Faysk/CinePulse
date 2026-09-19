@@ -57,6 +57,7 @@ on:
       - 'tests/test_rife_safe_runner.py'
       - 'tests/test_rife_runtime_fallback.py'
       - 'tests/test_stem_engine.py'
+      - 'tests/test_stem_mix_runtime.py'
       - 'tests/test_ai_cache_identity.py'
       - 'tests/test_cpu_tuning.py'
       - 'tests/test_gpu_failure.py'
