@@ -395,6 +395,7 @@ class NvidiaSmiSampler:
     def __init__(self, executable: str | None = None, *, timeout: float = 1.5) -> None:
         self.executable = executable or shutil.which("nvidia-smi") or "nvidia-smi"
         self.timeout = max(0.25, float(timeout))
+        self._engine_query_supported: bool | None = None
 
     def _query(self, query: str) -> subprocess.CompletedProcess[str] | None:
         try:
@@ -415,8 +416,12 @@ class NvidiaSmiSampler:
         # Encoder/decoder counters are useful for finding NVENC/NVDEC stalls,
         # but older drivers may not expose those query fields. Retry the stable
         # base query rather than losing all GPU/VRAM telemetry.
-        result = self._query(self.ENGINE_QUERY)
-        engines_available = bool(result is not None and result.returncode == 0)
+        result = None
+        engines_available = False
+        if self._engine_query_supported is not False:
+            result = self._query(self.ENGINE_QUERY)
+            engines_available = bool(result is not None and result.returncode == 0)
+            self._engine_query_supported = engines_available
         if not engines_available:
             result = self._query(self.BASE_QUERY)
         if result is None or result.returncode != 0:
