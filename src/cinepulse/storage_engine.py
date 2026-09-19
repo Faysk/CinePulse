@@ -322,7 +322,14 @@ def estimate_storage(
         # Current + prefetch + background pack can coexist. Model the bounded
         # runtime overlap explicitly so larger RAM-backed worksets cannot make
         # scratch preflight optimistic.
-        stage_peak = max(current_persistent + concurrent_working, current_persistent + enhanced * 2.05)
+        # Near the final chunk, previously packed lossless segments can coexist
+        # with the current/prefetched PNG worksets. Final concat then overlaps
+        # the accumulated segments with the atomic output master. Model both
+        # peaks instead of treating them as mutually exclusive.
+        stage_peak = max(
+            current_persistent + enhanced + concurrent_working,
+            current_persistent + enhanced * 2.05,
+        )
         cache_growth = min(enhanced, cache_quota_gb) if cache_quota_gb > 0 else 0.0
         stages.append(StorageStageEstimate(
             "enhancement", "Real-ESRGAN em chunks", 0.0, concurrent_working, stage_peak, seconds,
@@ -347,7 +354,10 @@ def estimate_storage(
         )
         concurrent_working = working * rife_inflight
         interpolated = _compressed_gb(rife_base.output_spec, seconds, lossless=True)
-        stage_peak = max(current_persistent + concurrent_working, current_persistent + interpolated * 2.05)
+        stage_peak = max(
+            current_persistent + interpolated + concurrent_working,
+            current_persistent + interpolated * 2.05,
+        )
         stages.append(StorageStageEstimate(
             "rife_base", "RIFE do clipe reutilizável", interpolated, concurrent_working, stage_peak, seconds,
             f"{rife_chunk} quadro(s) fonte/lote; até {rife_inflight} lote(s) coexistem; o master neural cobre apenas o clipe reutilizável.",
@@ -412,7 +422,10 @@ def estimate_storage(
         )
         concurrent_working = working * rife_inflight
         interpolated = _compressed_gb(rife.output_spec, seconds, lossless=True)
-        stage_peak = max(current_persistent + concurrent_working, current_persistent + interpolated * 2.05)
+        stage_peak = max(
+            current_persistent + interpolated + concurrent_working,
+            current_persistent + interpolated * 2.05,
+        )
         stages.append(StorageStageEstimate(
             "rife_final", "RIFE em chunks", interpolated, concurrent_working, stage_peak, seconds,
             f"{rife_chunk} quadro(s) fonte/lote; até {rife_inflight} lote(s) coexistem; entrada/saída PNG não cobrem mais o projeto inteiro.",
