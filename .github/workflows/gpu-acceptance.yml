@@ -48,6 +48,7 @@ on:
       - 'tests/test_gpu_compositor.py'
       - 'tests/test_gpu_media.py'
       - 'tests/test_gpu_delivery.py'
+      - 'tests/test_gpu_encode.py'
       - 'tests/test_process_control.py'
       - 'tests/test_storage_engine.py'
       - 'tests/test_h5_gpu_media_runtime_contract.py'
@@ -138,6 +139,35 @@ jobs:
           if ($NvdecExit -ne 0 -and $NvdecExit -ne 2) { throw "Physical NVDEC benchmark failed with code $NvdecExit." }
           if ($NvdecExit -eq 2) { Write-Host 'CINEPULSE_NVDEC_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
           if (-not (Test-Path -LiteralPath $Evidence)) { throw 'NVDEC physical evidence report was not created.' }
+      - name: Physical resident NVDEC CUDA NVENC acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Ffmpeg = Join-Path $PWD 'components/ffmpeg/bin/ffmpeg.exe'
+          $Ffprobe = Join-Path $PWD 'components/ffmpeg/bin/ffprobe.exe'
+          $Root = Join-Path $PWD 'artifacts/gpu/resident-delivery'
+          $Source = Join-Path $Root 'source.mp4'
+          $Cache = Join-Path $PWD 'cache/hardware/resident-encode.json'
+          $Evidence1080 = Join-Path $PWD 'artifacts/gpu/resident-encode-1080p60.json'
+          $Evidence4K = Join-Path $PWD 'artifacts/gpu/resident-encode-4k60.json'
+          New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -c:v libx264 -preset fast -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create resident-delivery physical sample.' }
+
+          # Exact CinePulse 1080p60 streaming contract: 12 Mbps, GOP 30.
+          python scripts/gpu_resident_encode_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --width 1920 --height 1080 --bitrate-kbps 12000 --maxrate-kbps 24000 --bufsize-kbps 48000 --gop 30 --timeout 300 | Tee-Object -FilePath $Evidence1080
+          $Resident1080Exit = $LASTEXITCODE
+          if ($Resident1080Exit -ne 0 -and $Resident1080Exit -ne 2) { throw "Resident 1080p60 benchmark failed with code $Resident1080Exit." }
+          if ($Resident1080Exit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_1080_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+
+          # Exact CinePulse 4K60 streaming contract: 48 Mbps, GOP 30.
+          python scripts/gpu_resident_encode_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --width 3840 --height 2160 --bitrate-kbps 48000 --maxrate-kbps 96000 --bufsize-kbps 192000 --gop 30 --timeout 300 | Tee-Object -FilePath $Evidence4K
+          $Resident4KExit = $LASTEXITCODE
+          if ($Resident4KExit -ne 0 -and $Resident4KExit -ne 2) { throw "Resident 4K60 benchmark failed with code $Resident4KExit." }
+          if ($Resident4KExit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_4K_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+
+          if (-not (Test-Path -LiteralPath $Evidence1080)) { throw 'Resident 1080p60 evidence report was not created.' }
+          if (-not (Test-Path -LiteralPath $Evidence4K)) { throw 'Resident 4K60 evidence report was not created.' }
       - name: Physical Real-ESRGAN autotune acceptance
         shell: pwsh
         run: |
@@ -216,6 +246,7 @@ jobs:
             artifacts/gpu/*.json
             cache/hardware/realesrgan-tuning.json
             cache/hardware/gpu-media-tuning.json
+            cache/hardware/resident-encode.json
             cache/hardware/rife-tuning.json
             cache/hardware/gpu-compositor.json
             data/test-runs/**/report.json
