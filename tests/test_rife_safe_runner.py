@@ -4,13 +4,16 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cinepulse.rife_safe_runner import (
+    _hardware_tuning_policy,
     _limit_policy_by_live_vram,
     execution_policy,
     validate_png,
     validate_png_sequence,
 )
+from cinepulse.hardware import HardwareProfile
 from cinepulse.rife_tuning import RifePolicy
 
 
@@ -72,6 +75,33 @@ class RifeSafeRunnerTests(unittest.TestCase):
         self.assertFalse(measured_limited)
         self.assertEqual(admitted, tuned)
         self.assertTrue(measured_admitted)
+
+    def test_tuning_lookup_reuses_already_detected_hardware_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "rife-v4.6"
+            model.mkdir()
+            exe = root / "rife-ncnn-vulkan.exe"
+            exe.write_bytes(b"exe")
+            hardware = HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 1)
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.bootstrap_component_fingerprint",
+                    return_value="rife:v1:" + "a" * 64,
+                ),
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    side_effect=AssertionError("unexpected second hardware probe"),
+                ),
+            ):
+                policy, key, store = _hardware_tuning_policy(
+                    1920, 1080, model, exe, hardware
+                )
+            self.assertIsNone(policy)
+            self.assertIsNotNone(key)
+            self.assertIsNotNone(store)
+            self.assertEqual(1, key.gpu_index)
+            self.assertEqual("RTX Test", key.gpu_name)
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
