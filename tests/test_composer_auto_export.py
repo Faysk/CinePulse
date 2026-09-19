@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from cinepulse.composer_auto_export import _export_gpu, export_composer_auto
+from cinepulse.composer_auto_export import _export_gpu, _gpu_visual_command, export_composer_auto
 from cinepulse.composer_export import ComposerExportRequest, ComposerExportResult
 from cinepulse.composer_gpu_route import ComposerGpuRoute
 from cinepulse.composer_profile import ComposerBaseProfile
@@ -55,6 +55,20 @@ def route(request: ComposerExportRequest, *, use_gpu: bool) -> ComposerGpuRoute:
 
 
 class ComposerAutoExportTests(unittest.TestCase):
+    def test_nvdec_resident_command_keeps_base_on_cuda(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            selected = route(request, use_gpu=True)
+            selected = replace(selected, base_decoder="h264_cuvid")
+            command = _gpu_visual_command(request, selected, Path(temp) / "visual.mkv")
+            self.assertIn("-hwaccel", command)
+            self.assertIn("cuda", command)
+            self.assertIn("-hwaccel_output_format", command)
+            self.assertIn("h264_cuvid", command)
+            graph = command[command.index("-filter_complex") + 1]
+            self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+            self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
+
     def test_still_background_stays_cpu_without_gpu_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
