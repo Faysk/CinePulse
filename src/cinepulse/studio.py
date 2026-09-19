@@ -57,10 +57,7 @@ from .paths import PATHS
 from .component_identity import bootstrap_component_fingerprint
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
-from .performance_policy import (
-    PROFILE_OVERNIGHT, clamp_cpu_threads, default_cpu_threads, profile_for_threads,
-    realesrgan_pipeline_threads,
-)
+from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology
 from .realesrgan_tuning import RealEsrganPolicy
 from .media_profile import ColorProfile
