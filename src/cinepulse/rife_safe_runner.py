@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .component_identity import bootstrap_component_fingerprint
 from .hardware import detect_hardware
 from .paths import PATHS
 from .pipeline_runtime import vram_free_mb
@@ -179,6 +180,7 @@ def _hardware_tuning_policy(width: int, height: int, model: Path) -> tuple[RifeP
         model.name or "rife-v4.6",
         width,
         height,
+        bootstrap_component_fingerprint("rife"),
     )
     store = RifeTuningStore(PATHS.cache / "hardware" / "rife-tuning.json")
     policy = store.lookup(key, gpu_index=0)
