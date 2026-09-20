@@ -68,7 +68,7 @@ from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
-from .rife_engine import RifePaths, build_command as build_rife_command, target_frame_count
+from .rife_engine import applied_jobs_from_log, RifePaths, build_command as build_rife_command, target_frame_count
 from .pipeline_budget import derive_pipeline_budget
 from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
 from .gpu_media import (
@@ -6143,6 +6143,7 @@ class VideoOptimizerStudio:
         chunk_index = 0
         prefetch: tuple[int, int, Path, BackgroundCommand] | None = None
         baseline_overlap_extract = bool(overlap_extract)
+        rife_jobs_override = ""
         self._log(
             f"STORAGE RIFE: {source_count}→{total_target_count} frames em lotes de até {chunk_frames} frames fonte; "
             "PNGs são liberados após cada lote."
@@ -6268,6 +6269,7 @@ class VideoOptimizerStudio:
                     desired,
                     use_cpu,
                     component_fingerprint=rife_component_fingerprint,
+                    jobs_override=rife_jobs_override,
                 )
                 self._log("Comando RIFE: " + subprocess.list2cmdline(command))
                 recent: deque[str] = deque(maxlen=60)
@@ -6309,6 +6311,15 @@ class VideoOptimizerStudio:
                     raise InterruptedError
                 if code:
                     raise RuntimeError("RIFE falhou.\n" + "\n".join(recent))
+                if not use_cpu:
+                    applied_jobs = applied_jobs_from_log(recent)
+                    if applied_jobs and applied_jobs != rife_jobs_override:
+                        previous_jobs = rife_jobs_override or "agressiva padrão"
+                        rife_jobs_override = applied_jobs
+                        self._log(
+                            "FULL RIFE: política aplicada neste lote será reutilizada nos próximos "
+                            f"({previous_jobs} -> {rife_jobs_override}); nenhuma medição de VRAM envolvida."
+                        )
                 neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
                 if len(frames) != desired:
