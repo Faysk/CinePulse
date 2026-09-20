@@ -103,6 +103,40 @@ class RifeEngineTests(unittest.TestCase):
             applied_jobs_from_log(["CINEPULSE_RIFE_SAFE APPLIED jobs=broken gpu=0"]),
         )
 
+    def test_selected_gpu_index_is_forwarded_to_safe_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=False,
+                gpu_index=2,
+            )
+            self.assertEqual("2", command[command.index("--gpu-index") + 1])
+
+    def test_cpu_mode_does_not_forward_gpu_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=True,
+                gpu_index=2,
+            )
+            self.assertNotIn("--gpu-index", command)
+
     def test_gpu_mode_is_delegated_to_safe_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
