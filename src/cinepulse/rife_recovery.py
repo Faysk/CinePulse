@@ -225,6 +225,13 @@ def recovery_gpu_index() -> int:
     return max(0, int(hardware.gpu_index if hardware.gpu else 0))
 
 
+def recovery_uses_uhd(width: int, height: int) -> bool:
+    """Match the normal safe-runner UHD threshold instead of forcing -u."""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    return max(width, height) >= 3840 or width * height >= 3840 * 2160
+
+
 def source_chunk_counts(total_source_frames: int, chunk_frames: int) -> list[int]:
     if total_source_frames < 2 or chunk_frames < 2:
         raise ValueError("RIFE recovery requires at least two frames per chunk")
@@ -674,8 +681,11 @@ def generate_rife_frames_safe(
     rife = [
         str(contract.rife_exe), "-i", str(incoming), "-o", str(outgoing),
         "-n", str(native_target), "-m", str(contract.rife_model),
-        "-g", str(contract.gpu_index), "-j", "1:1:1", "-u", "-f", "%08d.png",
+        "-g", str(contract.gpu_index), "-j", "1:1:1",
     ]
+    if recovery_uses_uhd(contract.target_width, contract.target_height):
+        rife.append("-u")
+    rife += ["-f", "%08d.png"]
     _run_logged(
         rife,
         label=label,
