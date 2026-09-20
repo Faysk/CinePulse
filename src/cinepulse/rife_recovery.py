@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .audio_mastering import analyze_loudness, build_audio_filter
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
 from .hardware import detect_hardware
@@ -73,6 +74,7 @@ class RecoveryContract:
     expect_audio: bool = True
     audio_channels: int | None = None
     audio_sample_rate: int | None = None
+    audio_mode: str = "Preservar dinâmica original"
 
     @property
     def state_path(self) -> Path:
@@ -464,6 +466,7 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         expect_audio=expect_audio,
         audio_channels=audio_channels,
         audio_sample_rate=audio_sample_rate,
+        audio_mode=str(settings.get("audio_mode") or "Preservar dinâmica original"),
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -1008,7 +1011,14 @@ def without_faststart(arguments: list[str]) -> list[str]:
     return cleaned
 
 
-def _final_command(contract: RecoveryContract, master: Path, destination: Path, *, duration: float) -> tuple[list[str], Any, Any]:
+def _final_command(
+    contract: RecoveryContract,
+    master: Path,
+    destination: Path,
+    *,
+    duration: float,
+    audio_filter: str = "",
+) -> tuple[list[str], Any, Any]:
     source_info = _probe(contract.ffprobe, contract.source)
     source_color = ColorProfile.from_probe(source_info)
     color_plan = build_color_pipeline(
@@ -1041,6 +1051,8 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     )
     command += color_plan.metadata_args(output=True)
     if contract.expect_audio:
+        if audio_filter:
+            command += ["-af", audio_filter]
         command += delivery.audio_args()
     frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
     command += ["-threads", str(contract.cpu_threads), "-frames:v", str(frame_limit)]
@@ -1104,7 +1116,30 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             f"packets={staged_quality.packet_count}"
         )
     partial = contract.output.with_name(f".{contract.output.stem}.recovery-partial{contract.output.suffix}")
-    command, _color, delivery = _final_command(contract, master, partial, duration=contract.duration)
+    audio_filter = ""
+    if contract.expect_audio and contract.audio_mode != "Preservar dinâmica original":
+        measurements = None
+        try:
+            measurements = analyze_loudness(
+                str(contract.ffmpeg),
+                str(contract.source),
+                contract.duration,
+                contract.audio_mode,
+            )
+            log(f"AUDIO_ANALYSIS_OK mode={contract.audio_mode} measurements={measurements}")
+        except Exception as exc:
+            log(
+                "AUDIO_ANALYSIS_FALLBACK "
+                f"mode={contract.audio_mode} error={type(exc).__name__}: {exc}"
+            )
+        audio_filter = build_audio_filter(contract.audio_mode, measurements)
+    command, _color, delivery = _final_command(
+        contract,
+        master,
+        partial,
+        duration=contract.duration,
+        audio_filter=audio_filter,
+    )
     expected_audio_rate = (
         48000
         if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
@@ -1121,13 +1156,20 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
     verification = None
     if partial.is_file():
         log(f"PARTIAL_REUSE_CHECK {partial} size={partial.stat().st_size}")
-        try:
-            candidate = quick_verify(str(contract.ffprobe), partial, expectation)
-        except Exception as exc:
+        if contract.expect_audio and contract.audio_mode != "Preservar dinâmica original":
             candidate = None
-            details = f"{type(exc).__name__}: {exc}"
+            details = (
+                "audio mastering contract requires a fresh 1.2.7 encode "
+                f"(mode={contract.audio_mode})"
+            )
         else:
-            details = " | ".join(f"{issue.code}: {issue.message}" for issue in candidate.errors)
+            try:
+                candidate = quick_verify(str(contract.ffprobe), partial, expectation)
+            except Exception as exc:
+                candidate = None
+                details = f"{type(exc).__name__}: {exc}"
+            else:
+                details = " | ".join(f"{issue.code}: {issue.message}" for issue in candidate.errors)
         if candidate is not None and candidate.passed and candidate.frame_count is not None:
             verification = candidate
             log("PARTIAL_REUSE_OK completed orphan encode accepted")
