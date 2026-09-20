@@ -62,6 +62,14 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("time.time_ns()", self.rife)
         self.assertNotIn("vram_free_mb(", self.rife)
 
+    def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
+        self.assertIn('rife_jobs_override = ""', self.studio)
+        self.assertIn("jobs_override=rife_jobs_override", self.studio)
+        self.assertIn("applied_jobs_from_log(recent)", self.studio)
+        self.assertIn("será reutilizada nos próximos", self.studio)
+        self.assertIn("render-session failure memory override", self.rife)
+        self.assertIn("selected_policy.pressure < fallback_spec.pressure", self.rife)
+
 
 if __name__ == "__main__":
     unittest.main()
