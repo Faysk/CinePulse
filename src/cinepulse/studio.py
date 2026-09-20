@@ -68,7 +68,13 @@ from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
-from .rife_engine import applied_jobs_from_log, RifePaths, build_command as build_rife_command, target_frame_count
+from .rife_engine import (
+    applied_jobs_from_log,
+    distributed_chunk_target_count,
+    RifePaths,
+    build_command as build_rife_command,
+    target_frame_count,
+)
 from .pipeline_budget import derive_pipeline_budget
 from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
 from .gpu_media import (
@@ -6203,9 +6209,11 @@ class VideoOptimizerStudio:
                     break
                 chunk_index += 1
                 chunk_duration = count / max(1.0, source_fps)
-                desired = min(
-                    total_target_count - produced_target,
-                    max(2, round(chunk_duration * target_fps)),
+                desired = distributed_chunk_target_count(
+                    source_after=processed_source + count,
+                    total_source=source_count,
+                    produced_target=produced_target,
+                    total_target=total_target_count,
                 )
                 incoming = chunk_root / f"chunk_{chunk_index:05d}_in"
                 outgoing = chunk_root / f"chunk_{chunk_index:05d}_out"
@@ -6354,6 +6362,14 @@ class VideoOptimizerStudio:
                 processed_source += count
                 produced_target += len(frames)
 
+            if processed_source != source_count:
+                raise RuntimeError(
+                    f"RIFE não cobriu todos os quadros fonte: {processed_source}/{source_count}."
+                )
+            if produced_target != total_target_count:
+                raise RuntimeError(
+                    f"RIFE terminou fora da contagem alvo: {produced_target}/{total_target_count} quadros."
+                )
             if not chunks:
                 raise RuntimeError("RIFE não produziu segmentos interpolados.")
             concat_file = chunk_root / "concat.txt"
