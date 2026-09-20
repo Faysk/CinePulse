@@ -982,6 +982,7 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     command += delivery.video_args(
         use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
         bitrate_mbps=bitrate_mbps, fps=round(contract.target_fps),
+        gpu_index=contract.gpu_index,
     )
     command += color_plan.metadata_args(output=True)
     command += delivery.audio_args()
