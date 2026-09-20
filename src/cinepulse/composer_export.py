@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 
 import numpy as np
 
+from .audio_mastering import bounded_audio_input_args
 from .composer_audio import VisualizerAudioEnvelope
 from .composer_audio_binding import composer_audio_features, load_bound_visualizer_envelopes
 from .composer_base_probe import ComposerBaseProfile
@@ -28,6 +29,7 @@ from .composer_runtime import ComposerFrameInputs, render_composer_frame
 from .overlay_composer import OverlayComposerState
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
+from .verification import VerifyExpectation, quick_verify
 
 
 @dataclass(frozen=True)
@@ -94,14 +96,73 @@ def _video_encode_command(request: ComposerExportRequest, target: Path) -> list[
     ]
 
 
+def composer_frame_count(request: ComposerExportRequest) -> int:
+    return max(1, int(round(float(request.profile.duration) * float(request.profile.fps))))
+
+
+def composer_has_audio_stream(ffprobe: str, path: str | Path) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                str(ffprobe), "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=index", "-of", "csv=p=0", str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool((result.stdout or "").strip())
+
+
+def verify_composer_product(
+    request: ComposerExportRequest,
+    path: Path,
+    *,
+    expect_audio: bool,
+) -> None:
+    p = request.profile
+    verification = quick_verify(
+        str(request.ffprobe),
+        path,
+        VerifyExpectation(
+            width=p.width,
+            height=p.height,
+            fps=p.fps,
+            duration=p.duration,
+            expect_audio=expect_audio,
+            video_codec="ffv1",
+            frame_tolerance=0,
+            duration_tolerance=0.12,
+            sync_tolerance=0.12,
+        ),
+    )
+    if verification.frame_count is None:
+        raise RuntimeError("composer verification failed: FFprobe did not report exact frame count")
+    if verification.frame_count != composer_frame_count(request):
+        raise RuntimeError(
+            "composer verification failed: "
+            f"{verification.frame_count}/{composer_frame_count(request)} frames"
+        )
+    if not verification.passed:
+        detail = "; ".join(issue.message for issue in verification.errors)
+        raise RuntimeError("composer verification failed: " + (detail or "unknown integrity error"))
+
+
 def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:
     audio = request.output_audio or request.source
     return [
         str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-i", str(visual), "-i", str(audio),
+        "-i", str(visual),
+        *bounded_audio_input_args(str(audio), request.profile.duration),
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c:v", "copy", "-c:a", "copy",
-        "-t", f"{request.profile.duration:.6f}",
+        "-frames:v", str(composer_frame_count(request)),
         str(target),
     ]
 
@@ -297,6 +358,7 @@ def export_composer_reference(
                 raise InterruptedError("composer export cancelled")
             if not visual.is_file() or visual.stat().st_size <= 0:
                 raise RuntimeError("composer reference visual master was not produced")
+            verify_composer_product(request, visual, expect_audio=False)
 
             atomic = AtomicOutput.for_path(output)
             atomic.prepare()
@@ -310,6 +372,12 @@ def export_composer_reference(
                 )
                 if cancel():
                     raise InterruptedError("composer export cancelled")
+                audio_source = request.output_audio or request.source
+                verify_composer_product(
+                    request,
+                    atomic.partial,
+                    expect_audio=composer_has_audio_stream(request.ffprobe, audio_source),
+                )
                 atomic.commit()
             finally:
                 atomic.discard()
