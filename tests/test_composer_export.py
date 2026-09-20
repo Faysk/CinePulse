@@ -15,6 +15,7 @@ from cinepulse.composer_export import (
     _mux_command,
     _read_exact,
     composer_frame_count,
+    composer_has_audio_stream,
     verify_composer_product,
     _resolve_audio_envelopes,
     _video_encode_command,
@@ -133,6 +134,14 @@ class ComposerExportTests(unittest.TestCase):
             joined = " ".join(_mux_command(request, root / "visual.mkv", root / "final.mkv"))
         self.assertIn(str(root / "replacement.flac"), joined)
         self.assertNotIn(str(root / "source.mkv"), joined)
+
+    def test_audio_probe_distinguishes_no_audio_from_probe_failure(self) -> None:
+        no_audio = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch("cinepulse.composer_export.subprocess.run", return_value=no_audio):
+            self.assertFalse(composer_has_audio_stream("ffprobe", "silent.mkv"))
+        with patch("cinepulse.composer_export.subprocess.run", side_effect=OSError("probe unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "audio probe failed"):
+                composer_has_audio_stream("ffprobe", "source.mkv")
 
     def test_exact_product_verification_rejects_unknown_or_wrong_frame_count(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
