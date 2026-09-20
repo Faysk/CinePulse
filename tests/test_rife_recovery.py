@@ -9,6 +9,7 @@ from unittest import mock
 
 from cinepulse.hardware import HardwareProfile
 from cinepulse.rife_recovery import (
+    acceptable_segment_frame_counts,
     ai_cache_key,
     concat_manifest,
     contiguous_segments,
@@ -47,6 +48,22 @@ class RifeRecoveryTests(unittest.TestCase):
     def test_matroska_duration_recovers_redistributed_frame_count(self) -> None:
         self.assertEqual(frame_count_from_container_duration(0.133, 120.0), 16)
         self.assertEqual(frame_count_from_container_duration(0.141, 120.0), 17)
+
+    def test_recovery_accepts_legacy_and_cumulative_chunk_counts(self) -> None:
+        counts = [2, 2]
+        legacy = original_target_counts(counts, 100.0, 129.0)
+        distributed = remaining_schedule(
+            source_counts=counts,
+            completed_chunks=0,
+            completed_target_frames=0,
+            total_target_frames=5,
+        )
+        self.assertEqual([3, 3], legacy)
+        self.assertEqual([2, 3], [item.target_frames for item in distributed])
+        self.assertEqual(
+            {2, 3, 4},
+            acceptable_segment_frame_counts(legacy[0], distributed[0].target_frames),
+        )
 
     def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
         with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=28):
