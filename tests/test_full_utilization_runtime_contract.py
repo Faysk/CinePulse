@@ -75,8 +75,12 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         )
         self.assertIn('"--gpu-index"', self.rife_engine)
         self.assertIn("gpu_index=args.gpu_index", self.rife)
-        self.assertIn('"-g", str(contract.gpu_index)', self.rife_recovery)
-        self.assertIn("gpu_index=contract.gpu_index", self.rife_recovery)
+        self.assertIn(
+            "rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index",
+            self.rife_recovery,
+        )
+        self.assertIn('"-g", str(rife_gpu_index)', self.rife_recovery)
+        self.assertIn("gpu_index=max(0, contract.gpu_index)", self.rife_recovery)
 
     def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
         self.assertIn("distributed_chunk_target_count(", self.studio)
