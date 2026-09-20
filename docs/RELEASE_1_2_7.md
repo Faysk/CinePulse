@@ -14,6 +14,10 @@ Um master de recovery existente só é reutilizado se, além da geometria/FPS/du
 
 O encode final usa `-frames:v round(project_duration*target_fps)` em vez de cortar todo o mux por um timestamp decimal. Isso preserva a cadência CFR esperada e deixa o áudio terminar naturalmente.
 
+## Verificação final estrita
+
+O Studio passa `frame_tolerance=0` para a verificação final e recusa promoção se o FFprobe não conseguir informar a contagem exata. Assim, uma perda ou sobra de apenas um frame deixa de passar como aceitável.
+
 ## VFX
 
 O render VFX também passa a ser limitado por quantidade de quadros. O overlay declara explicitamente `eof_action=repeat`, `shortest=0` e `repeatlast=1`, então um layer reativo que termina alguns milissegundos antes não encurta a base.
