@@ -9,6 +9,7 @@ from cinepulse.rife_engine import (
     RifePaths,
     applied_jobs_from_log,
     build_command,
+    distributed_chunk_target_count,
     target_frame_count,
 )
 
@@ -17,6 +18,37 @@ class RifeEngineTests(unittest.TestCase):
     def test_target_count_is_deterministic(self) -> None:
         self.assertEqual(120, target_frame_count(2.0, 60))
         self.assertEqual(2, target_frame_count(0, 60))
+
+    def test_distributed_chunk_targets_eliminate_ntsc_rounding_drift(self) -> None:
+        total_source = 21745
+        total_target = 43533
+        chunk_limit = 8
+        processed_source = 0
+        produced_target = 0
+        chunk_targets: list[int] = []
+
+        while processed_source < total_source:
+            remaining = total_source - processed_source
+            count = min(chunk_limit, remaining)
+            if remaining - count == 1:
+                count += 1
+            count = min(count, remaining)
+            if count < 2:
+                break
+            desired = distributed_chunk_target_count(
+                source_after=processed_source + count,
+                total_source=total_source,
+                produced_target=produced_target,
+                total_target=total_target,
+            )
+            chunk_targets.append(desired)
+            processed_source += count
+            produced_target += desired
+
+        self.assertEqual(total_source, processed_source)
+        self.assertEqual(total_target, produced_target)
+        self.assertTrue(all(value in {16, 17, 18} for value in chunk_targets))
+        self.assertIn(17, chunk_targets)
 
     def test_command_routes_through_safe_runner_and_selected_device(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
