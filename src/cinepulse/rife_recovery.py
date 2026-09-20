@@ -70,6 +70,9 @@ class RecoveryContract:
     chunk_frames: int
     cpu_threads: int
     gpu_index: int = 0
+    expect_audio: bool = True
+    audio_channels: int | None = None
+    audio_sample_rate: int | None = None
 
     @property
     def state_path(self) -> Path:
@@ -209,6 +212,33 @@ def ai_cache_key(
     }
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
+
+def recovery_audio_expectation(
+    expected: dict[str, Any],
+    settings: dict[str, Any],
+    source_info: dict[str, Any],
+) -> tuple[bool, int | None, int | None]:
+    """Restore the output audio contract without assuming stereo/48 kHz."""
+
+    audio = next((item for item in source_info.get("streams", []) if item.get("codec_type") == "audio"), {})
+    if "expect_audio" in expected:
+        expect_audio = bool(expected.get("expect_audio"))
+    else:
+        expect_audio = bool(settings.get("preserve_audio")) and bool(audio)
+
+    def optional_int(value: object) -> int | None:
+        try:
+            return int(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    channels = optional_int(expected.get("audio_channels"))
+    sample_rate = optional_int(expected.get("audio_sample_rate"))
+    if expect_audio and channels is None:
+        channels = optional_int(audio.get("channels"))
+    if expect_audio and sample_rate is None:
+        sample_rate = optional_int(audio.get("sample_rate"))
+    return expect_audio, channels, sample_rate
 
 def recovery_cpu_threads(legacy_value: int | None = None) -> int:
     """Use the complete logical CPU envelope while keeping old jobs readable."""
@@ -391,9 +421,6 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         raise RecoveryError("O job nao usa RIFE")
     if settings.get("effects"):
         raise RecoveryError("Este job inesperadamente contem VFX ativos")
-    if not bool(settings.get("preserve_audio")):
-        raise RecoveryError("Este job deveria preservar o audio original")
-
     ffmpeg = app_root / "components" / "ffmpeg" / "bin" / "ffmpeg.exe"
     ffprobe = app_root / "components" / "ffmpeg" / "bin" / "ffprobe.exe"
     rife_dir = app_root / "components" / "ai" / "models" / "rife" / "portable" / "rife-ncnn-vulkan-20221029-windows"
@@ -416,6 +443,12 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
     duration = float(expected.get("duration") or 0.0)
     source_fps = float(source_spec.get("fps") or 0.0)
     target_fps = float(target_spec.get("fps") or expected.get("fps") or 0.0)
+    source_info = _probe(ffprobe, source)
+    expect_audio, audio_channels, audio_sample_rate = recovery_audio_expectation(
+        expected,
+        settings,
+        source_info,
+    )
     contract = RecoveryContract(
         job_id=str(job["job_id"]), source=source, cache=cache, output=output,
         history_dir=history_dir, job_dir=job_dir, chunk_root=chunk_root, app_root=app_root,
@@ -428,6 +461,9 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         chunk_frames=int(storage.get("rife_chunk_frames") or 0),
         cpu_threads=recovery_cpu_threads(settings.get("cpu_threads")),
         gpu_index=recovery_gpu_index(),
+        expect_audio=expect_audio,
+        audio_channels=audio_channels,
+        audio_sample_rate=audio_sample_rate,
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -991,16 +1027,21 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     bitrate_mbps = max(8, min(600, round(12 * contract.target_width * contract.target_height / (1920 * 1080) * max(1, contract.target_fps / 60))))
     command = [
         str(contract.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-i", str(master), "-i", str(contract.source), "-map", "0:v:0", "-map", "1:a:0",
-        "-vf", _final_filter(contract, color_plan),
+        "-i", str(master),
     ]
+    if contract.expect_audio:
+        command += ["-i", str(contract.source), "-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        command += ["-map", "0:v:0", "-an"]
+    command += ["-vf", _final_filter(contract, color_plan)]
     command += delivery.video_args(
         use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
         bitrate_mbps=bitrate_mbps, fps=round(contract.target_fps),
         gpu_index=contract.gpu_index,
     )
     command += color_plan.metadata_args(output=True)
-    command += delivery.audio_args()
+    if contract.expect_audio:
+        command += delivery.audio_args()
     frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
     command += ["-threads", str(contract.cpu_threads), "-frames:v", str(frame_limit)]
     if float(duration) + 1e-9 < float(contract.duration):
@@ -1030,8 +1071,11 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
         ffprobe=contract.ffprobe, path=destination, width=contract.target_width,
         height=contract.target_height, fps=contract.target_fps, codec="hevc",
     )
-    if not any(stream.get("codec_type") == "audio" for stream in info.get("streams", [])):
+    has_audio = any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
+    if contract.expect_audio and not has_audio:
         raise RecoveryError("Autoteste final nao preservou audio")
+    if not contract.expect_audio and has_audio:
+        raise RecoveryError("Autoteste final produziu audio inesperado")
     log(f"SELF_TEST_OK {destination} size={destination.stat().st_size}")
     return destination
 
@@ -1061,10 +1105,17 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
         )
     partial = contract.output.with_name(f".{contract.output.stem}.recovery-partial{contract.output.suffix}")
     command, _color, delivery = _final_command(contract, master, partial, duration=contract.duration)
+    expected_audio_rate = (
+        48000
+        if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
+        else contract.audio_sample_rate
+    )
     expectation = VerifyExpectation(
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
-        duration=contract.duration, expect_audio=True, video_codec=delivery.video_codec,
-        audio_codec=delivery.audio_codec, audio_channels=2, audio_sample_rate=48000,
+        duration=contract.duration, expect_audio=contract.expect_audio, video_codec=delivery.video_codec,
+        audio_codec=delivery.audio_codec if contract.expect_audio else None,
+        audio_channels=contract.audio_channels if contract.expect_audio else None,
+        audio_sample_rate=expected_audio_rate if contract.expect_audio else None,
         frame_tolerance=0,
     )
     verification = None
