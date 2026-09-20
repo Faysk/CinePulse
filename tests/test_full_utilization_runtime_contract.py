@@ -78,6 +78,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
 
     def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
         self.assertIn("distributed_chunk_target_count(", self.studio)
+        self.assertIn("timed_concat_manifest(chunks, chunk_frame_counts, target_fps)", self.studio)
         self.assertIn("produced_target != total_target_count", self.studio)
         self.assertIn("RIFE terminou fora da contagem alvo", self.studio)
         self.assertNotIn("round(chunk_duration * target_fps)", self.studio)
