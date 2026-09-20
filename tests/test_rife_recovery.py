@@ -16,6 +16,7 @@ from cinepulse.rife_recovery import (
     contiguous_segments,
     frame_count_from_container_duration,
     original_target_counts,
+    recovery_audio_expectation,
     recovery_cpu_threads,
     recovery_gpu_index,
     recovery_uses_uhd,
@@ -90,6 +91,52 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertEqual(
             {2, 3, 4},
             acceptable_segment_frame_counts(legacy[0], distributed[0].target_frames),
+        )
+
+    def test_recovery_audio_expectation_uses_persisted_contract(self) -> None:
+        source_info = {
+            "streams": [
+                {"codec_type": "video"},
+                {"codec_type": "audio", "channels": 6, "sample_rate": "44100"},
+            ]
+        }
+        self.assertEqual(
+            (True, 6, 48000),
+            recovery_audio_expectation(
+                {
+                    "expect_audio": True,
+                    "audio_channels": 6,
+                    "audio_sample_rate": 48000,
+                },
+                {"preserve_audio": True},
+                source_info,
+            ),
+        )
+
+    def test_recovery_audio_expectation_supports_silent_jobs(self) -> None:
+        source_info = {"streams": [{"codec_type": "video"}]}
+        self.assertEqual(
+            (False, None, None),
+            recovery_audio_expectation(
+                {"expect_audio": False},
+                {"preserve_audio": False},
+                source_info,
+            ),
+        )
+
+    def test_legacy_recovery_audio_expectation_falls_back_to_source_shape(self) -> None:
+        source_info = {
+            "streams": [
+                {"codec_type": "audio", "channels": 1, "sample_rate": "44100"},
+            ]
+        }
+        self.assertEqual(
+            (True, 1, 44100),
+            recovery_audio_expectation(
+                {},
+                {"preserve_audio": True},
+                source_info,
+            ),
         )
 
     def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
