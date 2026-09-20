@@ -36,19 +36,17 @@ class RuntimePressureDecision:
 
 
 class AdaptiveRuntimeController:
-    """Hysteretic per-render pressure controller.
+    """Compatibility shell for the former telemetry-driven pressure controller.
 
-    The controller never changes models, scale, target FPS, color/HDR,
-    interpolation, codec quality or verification. It only reduces future
-    buffering/concurrency for capacity/stability pressure. Temperature alone is
-    observational: H8 thermal/power/clock downshift requires a sustained decline
-    in measured completed-work throughput.
+    Since CinePulse 1.2.4, live RAM/VRAM/temperature/throughput samples do not
+    pre-emptively change chunk size, CPU usage or overlap. The object remains in
+    the runtime API so existing callers, history and diagnostics can keep their
+    contracts while scheduling stays at the full-utilization baseline.
 
-    ``overnight=True`` adds H8's sustained window and learned neural-throughput
-    warm-up on top of the RAM/VRAM capacity guard. Capacity-only downshifts may
-    recover one level after several deeply healthy samples, but never above the
-    policy the render started with. Overnight instability/thermal decisions stay
-    monotonic because the H8 controller itself remains monotonic.
+    Throughput/instability samples may still be recorded by the optional
+    overnight helper for diagnostics, but :meth:`observe` intentionally returns
+    the unchanged baseline envelope. Concrete stage failures are handled by the
+    stage-specific retry/fallback paths instead.
     """
 
     def __init__(
