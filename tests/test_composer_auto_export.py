@@ -84,6 +84,15 @@ class ComposerAutoExportTests(unittest.TestCase):
             self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
             self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
 
+    def test_gpu_visual_master_is_frame_bound_without_duration_clip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            request = make_request(Path(temp))
+            selected = route(request, use_gpu=True)
+            command = _gpu_visual_command(request, selected, Path(temp) / "visual.mkv")
+            self.assertIn("-frames:v", command)
+            self.assertEqual("24", command[command.index("-frames:v") + 1])
+            self.assertNotIn("-t", command)
+
     def test_still_background_stays_cpu_without_gpu_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             request = make_request(Path(temp))
