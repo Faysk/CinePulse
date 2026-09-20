@@ -1049,7 +1049,10 @@ def _final_command(
         "-i", str(master),
     ]
     if contract.expect_audio:
-        command += ["-i", str(contract.source), "-map", "0:v:0", "-map", "1:a:0"]
+        command += [
+            "-t", f"{duration:.6f}", "-i", str(contract.source),
+            "-map", "0:v:0", "-map", "1:a:0",
+        ]
     else:
         command += ["-map", "0:v:0", "-an"]
     command += ["-vf", _final_filter(contract, color_plan)]
@@ -1065,10 +1068,6 @@ def _final_command(
         command += delivery.audio_args()
     frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
     command += ["-threads", str(contract.cpu_threads), "-frames:v", str(frame_limit)]
-    if float(duration) + 1e-9 < float(contract.duration):
-        # Self-test uses a short sample; cap the mux so the source audio does
-        # not continue for the complete project after the video frame limit.
-        command += ["-t", f"{duration:.6f}"]
     # This is a local 30+ GiB deliverable.  Relocating the MP4 index to the
     # beginning adds a second full-file pass and failed on the external target.
     # Keeping the index at the end is fully playable and does not affect quality.
