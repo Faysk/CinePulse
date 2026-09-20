@@ -27,6 +27,7 @@ from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
 from .hardware import detect_hardware
 from .matroska_quality import inspect_matroska_segment
 from .process_control import popen_group_kwargs, terminate_process_tree
+from .rife_engine import timed_concat_manifest
 from .verification import VerifyExpectation, quick_verify
 
 
@@ -840,32 +841,10 @@ def resume_rife(contract: RecoveryContract, log: Callable[[str], None], *, timeo
     return concatenate_master(contract, segments, log, timeout_minutes=timeout_minutes)
 
 
-def _concat_line(path: Path) -> str:
-    escaped = str(path.resolve()).replace("\\", "/").replace("'", "'\\''")
-    return f"file '{escaped}'"
-
-
 def concat_manifest(segments: list[Path], packet_counts: list[int], fps: float) -> str:
-    """Build a concat manifest whose timeline is derived from frame counts.
+    """Build the recovery concat timeline from exact frame-count durations."""
 
-    The short FFV1 Matroska segments use a 1 ms time base.  Letting FFmpeg infer
-    every segment duration therefore accumulates sub-millisecond rounding over
-    thousands of files.  Explicit durations keep the concatenated master on the
-    exact CFR timeline without re-encoding any frame.
-    """
-
-    if len(segments) != len(packet_counts):
-        raise ValueError("segments and packet_counts must have the same length")
-    if fps <= 0:
-        raise ValueError("fps must be positive")
-    lines: list[str] = []
-    for segment, packet_count in zip(segments, packet_counts, strict=True):
-        if packet_count <= 0:
-            raise ValueError(f"{segment.name}: packet count must be positive")
-        lines.append(_concat_line(segment))
-        lines.append(f"duration {packet_count / fps:.12f}")
-    return "\n".join(lines) + "\n"
-
+    return timed_concat_manifest(segments, packet_counts, fps)
 
 def concatenate_master(
     contract: RecoveryContract,
