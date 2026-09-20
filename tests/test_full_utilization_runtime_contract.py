@@ -83,6 +83,21 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("RIFE terminou fora da contagem alvo", self.studio)
         self.assertNotIn("round(chunk_duration * target_fps)", self.studio)
 
+    def test_rife_master_concat_is_not_duration_clipped(self) -> None:
+        self.assertIn("master_quality = inspect_matroska_segment(interpolated)", self.studio)
+        self.assertIn("master_quality.packet_count != total_target_count", self.studio)
+        self.assertIn("Master de recuperacao existente nao cumpre o contrato", self.rife_recovery)
+        self.assertIn("master_quality.packet_count == contract.total_target_frames", self.rife_recovery)
+        self.assertIn("Master concatenado tem", self.rife_recovery)
+        self.assertNotIn(
+            '"-c", "copy",\n                "-t", f"{duration:.6f}"',
+            self.studio,
+        )
+        self.assertNotIn(
+            '"-c", "copy", "-t", f"{contract.duration:.6f}"',
+            self.rife_recovery,
+        )
+
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)
         self.assertIn("jobs_override=rife_jobs_override", self.studio)
