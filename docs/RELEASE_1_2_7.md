@@ -30,6 +30,10 @@ O recovery deixa de assumir estéreo/48 kHz e passa a restaurar `expect_audio`, 
 
 Jobs criados com `use_cpu=True` continuam em CPU durante a recuperação: RIFE usa o índice CPU (`-g -1`) e o envelope CPU-safe, e a entrega final usa o encoder CPU previsto pelo perfil. Jobs GPU continuam no adaptador selecionado. O recovery não troca mais silenciosamente CPU por GPU.
 
+## Autoteste do recovery
+
+O smoke test final não assume mais MP4/HEVC. Ele usa a extensão do destino original, o `delivery_profile` persistido e o codec resolvido pelo próprio `DeliveryPlan`, além de exigir contagem exata de quadros. Assim, perfis ProRes/MOV, HEVC/MKV e VP9/WebM não são rejeitados por uma expectativa fixa de HEVC.
+
 ## Proteções mantidas
 
 Continuam ativos AtomicOutput, verificação final, validação de PNG/mídia, fallback pós-falha real, cancelamento seguro, full-utilization e pinning multi-GPU.
