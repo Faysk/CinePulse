@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cinepulse.rife_engine import SAFE_RUNNER_MODULE, RifePaths, build_command, target_frame_count
+from cinepulse.rife_engine import (
+    SAFE_RUNNER_MODULE,
+    RifePaths,
+    applied_jobs_from_log,
+    build_command,
+    target_frame_count,
+)
 
 
 class RifeEngineTests(unittest.TestCase):
@@ -46,6 +52,56 @@ class RifeEngineTests(unittest.TestCase):
                 fingerprint,
                 command[command.index("--component-fingerprint") + 1],
             )
+
+    def test_gpu_session_override_is_forwarded_to_safe_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=False,
+                jobs_override="1:1:1",
+            )
+            self.assertEqual("1:1:1", command[command.index("--jobs-override") + 1])
+
+    def test_cpu_mode_does_not_forward_gpu_session_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=True,
+                jobs_override="1:1:1",
+            )
+            self.assertNotIn("--jobs-override", command)
+
+    def test_applied_jobs_parser_uses_last_valid_success_marker(self) -> None:
+        self.assertEqual(
+            "1:1:1",
+            applied_jobs_from_log(
+                [
+                    "CINEPULSE_RIFE_SAFE APPLIED jobs=2:2:2 gpu=0",
+                    "other line",
+                    "CINEPULSE_RIFE_SAFE APPLIED jobs=1:1:1 gpu=0",
+                ]
+            ),
+        )
+        self.assertEqual(
+            "",
+            applied_jobs_from_log(["CINEPULSE_RIFE_SAFE APPLIED jobs=broken gpu=0"]),
+        )
 
     def test_gpu_mode_is_delegated_to_safe_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
