@@ -11,6 +11,7 @@
 - verificação final do Studio passa a exigir contagem de quadros conhecida e tolerância zero; uma saída com frame faltando/sobrando ou contagem indeterminada não é promovida;
 - recovery passa a restaurar o contrato real de áudio do job: suporta saída silenciosa quando esperado, preserva canais reais, ajusta sample rate conforme o codec de entrega e reaplica o `audio_mode`/loudness do render original;
 - recovery também preserva o backend original do job: `use_cpu=True` mantém RIFE/encode em CPU; jobs GPU continuam no adaptador selecionado, sem troca silenciosa de backend;
+- autoteste do recovery deixa de assumir MP4/HEVC: usa a extensão, o perfil e o codec reais do job, com contagem exata de frames;
 - partials antigos de recovery com masterização de áudio não são reutilizados sem prova do filtro aplicado; a 1.2.7 força um encode novo nesses casos.
 - adiciona contratos de regressão para master RIFE, recovery e entrega final frame-bound.
 
