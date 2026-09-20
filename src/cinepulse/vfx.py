@@ -348,7 +348,7 @@ def render_vfx_intermediate(
         "pipe:0",
     ]
     if final_delivery and final_audio_source:
-        command += ["-i", final_audio_source]
+        command += ["-t", f"{duration:.6f}", "-i", final_audio_source]
     command += [
         "-filter_complex",
         build_vfx_filter_graph(
