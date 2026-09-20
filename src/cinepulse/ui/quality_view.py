@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tkinter import ttk
+
 from .polish_view import register_responsive_split
 
 
@@ -222,7 +223,6 @@ def build_quality_tab(
     cache_quota.grid(row=7, column=1, sticky="w", pady=5)
     cache_quota.bind("<FocusOut>", lambda _event: studio._quality_setting_changed())
     ttk.Label(machine, text="GB • limpeza LRU automática", style="CardMuted.TLabel").grid(row=7, column=2, sticky="w", padx=(7, 0))
-
 
     # --- Impact panel -------------------------------------------------
     impact = ttk.Frame(right, style="Card.TFrame", padding=14)
