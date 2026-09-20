@@ -16,6 +16,7 @@ from cinepulse.rife_recovery import (
     original_target_counts,
     recovery_cpu_threads,
     recovery_gpu_index,
+    recovery_uses_uhd,
     remaining_schedule,
     source_chunk_counts,
     without_faststart,
@@ -60,6 +61,12 @@ class RifeRecoveryTests(unittest.TestCase):
         hardware = HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 2)
         with mock.patch("cinepulse.rife_recovery.detect_hardware", return_value=hardware):
             self.assertEqual(2, recovery_gpu_index())
+
+    def test_recovery_uhd_flag_matches_geometry(self) -> None:
+        self.assertFalse(recovery_uses_uhd(1920, 1080))
+        self.assertFalse(recovery_uses_uhd(2560, 1440))
+        self.assertTrue(recovery_uses_uhd(3840, 2160))
+        self.assertTrue(recovery_uses_uhd(7680, 4320))
 
     def test_source_chunks_merge_one_frame_tail(self) -> None:
         counts = source_chunk_counts(21745, 8)
