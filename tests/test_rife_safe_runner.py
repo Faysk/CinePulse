@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import struct
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +14,7 @@ from cinepulse.rife_safe_runner import (
     _run_native_with_rollback,
     RifeExecutionPolicy,
     execution_policy,
+    main,
     run_safe_rife,
     validate_png,
     validate_png_sequence,
@@ -280,6 +283,35 @@ class RifeSafeRunnerTests(unittest.TestCase):
                         device="gpu",
                         jobs_override="8:8:8",
                     )
+
+    def test_cli_reports_applied_policy_for_parent_session_memory(self) -> None:
+        applied = RifeExecutionPolicy(
+            uhd=False,
+            jobs="1:1:1",
+            native_target=4,
+            requested_target=4,
+            gpu_index=0,
+            measured=False,
+        )
+        output = io.StringIO()
+        with (
+            patch("cinepulse.rife_safe_runner.run_safe_rife", return_value=applied) as run,
+            redirect_stdout(output),
+        ):
+            code = main(
+                [
+                    "--rife", "rife.exe",
+                    "--model", "rife-v4.6",
+                    "--input", "in",
+                    "--output", "out",
+                    "--frames", "4",
+                    "--device", "gpu",
+                    "--jobs-override", "1:1:1",
+                ]
+            )
+        self.assertEqual(0, code)
+        self.assertIn("CINEPULSE_RIFE_SAFE APPLIED jobs=1:1:1 gpu=0", output.getvalue())
+        self.assertEqual("1:1:1", run.call_args.kwargs["jobs_override"])
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
