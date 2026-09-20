@@ -88,7 +88,7 @@ from .gpu_encode import ResidentEncodeStore
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_delivery import select_resident_delivery_route
 from .pipeline_runtime import BackgroundCommand
-from .audio_mastering import analyze_loudness, build_audio_filter
+from .audio_mastering import analyze_loudness, bounded_audio_input_args, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
 from .stem_engine import build_demucs_command, stem_cache_key, stems_for_focus
@@ -4829,12 +4829,12 @@ class VideoOptimizerStudio:
                 command += ["-i", visual_source]
                 if settings.mode == MODE_MUSIC:
                     command += [
-                        "-t", f"{project_duration:.6f}", "-i", settings.audio,
+                        *bounded_audio_input_args(settings.audio, project_duration),
                         "-map", "0:v:0", "-map", "1:a:0",
                     ]
                 elif settings.preserve_audio and source_has_audio:
                     command += [
-                        "-t", f"{project_duration:.6f}", "-i", settings.video,
+                        *bounded_audio_input_args(settings.video, project_duration),
                         "-map", "0:v:0", "-map", "1:a:0",
                     ]
                 else:
