@@ -197,6 +197,18 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertIn('rife_jobs = "1:2:2" if contract.use_cpu else "1:1:1"', source)
         self.assertGreaterEqual(source.count("use_cpu=contract.use_cpu"), 2)
 
+    def test_recovery_self_test_uses_original_container_and_codec_contract(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        start = source.index("def self_test(")
+        end = source.index("\ndef verify_recovery_output(", start)
+        block = source[start:end]
+        self.assertIn('suffix = contract.output.suffix or ".mp4"', block)
+        self.assertIn('f"recovery-self-test{suffix}"', block)
+        self.assertNotIn('"recovery-self-test.mp4"', block)
+        self.assertIn("video_codec=delivery.video_codec", block)
+        self.assertIn("frame_tolerance=0", block)
+        self.assertIn("verification.frame_count is None", block)
+
     def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
         with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=28):
             self.assertEqual(28, recovery_cpu_threads(4))
