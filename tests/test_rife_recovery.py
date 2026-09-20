@@ -139,6 +139,25 @@ class RifeRecoveryTests(unittest.TestCase):
             ),
         )
 
+    def test_recovery_final_delivery_respects_audio_presence_and_mastering(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+
+        command_start = source.index("def _final_command(")
+        command_end = source.index("\ndef self_test(", command_start)
+        command_block = source[command_start:command_end]
+        self.assertIn("if contract.expect_audio:", command_block)
+        self.assertIn('command += ["-map", "0:v:0", "-an"]', command_block)
+        self.assertIn('command += ["-af", audio_filter]', command_block)
+
+        final_start = source.index("def finalize(")
+        final_end = source.index("\ndef _space_check(", final_start)
+        final_block = source[final_start:final_end]
+        self.assertIn("analyze_loudness(", final_block)
+        self.assertIn("build_audio_filter(contract.audio_mode, measurements)", final_block)
+        self.assertIn("audio mastering contract requires a fresh 1.2.7 encode", final_block)
+        self.assertIn("expect_audio=contract.expect_audio", final_block)
+        self.assertIn("audio_channels=contract.audio_channels if contract.expect_audio else None", final_block)
+
     def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
         with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=28):
             self.assertEqual(28, recovery_cpu_threads(4))
