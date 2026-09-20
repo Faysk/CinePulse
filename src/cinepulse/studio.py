@@ -57,7 +57,7 @@ from .paths import PATHS
 from .component_identity import bootstrap_component_fingerprint
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
-from .performance_policy import clamp_cpu_threads, default_cpu_threads, realesrgan_pipeline_threads
+from .performance_policy import default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology
 from .realesrgan_tuning import RealEsrganPolicy
 from .media_profile import ColorProfile
@@ -1278,6 +1278,7 @@ class VideoOptimizerStudio:
         }
         accepted = {field.name for field in fields(RenderSettings)}
         clean = {key: value for key, value in {**defaults, **data}.items() if key in accepted}
+        clean["cpu_threads"] = default_cpu_threads(os.cpu_count() or 4)
         clean["effects"] = set(clean.get("effects", []))
         return RenderSettings(**clean)
 
@@ -1371,7 +1372,7 @@ class VideoOptimizerStudio:
             "section_dynamics": round(self.section_dynamics.get()),
             "audio_mode": self.audio_mode.get(),
             "interpolation": self.interpolation.get(),
-            "cpu_threads": clamp_cpu_threads(int(self.cpu_threads.get()), self._hardware.cpu_threads),
+            "cpu_threads": max(1, int(self._hardware.cpu_threads)),
             "minimum_free_gb": float(self.minimum_free_gb.get()),
             "scratch_dir": self.scratch_dir.get().strip(),
             "cache_quota_gb": float(self.cache_quota_gb.get()),
@@ -1409,7 +1410,6 @@ class VideoOptimizerStudio:
             (self.section_dynamics, "section_dynamics"),
             (self.audio_mode, "audio_mode"),
             (self.interpolation, "interpolation"),
-            (self.cpu_threads, "cpu_threads"),
             (self.minimum_free_gb, "minimum_free_gb"),
             (self.scratch_dir, "scratch_dir"),
             (self.cache_quota_gb, "cache_quota_gb"),
@@ -1423,6 +1423,7 @@ class VideoOptimizerStudio:
         for variable, key in mapping:
             if key in data:
                 variable.set(data[key])
+        self.cpu_threads.set(max(1, int(self._hardware.cpu_threads)))
         selected = set(data.get("effects", []))
         for name, variable in self.effect_vars.items():
             variable.set(name in selected)
@@ -3391,7 +3392,7 @@ class VideoOptimizerStudio:
             transition=self.transition.get(),
             transition_duration=float(self.transition_duration.get()), preview_seconds=max(1, min(30, int(self.preview_seconds.get()))),
             audio_mode=self.audio_mode.get(), interpolation=self.interpolation.get(),
-            cpu_threads=max(1, int(self.cpu_threads.get())), minimum_free_gb=max(1.0, float(self.minimum_free_gb.get())),
+            cpu_threads=max(1, int(self._hardware.cpu_threads)), minimum_free_gb=max(1.0, float(self.minimum_free_gb.get())),
             scratch_dir=self.scratch_dir.get().strip(), cache_quota_gb=max(1.0, float(self.cache_quota_gb.get())),
             quality_check=self.quality_check.get(), deep_verify=self.deep_verify.get(), visual_direction=self.visual_direction.get(),
             comparison_preview=self.comparison_preview.get(),
@@ -4152,7 +4153,7 @@ class VideoOptimizerStudio:
             (self.dynamic_sections, settings.dynamic_sections), (self.section_dynamics, settings.section_dynamics * 100.0),
             (self.transition, settings.transition), (self.transition_duration, settings.transition_duration),
             (self.preview_seconds, settings.preview_seconds), (self.audio_mode, settings.audio_mode),
-            (self.interpolation, settings.interpolation), (self.cpu_threads, settings.cpu_threads),
+            (self.interpolation, settings.interpolation),
             (self.minimum_free_gb, settings.minimum_free_gb), (self.scratch_dir, settings.scratch_dir),
             (self.cache_quota_gb, settings.cache_quota_gb), (self.quality_check, settings.quality_check),
             (self.deep_verify, settings.deep_verify), (self.visual_direction, settings.visual_direction),
@@ -4161,6 +4162,7 @@ class VideoOptimizerStudio:
         )
         for variable, value in mapping:
             variable.set(value)
+        self.cpu_threads.set(max(1, int(self._hardware.cpu_threads)))
         for name, variable in self.effect_vars.items():
             variable.set(name in settings.effects)
         self.color_swatch.configure(background=self.color.get())
@@ -4460,8 +4462,6 @@ class VideoOptimizerStudio:
 
             cpu_topology = detect_cpu_topology()
             full_cpu_threads = max(1, int(cpu_topology.logical_cpus))
-            overnight_mode = False
-            machine_mode = "full"
             self._log(
                 f"FULL CPU: {full_cpu_threads}/{full_cpu_threads} threads lógicos disponíveis; "
                 "tuning/perfil do usuário não reduz o render nesta versão."
@@ -4575,7 +4575,7 @@ class VideoOptimizerStudio:
                     chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                     overlap_extract=realesrgan_budget.overlap_extract,
                     overlap_pack=realesrgan_budget.overlap_pack,
-                    vram_free_mb=neural_headroom.vram_free_mb,
+                    vram_free_mb=None,
                     runtime_guard=h5_ai_guard,
                     runtime_reporter=h5_ai_controller.record_throughput,
                 )
@@ -5759,11 +5759,19 @@ class VideoOptimizerStudio:
                             for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
                         )
                         retry_policy = conservative_policy
+                        if oom_like and policy == conservative_policy and policy.pipeline != "1:1:1":
+                            retry_policy = RealEsrganPolicy(
+                                tile=policy.tile,
+                                load_jobs=1,
+                                process_jobs=1,
+                                save_jobs=1,
+                                gpu_index=policy.gpu_index,
+                            )
                         if policy != retry_policy and retry_policy not in attempted:
                             self._log(
                                 f"H3 Real-ESRGAN: {'OOM real' if oom_like else 'falha/integridade'} "
-                                f"com tile={policy.tile} pipeline={policy.pipeline}; repetindo uma vez "
-                                f"com fallback fixo {retry_policy.pipeline}, sem nova medição de recursos."
+                                f"com tile={policy.tile} pipeline={policy.pipeline}; retry "
+                                f"{retry_policy.pipeline} acionado somente após a falha, sem nova medição de recursos."
                             )
                             policy = retry_policy
                             continue

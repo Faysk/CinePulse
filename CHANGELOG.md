@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.5 — 2026-09-20
+
+- corrige o caminho Real-ESRGAN da 1.2.4 que ainda referenciava `neural_headroom` depois da remoção do probe de headroom, evitando `NameError` antes do upscale;
+- remove da aba Qualidade o Spinbox de threads e os perfis de utilização que já não controlavam o runtime full-utilization;
+- canonicaliza `cpu_threads` legado em presets e fila para o total lógico da máquina atual, preservando compatibilidade de arquivos antigos sem manter um limite fictício;
+- RIFE passa a usar fallback pós-OOM em escada (`3:3:3 -> 2:2:2 -> 1:1:1` quando aplicável), sem consultar VRAM livre;
+- o staging temporário do RIFE ganha nonce por execução para evitar colisão entre invocações concorrentes no mesmo processo;
+- Real-ESRGAN ganha uma segunda marcha de fallback `1:1:1` quando o fallback conservador também sofre OOM; falhas de integridade continuam fail-closed;
+- adiciona contratos de regressão específicos para o modo full-utilization e para a ausência das variáveis de headroom removidas.
+
 ## 1.2.4 — 2026-09-19
 
 - muda a prioridade do runtime para utilização total antes de limitação preventiva;

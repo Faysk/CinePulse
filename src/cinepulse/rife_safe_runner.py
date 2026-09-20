@@ -6,6 +6,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -340,13 +341,27 @@ def _run_native_with_rollback(
             text = str(exc).lower()
             oom = any(token in text for token in OOM_TOKENS)
             # No live-resource probe here. Full-utilization starts aggressive
-            # and reacts only to the concrete failure by using the fixed
-            # conservative fallback supplied by run_safe_rife().
+            # and reacts only to concrete failures. OOM may walk one more step
+            # from the normal fallback to 1:1:1; no telemetry is consulted.
             retry_policy = fallback
-            if (
+            same_as_current = (
                 retry_policy.jobs == current.jobs
                 and retry_policy.gpu_index == current.gpu_index
-            ):
+            )
+            if oom and current.gpu_index >= 0:
+                if current.jobs == "1:1:1":
+                    raise
+                if same_as_current:
+                    retry_policy = RifeExecutionPolicy(
+                        uhd=current.uhd,
+                        jobs="1:1:1",
+                        native_target=current.native_target,
+                        requested_target=current.requested_target,
+                        gpu_index=current.gpu_index,
+                        measured=False,
+                    )
+                    same_as_current = False
+            if same_as_current:
                 raise
             if attempted_fallback and not oom:
                 raise
@@ -413,7 +428,7 @@ def run_safe_rife(
     outgoing.mkdir(parents=True, exist_ok=True)
     if any(outgoing.iterdir()):
         raise ValueError(f"diretório de saída RIFE não está vazio: {outgoing}")
-    native_dir = outgoing.with_name(f".{outgoing.name}.native-{os.getpid()}")
+    native_dir = outgoing.with_name(f".{outgoing.name}.native-{os.getpid()}-{time.time_ns()}")
     shutil.rmtree(native_dir, ignore_errors=True)
     native_dir.mkdir(parents=False)
     try:
