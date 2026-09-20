@@ -52,6 +52,7 @@ def build_command(
     *,
     component_fingerprint: str = "",
     jobs_override: str = "",
+    gpu_index: int | None = None,
 ) -> list[str]:
     """Build the crash-safe CinePulse RIFE wrapper command.
 
@@ -88,4 +89,6 @@ def build_command(
         command += ["--component-fingerprint", str(component_fingerprint)]
     if jobs_override and not use_cpu:
         command += ["--jobs-override", str(jobs_override)]
+    if gpu_index is not None and not use_cpu:
+        command += ["--gpu-index", str(max(0, int(gpu_index)))]
     return command
