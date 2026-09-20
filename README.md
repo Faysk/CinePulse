@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.4`. Esta versão prioriza utilização total: todos os threads lógicos de CPU ficam disponíveis ao render, Real-ESRGAN usa concorrência GPU estática agressiva pelo porte do adaptador, os budgets neurais usam o teto estrutural do pipeline e a telemetria deixa de reduzir carga preventivamente. RIFE também inicia com política agressiva fixa e só recua depois de uma falha/OOM real. Verificações de integridade, cancelamento e promoção atômica continuam ativas.
+> Estado Stable: `1.2.5`. Mantém o modo de utilização total da 1.2.4, corrige uma referência órfã que podia interromper o Real-ESRGAN antes do upscale, remove controles de CPU que já não governavam o runtime e amplia o fallback pós-OOM: RIFE e Real-ESRGAN podem descer até execução serial somente depois de falha real, sem voltar a medir headroom para throttling. Integridade, cancelamento e promoção atômica continuam ativos.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
