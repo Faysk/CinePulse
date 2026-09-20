@@ -119,6 +119,8 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
 
     def test_final_verification_rejects_any_frame_count_drift(self) -> None:
         self.assertIn("frame_tolerance=0", self.studio)
+        self.assertIn("if result.frame_count is None:", self.studio)
+        self.assertIn("FFprobe não informou a contagem exata de quadros", self.studio)
 
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)
