@@ -4721,7 +4721,7 @@ class VideoOptimizerStudio:
                         final_video_args = delivery_plan.video_args(
                             use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                             bitrate_mbps=estimated_bitrate, fps=target_fps,
-                        gpu_index=self._hardware.gpu_index,
+                            gpu_index=self._hardware.gpu_index,
                         )
                         final_audio_source = settings.audio
                         final_audio_args = delivery_plan.audio_args()
@@ -4829,7 +4829,7 @@ class VideoOptimizerStudio:
                 command += delivery_plan.video_args(
                     use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                     bitrate_mbps=bitrate_mbps, fps=target_fps,
-                gpu_index=self._hardware.gpu_index,
+                    gpu_index=self._hardware.gpu_index,
                 )
                 command += color_plan.metadata_args(output=True)
                 if settings.mode == MODE_MUSIC or (settings.preserve_audio and source_has_audio):
@@ -4904,7 +4904,7 @@ class VideoOptimizerStudio:
                         baseline_video_args = delivery_plan.video_args(
                             use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                             bitrate_mbps=bitrate_mbps, fps=target_fps,
-                        gpu_index=self._hardware.gpu_index,
+                            gpu_index=self._hardware.gpu_index,
                         )
                         replacement_args = resident_route.contract.ffmpeg_args()
                         start = next(
