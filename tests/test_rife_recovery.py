@@ -44,8 +44,8 @@ class RifeRecoveryTests(unittest.TestCase):
         end = source.index("\ndef self_test(", start)
         block = source[start:end]
         self.assertIn('"-frames:v", str(frame_limit)', block)
-        self.assertIn("if float(duration) + 1e-9 < float(contract.duration):", block)
-        self.assertIn('command += ["-t", f"{duration:.6f}"]', block)
+        self.assertIn("*bounded_audio_input_args(str(contract.source), duration)", block)
+        self.assertNotIn('command += ["-t", f"{duration:.6f}"]', block)
 
         final_start = source.index("def finalize(")
         final_end = source.index("\ndef _space_check(", final_start)

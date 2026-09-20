@@ -88,7 +88,7 @@ from .gpu_encode import ResidentEncodeStore
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_delivery import select_resident_delivery_route
 from .pipeline_runtime import BackgroundCommand
-from .audio_mastering import analyze_loudness, build_audio_filter
+from .audio_mastering import analyze_loudness, bounded_audio_input_args, build_audio_filter
 from . import __version__
 from .quality_metrics import measure_vmaf
 from .stem_engine import build_demucs_command, stem_cache_key, stems_for_focus
@@ -4659,11 +4659,14 @@ class VideoOptimizerStudio:
                 ]
                 if working_start > 0:
                     command += ["-ss", f"{working_start:.6f}"]
+                master_target_frames = max(1, int(round(video_duration * work_fps)))
                 command += [
                     "-i", working_video,
-                    "-map", "0:v:0", "-an", "-t", f"{video_duration:.6f}", "-vf", master_filter,
+                    "-map", "0:v:0", "-an", "-vf", master_filter,
                 ] + self._intermediate_encoder(work_w, work_h, settings.use_cpu, color_plan) + [
-                    "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)), "-progress", "pipe:1", "-nostats", str(master)
+                    "-frames:v", str(master_target_frames),
+                    "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)),
+                    "-progress", "pipe:1", "-nostats", str(master),
                 ]
                 self._run_ffmpeg(command, video_duration, progress_base, 10)
                 self._release_temp_path(working_video, temp_paths)
@@ -4828,9 +4831,15 @@ class VideoOptimizerStudio:
                     command += ["-stream_loop", "-1"]
                 command += ["-i", visual_source]
                 if settings.mode == MODE_MUSIC:
-                    command += ["-i", settings.audio, "-map", "0:v:0", "-map", "1:a:0"]
+                    command += [
+                        *bounded_audio_input_args(settings.audio, project_duration),
+                        "-map", "0:v:0", "-map", "1:a:0",
+                    ]
                 elif settings.preserve_audio and source_has_audio:
-                    command += ["-i", settings.video, "-map", "0:v:0", "-map", "1:a:0"]
+                    command += [
+                        *bounded_audio_input_args(settings.video, project_duration),
+                        "-map", "0:v:0", "-map", "1:a:0",
+                    ]
                 else:
                     command += ["-map", "0:v:0", "-an"]
                 command += ["-vf", final_filter]
@@ -5033,16 +5042,23 @@ class VideoOptimizerStudio:
         command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
         if start_time > 0:
             command += ["-ss", f"{start_time:.6f}"]
+        color_target_frames = max(1, int(round(duration * source_fps)))
         command += [
             "-i", video,
-            "-map", "0:v:0", "-an", "-t", f"{duration:.6f}",
+            "-map", "0:v:0", "-an",
             "-vf", color_plan.normalize_filter(stage="working"),
             "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1",
             "-g", "1", "-slicecrc", "1", "-pix_fmt", color_plan.working_pix_fmt,
         ] + color_plan.metadata_args(output=False) + [
+            "-frames:v", str(color_target_frames),
             "-threads", str(max(1, cpu_threads)), "-progress", "pipe:1", "-nostats", str(output),
         ]
         self._run_ffmpeg(command, duration, base, weight)
+        color_quality = inspect_matroska_segment(output)
+        if color_quality.packet_count != color_target_frames:
+            raise RuntimeError(
+                f"Estágio de cor ficou com {color_quality.packet_count}/{color_target_frames} quadros."
+            )
         return str(output)
 
     def _scale_filter(
@@ -5132,6 +5148,8 @@ class VideoOptimizerStudio:
     ) -> Path:
         comparison = processed.with_name(processed.stem + "_COMPARACAO.mp4")
         self._set_stage("Comparando", "Montando original e resultado lado a lado para conferência visual.")
+        comparison_fps = max(1.0, first_video_fps(probe_media(str(processed))))
+        comparison_frames = max(1, int(round(duration * comparison_fps)))
         command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
         if settings.mode == MODE_MUSIC:
             command += ["-stream_loop", "-1"]
@@ -5143,12 +5161,13 @@ class VideoOptimizerStudio:
             "pad=640:720:(ow-iw)/2:(oh-ih)/2:color=black[left];"
             "[1:v]scale=640:720:force_original_aspect_ratio=decrease:flags=lanczos,"
             "pad=640:720:(ow-iw)/2:(oh-ih)/2:color=black[right];"
-            "[left][right]hstack=inputs=2,format=yuv420p[out]"
+            f"[left][right]hstack=inputs=2:shortest=0,fps={comparison_fps:.8f},format=yuv420p[out]"
         )
         command += [
             "-filter_complex", graph, "-map", "[out]", "-map", "1:a:0?",
         ] + self._h264_encoder(1280, 720, settings.use_cpu) + [
-            "-c:a", "copy", "-threads", str(cpu_threads), "-t", f"{duration:.6f}",
+            "-c:a", "copy", "-frames:v", str(comparison_frames),
+            "-threads", str(cpu_threads),
             "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(comparison),
         ]
         self._run_ffmpeg(command, duration, 100, 0)

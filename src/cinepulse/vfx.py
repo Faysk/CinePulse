@@ -17,6 +17,7 @@ EFFECT_WIDTH = 320
 EFFECT_HEIGHT = 180
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
+from .audio_mastering import bounded_audio_input_args
 from .music_envelope import (
     DEFAULT_ANALYSIS_FPS,
     analyze_music_structure,
@@ -348,7 +349,7 @@ def render_vfx_intermediate(
         "pipe:0",
     ]
     if final_delivery and final_audio_source:
-        command += ["-i", final_audio_source]
+        command += bounded_audio_input_args(final_audio_source, duration)
     command += [
         "-filter_complex",
         build_vfx_filter_graph(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -31,6 +32,15 @@ def parse_loudnorm_json(text: str) -> dict[str, float]:
     raise ValueError("A análise loudnorm não retornou medições válidas.")
 
 
+def bounded_audio_input_args(source: str, duration: float) -> list[str]:
+    """Return FFmpeg args that bound only the next audio input by duration."""
+
+    seconds = float(duration)
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("Audio input duration must be a positive finite value.")
+    return ["-t", f"{seconds:.6f}", "-i", str(source)]
+
+
 def analyze_loudness(ffmpeg: str, source: str, duration: float, mode: str) -> dict[str, float]:
     if mode not in TARGETS:
         return {}
@@ -38,7 +48,8 @@ def analyze_loudness(ffmpeg: str, source: str, duration: float, mode: str) -> di
     loudnorm = f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
     audio_filter = f"{prefix},{loudnorm}" if prefix else loudnorm
     command = [
-        ffmpeg, "-hide_banner", "-nostdin", "-i", source, "-t", f"{duration:.6f}",
+        ffmpeg, "-hide_banner", "-nostdin",
+        *bounded_audio_input_args(source, duration),
         "-vn", "-af", audio_filter, "-f", "null", "NUL" if os.name == "nt" else "/dev/null",
     ]
     result = subprocess.run(
