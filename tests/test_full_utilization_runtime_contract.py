@@ -143,6 +143,26 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             self.rife_recovery,
         )
 
+    def test_video_only_intermediates_and_comparison_are_frame_bound(self) -> None:
+        self.assertIn(
+            "master_target_frames = max(1, int(round(video_duration * work_fps)))",
+            self.studio,
+        )
+        self.assertIn('"-frames:v", str(master_target_frames)', self.studio)
+        self.assertIn(
+            "color_target_frames = max(1, int(round(duration * source_fps)))",
+            self.studio,
+        )
+        self.assertIn('"-frames:v", str(color_target_frames)', self.studio)
+        self.assertIn("color_quality = inspect_matroska_segment(output)", self.studio)
+        self.assertIn(
+            "comparison_frames = max(1, int(round(duration * comparison_fps)))",
+            self.studio,
+        )
+        self.assertIn('"-frames:v", str(comparison_frames)', self.studio)
+        self.assertIn("hstack=inputs=2:shortest=0", self.studio)
+        self.assertNotIn('"-t"', self.studio)
+
     def test_final_verification_rejects_any_frame_count_drift(self) -> None:
         self.assertIn("frame_tolerance=0", self.studio)
         self.assertIn("if result.frame_count is None:", self.studio)
