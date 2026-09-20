@@ -1001,7 +1001,12 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     )
     command += color_plan.metadata_args(output=True)
     command += delivery.audio_args()
-    command += ["-threads", str(contract.cpu_threads), "-t", f"{duration:.6f}"]
+    frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
+    command += ["-threads", str(contract.cpu_threads), "-frames:v", str(frame_limit)]
+    if float(duration) + 1e-9 < float(contract.duration):
+        # Self-test uses a short sample; cap the mux so the source audio does
+        # not continue for the complete project after the video frame limit.
+        command += ["-t", f"{duration:.6f}"]
     # This is a local 30+ GiB deliverable.  Relocating the MP4 index to the
     # beginning adds a second full-file pass and failed on the external target.
     # Keeping the index at the end is fully playable and does not affect quality.
@@ -1040,18 +1045,27 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             height=contract.target_height, fps=contract.target_fps, codec="ffv1",
             duration_minimum=contract.duration - 0.5,
         )
-        if abs(_duration(staged_info) - contract.duration) > 0.5:
+        staged_quality = inspect_matroska_segment(staged_master)
+        if (
+            abs(_duration(staged_info) - contract.duration) > 0.5
+            or staged_quality.packet_count != contract.total_target_frames
+        ):
             raise RecoveryError(
-                f"Master local tem duracao {_duration(staged_info):.3f}s; esperada {contract.duration:.3f}s"
+                f"Master local fora do contrato: duration={_duration(staged_info):.3f}s "
+                f"packets={staged_quality.packet_count}/{contract.total_target_frames}"
             )
         master = staged_master
-        log(f"MASTER_LOCAL_REUSE {master} duration={_duration(staged_info):.3f}s")
+        log(
+            f"MASTER_LOCAL_REUSE {master} duration={_duration(staged_info):.3f}s "
+            f"packets={staged_quality.packet_count}"
+        )
     partial = contract.output.with_name(f".{contract.output.stem}.recovery-partial{contract.output.suffix}")
     command, _color, delivery = _final_command(contract, master, partial, duration=contract.duration)
     expectation = VerifyExpectation(
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
         duration=contract.duration, expect_audio=True, video_codec=delivery.video_codec,
         audio_codec=delivery.audio_codec, audio_channels=2, audio_sample_rate=48000,
+        frame_tolerance=0,
     )
     verification = None
     if partial.is_file():
@@ -1063,7 +1077,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             details = f"{type(exc).__name__}: {exc}"
         else:
             details = " | ".join(f"{issue.code}: {issue.message}" for issue in candidate.errors)
-        if candidate is not None and candidate.passed:
+        if candidate is not None and candidate.passed and candidate.frame_count is not None:
             verification = candidate
             log("PARTIAL_REUSE_OK completed orphan encode accepted")
         else:
@@ -1080,6 +1094,8 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
         log("VERIFY_START quick contract + frame count")
         verification = quick_verify(str(contract.ffprobe), partial, expectation)
     _atomic_json(contract.result_path, {"schema": 1, "job_id": contract.job_id, "verification": verification.to_dict()})
+    if verification.frame_count is None:
+        raise RecoveryError("Verificacao final nao informou contagem exata de quadros")
     if not verification.passed:
         details = " | ".join(f"{issue.code}: {issue.message}" for issue in verification.errors)
         raise RecoveryError("Verificacao final falhou: " + details)
