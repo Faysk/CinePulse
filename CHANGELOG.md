@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.7 — 2026-09-21
+
+- remove `-t duration` do concat do master RIFE para impedir corte do último frame quando `round(duration*fps)` exige um frame além do timestamp decimal;
+- valida estruturalmente o master FFV1 após concat e exige `packet_count == total_target_count` antes de continuar;
+- recovery deixa de reutilizar masters antigos apenas por tolerância de duração e passa a exigir a contagem exata de pacotes;
+- concat de recovery também deixa de usar `-t`, e valida a contagem exata depois da montagem antes da promoção atômica;
+- encode final CFR substitui o corte global por duração por `-frames:v` calculado a partir de `round(project_duration*target_fps)`;
+- VFX final/intermediário usa contagem exata de frames e torna explícito `overlay` com `eof_action=repeat`, `shortest=0` e `repeatlast=1`, evitando encurtar a base quando o layer reativo termina primeiro;
+- adiciona contratos de regressão para master RIFE, recovery e entrega final frame-bound.
+
 ## 1.2.6 — 2026-09-20
 
 - memoriza a política RIFE realmente aplicada em um chunk e a reutiliza nos chunks seguintes do mesmo render, evitando repetir OOM já conhecido;
