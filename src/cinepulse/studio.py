@@ -5759,7 +5759,7 @@ class VideoOptimizerStudio:
                             for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
                         )
                         retry_policy = conservative_policy
-                        if oom_like and policy == conservative_policy and policy.process_jobs > 1:
+                        if oom_like and policy == conservative_policy and policy.pipeline != "1:1:1":
                             retry_policy = RealEsrganPolicy(
                                 tile=policy.tile,
                                 load_jobs=1,
