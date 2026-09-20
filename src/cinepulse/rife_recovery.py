@@ -29,7 +29,7 @@ from .hardware import detect_hardware
 from .matroska_quality import inspect_matroska_segment
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .rife_engine import timed_concat_manifest
-from .verification import VerifyExpectation, quick_verify
+from .verification import VerifyExpectation, deep_verify, quick_verify
 
 
 class RecoveryError(RuntimeError):
@@ -75,6 +75,8 @@ class RecoveryContract:
     audio_channels: int | None = None
     audio_sample_rate: int | None = None
     audio_mode: str = "Preservar dinâmica original"
+    delivery_profile: str = PROFILE_AUTO
+    deep_verify: bool = False
 
     @property
     def state_path(self) -> Path:
@@ -467,6 +469,8 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         audio_channels=audio_channels,
         audio_sample_rate=audio_sample_rate,
         audio_mode=str(settings.get("audio_mode") or "Preservar dinâmica original"),
+        delivery_profile=str(settings.get("delivery_profile") or PROFILE_AUTO),
+        deep_verify=bool(expected.get("deep", settings.get("deep_verify", False))),
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -1027,7 +1031,7 @@ def _final_command(
     )
     encoders = detect_ffmpeg_encoders(str(contract.ffmpeg))
     delivery = build_delivery_plan(
-        output=contract.output, profile=PROFILE_AUTO, color_plan=color_plan,
+        output=contract.output, profile=contract.delivery_profile, color_plan=color_plan,
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
         preview=False, use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
         available_encoders=encoders,
@@ -1091,6 +1095,22 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
     log(f"SELF_TEST_OK {destination} size={destination.stat().st_size}")
     return destination
 
+
+def verify_recovery_output(
+    contract: RecoveryContract,
+    path: Path,
+    expected: VerifyExpectation,
+):
+    """Honor the original job quick/deep verification contract."""
+
+    if contract.deep_verify:
+        return deep_verify(
+            str(contract.ffmpeg),
+            str(contract.ffprobe),
+            path,
+            expected,
+        )
+    return quick_verify(str(contract.ffprobe), path, expected)
 
 def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None], *, timeout_minutes: float) -> Path:
     contract.output.parent.mkdir(parents=True, exist_ok=True)
@@ -1164,7 +1184,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             )
         else:
             try:
-                candidate = quick_verify(str(contract.ffprobe), partial, expectation)
+                candidate = verify_recovery_output(contract, partial, expectation)
             except Exception as exc:
                 candidate = None
                 details = f"{type(exc).__name__}: {exc}"
@@ -1185,7 +1205,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
         )
         _run_logged(command, label="final-encode", log=log, timeout_seconds=max(43200, timeout_minutes * 60))
         log("VERIFY_START quick contract + frame count")
-        verification = quick_verify(str(contract.ffprobe), partial, expectation)
+        verification = verify_recovery_output(contract, partial, expectation)
     _atomic_json(contract.result_path, {"schema": 1, "job_id": contract.job_id, "verification": verification.to_dict()})
     if verification.frame_count is None:
         raise RecoveryError("Verificacao final nao informou contagem exata de quadros")
