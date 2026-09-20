@@ -4371,6 +4371,7 @@ class VideoOptimizerStudio:
             if preview:
                 target_w, target_h = self._target_size("720p HD", settings.aspect, (source_w, source_h))
                 target_fps = min(60, target_fps)
+            final_target_frames = max(1, int(round(project_duration * target_fps)))
 
             output_path = Path(settings.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4854,7 +4855,10 @@ class VideoOptimizerStudio:
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
-                command += ["-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t", f"{project_duration:.6f}"]
+                command += [
+                    "-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)),
+                    "-frames:v", str(final_target_frames),
+                ]
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
 
