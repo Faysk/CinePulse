@@ -4828,9 +4828,15 @@ class VideoOptimizerStudio:
                     command += ["-stream_loop", "-1"]
                 command += ["-i", visual_source]
                 if settings.mode == MODE_MUSIC:
-                    command += ["-i", settings.audio, "-map", "0:v:0", "-map", "1:a:0"]
+                    command += [
+                        "-t", f"{project_duration:.6f}", "-i", settings.audio,
+                        "-map", "0:v:0", "-map", "1:a:0",
+                    ]
                 elif settings.preserve_audio and source_has_audio:
-                    command += ["-i", settings.video, "-map", "0:v:0", "-map", "1:a:0"]
+                    command += [
+                        "-t", f"{project_duration:.6f}", "-i", settings.video,
+                        "-map", "0:v:0", "-map", "1:a:0",
+                    ]
                 else:
                     command += ["-map", "0:v:0", "-an"]
                 command += ["-vf", final_filter]
