@@ -117,6 +117,9 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn('"-frames:v", str(output_frame_count)', self.vfx)
         self.assertNotIn('command += ["-t", f"{duration:.6f}"', self.vfx)
 
+    def test_final_verification_rejects_any_frame_count_drift(self) -> None:
+        self.assertIn("frame_tolerance=0", self.studio)
+
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)
         self.assertIn("jobs_override=rife_jobs_override", self.studio)
