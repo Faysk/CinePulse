@@ -675,7 +675,7 @@ def generate_rife_frames_safe(
     timeout_minutes: float,
     stop_file: Path,
 ) -> tuple[list[Path], Path]:
-    """Generate native 2x UHD frames, then uniformly retime odd counts."""
+    """Generate native 2x frames, enabling RIFE UHD mode only when required."""
 
     native_target = source_frames * 2
     rife = [
@@ -807,7 +807,7 @@ def resume_rife(contract: RecoveryContract, log: Callable[[str], None], *, timeo
             )
         if segment_quality.solid_black_frames:
             raise RecoveryError(
-                f"Lote {chunk.index}: modo UHD produziu {segment_quality.solid_black_frames} quadros pretos"
+                f"Lote {chunk.index}: RIFE produziu {segment_quality.solid_black_frames} quadros pretos"
             )
         os.replace(partial_segment, final_segment)
         _safe_rmtree_child(contract.chunk_root, incoming)
