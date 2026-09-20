@@ -60,6 +60,7 @@ from .hardware import detect_hardware
 from .performance_policy import default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology
 from .realesrgan_tuning import RealEsrganPolicy
+from .matroska_quality import inspect_matroska_segment
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -4370,6 +4371,7 @@ class VideoOptimizerStudio:
             if preview:
                 target_w, target_h = self._target_size("720p HD", settings.aspect, (source_w, source_h))
                 target_fps = min(60, target_fps)
+            final_target_frames = max(1, int(round(project_duration * target_fps)))
 
             output_path = Path(settings.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4853,7 +4855,10 @@ class VideoOptimizerStudio:
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
-                command += ["-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t", f"{project_duration:.6f}"]
+                command += [
+                    "-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)),
+                    "-frames:v", str(final_target_frames),
+                ]
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
 
@@ -6390,9 +6395,14 @@ class VideoOptimizerStudio:
             concat = [
                 FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
                 "-f", "concat", "-safe", "0", "-i", str(concat_file), "-map", "0:v:0", "-an", "-c", "copy",
-                "-t", f"{duration:.6f}", "-progress", "pipe:1", "-nostats", str(interpolated),
+                "-progress", "pipe:1", "-nostats", str(interpolated),
             ]
             self._run_ffmpeg(concat, duration, base + weight * 0.90, weight * 0.10)
+            master_quality = inspect_matroska_segment(interpolated)
+            if master_quality.packet_count != total_target_count:
+                raise RuntimeError(
+                    f"RIFE master ficou com {master_quality.packet_count}/{total_target_count} quadros após concat."
+                )
             return str(interpolated)
         finally:
             if prefetch is not None:
@@ -6526,6 +6536,7 @@ class VideoOptimizerStudio:
             audio_codec=delivery_plan.audio_codec if delivery_plan and expected_audio else None,
             audio_channels=expected_audio_channels if expected_audio else None,
             audio_sample_rate=expected_audio_sample_rate if expected_audio else None,
+            frame_tolerance=0,
         )
         result = (
             deep_verify(FFMPEG, FFPROBE, path, expected)
@@ -6533,6 +6544,10 @@ class VideoOptimizerStudio:
         )
         for issue in result.issues:
             self._log(f"VERIFY {issue.severity.upper()} [{issue.code}] {issue.message}")
+        if result.frame_count is None:
+            raise RuntimeError(
+                "A verificação final falhou: FFprobe não informou a contagem exata de quadros."
+            )
         if not result.passed:
             errors = " • ".join(issue.message for issue in result.errors)
             raise RuntimeError("A verificação final falhou: " + errors)

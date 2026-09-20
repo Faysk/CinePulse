@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.6`. Mantém o full-utilization da 1.2.5 e reduz trabalho desperdiçado após falhas reais: o RIFE reaproveita, nos chunks seguintes do mesmo render, a política de fallback que já funcionou; o safe runner recebe o índice de GPU já escolhido pelo Studio em vez de redescobrir o adaptador a cada lote; encode final, recovery e NVENC ficam presos ao mesmo índice em máquinas multi-GPU. Recovery de jobs antigos usa todos os threads lógicos atuais e só ativa o modo UHD do RIFE para geometria UHD.
+> Estado Stable: `1.2.7`. Mantém o full-utilization e a consistência multi-GPU da 1.2.6, e fecha a cadeia temporal por contagem exata de frames: o master RIFE não é mais cortado por `-t`, Studio e recovery verificam o número exato de pacotes após o concat, masters antigos truncados deixam de ser reutilizados e a entrega final/VFX usa `-frames:v` em vez de um limite decimal de duração.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

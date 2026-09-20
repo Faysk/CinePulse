@@ -22,13 +22,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .audio_mastering import analyze_loudness, build_audio_filter
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
 from .hardware import detect_hardware
 from .matroska_quality import inspect_matroska_segment
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .rife_engine import timed_concat_manifest
-from .verification import VerifyExpectation, quick_verify
+from .verification import VerifyExpectation, deep_verify, quick_verify
 
 
 class RecoveryError(RuntimeError):
@@ -70,6 +71,13 @@ class RecoveryContract:
     chunk_frames: int
     cpu_threads: int
     gpu_index: int = 0
+    expect_audio: bool = True
+    audio_channels: int | None = None
+    audio_sample_rate: int | None = None
+    audio_mode: str = "Preservar dinâmica original"
+    delivery_profile: str = PROFILE_AUTO
+    deep_verify: bool = False
+    use_cpu: bool = False
 
     @property
     def state_path(self) -> Path:
@@ -209,6 +217,33 @@ def ai_cache_key(
     }
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
+
+def recovery_audio_expectation(
+    expected: dict[str, Any],
+    settings: dict[str, Any],
+    source_info: dict[str, Any],
+) -> tuple[bool, int | None, int | None]:
+    """Restore the output audio contract without assuming stereo/48 kHz."""
+
+    audio = next((item for item in source_info.get("streams", []) if item.get("codec_type") == "audio"), {})
+    if "expect_audio" in expected:
+        expect_audio = bool(expected.get("expect_audio"))
+    else:
+        expect_audio = bool(settings.get("preserve_audio")) and bool(audio)
+
+    def optional_int(value: object) -> int | None:
+        try:
+            return int(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    channels = optional_int(expected.get("audio_channels"))
+    sample_rate = optional_int(expected.get("audio_sample_rate"))
+    if expect_audio and channels is None:
+        channels = optional_int(audio.get("channels"))
+    if expect_audio and sample_rate is None:
+        sample_rate = optional_int(audio.get("sample_rate"))
+    return expect_audio, channels, sample_rate
 
 def recovery_cpu_threads(legacy_value: int | None = None) -> int:
     """Use the complete logical CPU envelope while keeping old jobs readable."""
@@ -391,9 +426,6 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         raise RecoveryError("O job nao usa RIFE")
     if settings.get("effects"):
         raise RecoveryError("Este job inesperadamente contem VFX ativos")
-    if not bool(settings.get("preserve_audio")):
-        raise RecoveryError("Este job deveria preservar o audio original")
-
     ffmpeg = app_root / "components" / "ffmpeg" / "bin" / "ffmpeg.exe"
     ffprobe = app_root / "components" / "ffmpeg" / "bin" / "ffprobe.exe"
     rife_dir = app_root / "components" / "ai" / "models" / "rife" / "portable" / "rife-ncnn-vulkan-20221029-windows"
@@ -416,6 +448,13 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
     duration = float(expected.get("duration") or 0.0)
     source_fps = float(source_spec.get("fps") or 0.0)
     target_fps = float(target_spec.get("fps") or expected.get("fps") or 0.0)
+    source_info = _probe(ffprobe, source)
+    expect_audio, audio_channels, audio_sample_rate = recovery_audio_expectation(
+        expected,
+        settings,
+        source_info,
+    )
+    use_cpu = bool(settings.get("use_cpu", False))
     contract = RecoveryContract(
         job_id=str(job["job_id"]), source=source, cache=cache, output=output,
         history_dir=history_dir, job_dir=job_dir, chunk_root=chunk_root, app_root=app_root,
@@ -427,7 +466,14 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         total_source_frames=round(duration * source_fps), total_target_frames=round(duration * target_fps),
         chunk_frames=int(storage.get("rife_chunk_frames") or 0),
         cpu_threads=recovery_cpu_threads(settings.get("cpu_threads")),
-        gpu_index=recovery_gpu_index(),
+        gpu_index=-1 if use_cpu else recovery_gpu_index(),
+        expect_audio=expect_audio,
+        audio_channels=audio_channels,
+        audio_sample_rate=audio_sample_rate,
+        audio_mode=str(settings.get("audio_mode") or "Preservar dinâmica original"),
+        delivery_profile=str(settings.get("delivery_profile") or PROFILE_AUTO),
+        deep_verify=bool(expected.get("deep", settings.get("deep_verify", False))),
+        use_cpu=use_cpu,
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -700,10 +746,12 @@ def generate_rife_frames_safe(
     """Generate native 2x frames, enabling RIFE UHD mode only when required."""
 
     native_target = source_frames * 2
+    rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index
+    rife_jobs = "1:2:2" if contract.use_cpu else "1:1:1"
     rife = [
         str(contract.rife_exe), "-i", str(incoming), "-o", str(outgoing),
         "-n", str(native_target), "-m", str(contract.rife_model),
-        "-g", str(contract.gpu_index), "-j", "1:1:1",
+        "-g", str(rife_gpu_index), "-j", rife_jobs,
     ]
     if recovery_uses_uhd(contract.target_width, contract.target_height):
         rife.append("-u")
@@ -882,10 +930,20 @@ def concatenate_master(
             height=contract.target_height, fps=contract.target_fps, codec="ffv1",
             duration_minimum=contract.duration - 0.5,
         )
-        if abs(_duration(info) - contract.duration) <= 0.5:
-            log(f"MASTER_REUSE {contract.master_path} duration={_duration(info):.3f}s")
+        master_quality = inspect_matroska_segment(contract.master_path)
+        if (
+            abs(_duration(info) - contract.duration) <= 0.5
+            and master_quality.packet_count == contract.total_target_frames
+        ):
+            log(
+                f"MASTER_REUSE {contract.master_path} duration={_duration(info):.3f}s "
+                f"packets={master_quality.packet_count}"
+            )
             return contract.master_path
-        raise RecoveryError("Master de recuperacao existente nao cumpre o contrato")
+        raise RecoveryError(
+            "Master de recuperacao existente nao cumpre o contrato "
+            f"(packets={master_quality.packet_count}/{contract.total_target_frames})"
+        )
     packet_counts: list[int] = []
     for number, segment in enumerate(segments, start=1):
         quality = inspect_matroska_segment(segment)
@@ -910,7 +968,7 @@ def concatenate_master(
     command = [
         str(contract.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", str(concat_file), "-map", "0:v:0", "-an",
-        "-c", "copy", "-t", f"{contract.duration:.6f}", "-progress", "pipe:1", "-nostats", str(partial),
+        "-c", "copy", "-progress", "pipe:1", "-nostats", str(partial),
     ]
     _run_logged(command, label="concat-master", log=log, timeout_seconds=max(3600, timeout_minutes * 60))
     info = _validate_video(
@@ -920,6 +978,11 @@ def concatenate_master(
     )
     if abs(_duration(info) - contract.duration) > 0.5:
         raise RecoveryError(f"Master concatenado tem duracao {_duration(info):.3f}s; esperado {contract.duration:.3f}s")
+    master_quality = inspect_matroska_segment(partial)
+    if master_quality.packet_count != contract.total_target_frames:
+        raise RecoveryError(
+            f"Master concatenado tem {master_quality.packet_count}/{contract.total_target_frames} pacotes"
+        )
     os.replace(partial, contract.master_path)
     _write_state(
         contract, phase="master_ready", completed_segments=len(segments),
@@ -957,7 +1020,14 @@ def without_faststart(arguments: list[str]) -> list[str]:
     return cleaned
 
 
-def _final_command(contract: RecoveryContract, master: Path, destination: Path, *, duration: float) -> tuple[list[str], Any, Any]:
+def _final_command(
+    contract: RecoveryContract,
+    master: Path,
+    destination: Path,
+    *,
+    duration: float,
+    audio_filter: str = "",
+) -> tuple[list[str], Any, Any]:
     source_info = _probe(contract.ffprobe, contract.source)
     source_color = ColorProfile.from_probe(source_info)
     color_plan = build_color_pipeline(
@@ -966,9 +1036,9 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     )
     encoders = detect_ffmpeg_encoders(str(contract.ffmpeg))
     delivery = build_delivery_plan(
-        output=contract.output, profile=PROFILE_AUTO, color_plan=color_plan,
+        output=contract.output, profile=contract.delivery_profile, color_plan=color_plan,
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
-        preview=False, use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
+        preview=False, use_cpu=contract.use_cpu, nvenc_available="hevc_nvenc" in encoders,
         available_encoders=encoders,
     )
     if delivery.blocking:
@@ -976,17 +1046,29 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     bitrate_mbps = max(8, min(600, round(12 * contract.target_width * contract.target_height / (1920 * 1080) * max(1, contract.target_fps / 60))))
     command = [
         str(contract.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-i", str(master), "-i", str(contract.source), "-map", "0:v:0", "-map", "1:a:0",
-        "-vf", _final_filter(contract, color_plan),
+        "-i", str(master),
     ]
+    if contract.expect_audio:
+        command += ["-i", str(contract.source), "-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        command += ["-map", "0:v:0", "-an"]
+    command += ["-vf", _final_filter(contract, color_plan)]
     command += delivery.video_args(
-        use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
+        use_cpu=contract.use_cpu, nvenc_available="hevc_nvenc" in encoders,
         bitrate_mbps=bitrate_mbps, fps=round(contract.target_fps),
-        gpu_index=contract.gpu_index,
+        gpu_index=max(0, contract.gpu_index),
     )
     command += color_plan.metadata_args(output=True)
-    command += delivery.audio_args()
-    command += ["-threads", str(contract.cpu_threads), "-t", f"{duration:.6f}"]
+    if contract.expect_audio:
+        if audio_filter:
+            command += ["-af", audio_filter]
+        command += delivery.audio_args()
+    frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
+    command += ["-threads", str(contract.cpu_threads), "-frames:v", str(frame_limit)]
+    if float(duration) + 1e-9 < float(contract.duration):
+        # Self-test uses a short sample; cap the mux so the source audio does
+        # not continue for the complete project after the video frame limit.
+        command += ["-t", f"{duration:.6f}"]
     # This is a local 30+ GiB deliverable.  Relocating the MP4 index to the
     # beginning adds a second full-file pass and failed on the external target.
     # Keeping the index at the end is fully playable and does not affect quality.
@@ -1003,18 +1085,55 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
     segments, _completed_target = validate_contract(contract, log, full_scan=False)
     if not segments:
         raise RecoveryError("Nenhum segmento existente para o autoteste")
-    destination = contract.job_dir / "recovery-self-test.mp4"
-    command, _color, _delivery = _final_command(contract, segments[0], destination, duration=0.10)
+    suffix = contract.output.suffix or ".mp4"
+    destination = contract.job_dir / f"recovery-self-test{suffix}"
+    command, _color, delivery = _final_command(contract, segments[0], destination, duration=0.10)
     _run_logged(command, label="final-encoder-self-test", log=log, timeout_seconds=timeout_minutes * 60)
-    info = _validate_video(
-        ffprobe=contract.ffprobe, path=destination, width=contract.target_width,
-        height=contract.target_height, fps=contract.target_fps, codec="hevc",
+    expected_audio_rate = (
+        48000
+        if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
+        else contract.audio_sample_rate
     )
-    if not any(stream.get("codec_type") == "audio" for stream in info.get("streams", [])):
-        raise RecoveryError("Autoteste final nao preservou audio")
-    log(f"SELF_TEST_OK {destination} size={destination.stat().st_size}")
+    expectation = VerifyExpectation(
+        width=contract.target_width,
+        height=contract.target_height,
+        fps=contract.target_fps,
+        duration=0.10,
+        expect_audio=contract.expect_audio,
+        video_codec=delivery.video_codec,
+        audio_codec=delivery.audio_codec if contract.expect_audio else None,
+        audio_channels=contract.audio_channels if contract.expect_audio else None,
+        audio_sample_rate=expected_audio_rate if contract.expect_audio else None,
+        frame_tolerance=0,
+    )
+    verification = quick_verify(str(contract.ffprobe), destination, expectation)
+    if verification.frame_count is None:
+        raise RecoveryError("Autoteste final nao informou contagem exata de quadros")
+    if not verification.passed:
+        details = " | ".join(f"{issue.code}: {issue.message}" for issue in verification.errors)
+        raise RecoveryError("Autoteste final falhou: " + details)
+    log(
+        f"SELF_TEST_OK {destination} size={destination.stat().st_size} "
+        f"codec={delivery.video_codec} frames={verification.frame_count}"
+    )
     return destination
 
+
+def verify_recovery_output(
+    contract: RecoveryContract,
+    path: Path,
+    expected: VerifyExpectation,
+):
+    """Honor the original job quick/deep verification contract."""
+
+    if contract.deep_verify:
+        return deep_verify(
+            str(contract.ffmpeg),
+            str(contract.ffprobe),
+            path,
+            expected,
+        )
+    return quick_verify(str(contract.ffprobe), path, expected)
 
 def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None], *, timeout_minutes: float) -> Path:
     contract.output.parent.mkdir(parents=True, exist_ok=True)
@@ -1025,30 +1144,76 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             height=contract.target_height, fps=contract.target_fps, codec="ffv1",
             duration_minimum=contract.duration - 0.5,
         )
-        if abs(_duration(staged_info) - contract.duration) > 0.5:
+        staged_quality = inspect_matroska_segment(staged_master)
+        if (
+            abs(_duration(staged_info) - contract.duration) > 0.5
+            or staged_quality.packet_count != contract.total_target_frames
+        ):
             raise RecoveryError(
-                f"Master local tem duracao {_duration(staged_info):.3f}s; esperada {contract.duration:.3f}s"
+                f"Master local fora do contrato: duration={_duration(staged_info):.3f}s "
+                f"packets={staged_quality.packet_count}/{contract.total_target_frames}"
             )
         master = staged_master
-        log(f"MASTER_LOCAL_REUSE {master} duration={_duration(staged_info):.3f}s")
+        log(
+            f"MASTER_LOCAL_REUSE {master} duration={_duration(staged_info):.3f}s "
+            f"packets={staged_quality.packet_count}"
+        )
     partial = contract.output.with_name(f".{contract.output.stem}.recovery-partial{contract.output.suffix}")
-    command, _color, delivery = _final_command(contract, master, partial, duration=contract.duration)
+    audio_filter = ""
+    if contract.expect_audio and contract.audio_mode != "Preservar dinâmica original":
+        measurements = None
+        try:
+            measurements = analyze_loudness(
+                str(contract.ffmpeg),
+                str(contract.source),
+                contract.duration,
+                contract.audio_mode,
+            )
+            log(f"AUDIO_ANALYSIS_OK mode={contract.audio_mode} measurements={measurements}")
+        except Exception as exc:
+            log(
+                "AUDIO_ANALYSIS_FALLBACK "
+                f"mode={contract.audio_mode} error={type(exc).__name__}: {exc}"
+            )
+        audio_filter = build_audio_filter(contract.audio_mode, measurements)
+    command, _color, delivery = _final_command(
+        contract,
+        master,
+        partial,
+        duration=contract.duration,
+        audio_filter=audio_filter,
+    )
+    expected_audio_rate = (
+        48000
+        if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
+        else contract.audio_sample_rate
+    )
     expectation = VerifyExpectation(
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
-        duration=contract.duration, expect_audio=True, video_codec=delivery.video_codec,
-        audio_codec=delivery.audio_codec, audio_channels=2, audio_sample_rate=48000,
+        duration=contract.duration, expect_audio=contract.expect_audio, video_codec=delivery.video_codec,
+        audio_codec=delivery.audio_codec if contract.expect_audio else None,
+        audio_channels=contract.audio_channels if contract.expect_audio else None,
+        audio_sample_rate=expected_audio_rate if contract.expect_audio else None,
+        frame_tolerance=0,
     )
     verification = None
     if partial.is_file():
         log(f"PARTIAL_REUSE_CHECK {partial} size={partial.stat().st_size}")
-        try:
-            candidate = quick_verify(str(contract.ffprobe), partial, expectation)
-        except Exception as exc:
+        if contract.expect_audio and contract.audio_mode != "Preservar dinâmica original":
             candidate = None
-            details = f"{type(exc).__name__}: {exc}"
+            details = (
+                "audio mastering contract requires a fresh 1.2.7 encode "
+                f"(mode={contract.audio_mode})"
+            )
         else:
-            details = " | ".join(f"{issue.code}: {issue.message}" for issue in candidate.errors)
-        if candidate is not None and candidate.passed:
+            try:
+                candidate = verify_recovery_output(contract, partial, expectation)
+            except Exception as exc:
+                candidate = None
+                details = f"{type(exc).__name__}: {exc}"
+            else:
+                details = " | ".join(f"{issue.code}: {issue.message}" for issue in candidate.errors)
+        if candidate is not None and candidate.passed and candidate.frame_count is not None:
             verification = candidate
             log("PARTIAL_REUSE_OK completed orphan encode accepted")
         else:
@@ -1063,8 +1228,10 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
         )
         _run_logged(command, label="final-encode", log=log, timeout_seconds=max(43200, timeout_minutes * 60))
         log("VERIFY_START quick contract + frame count")
-        verification = quick_verify(str(contract.ffprobe), partial, expectation)
+        verification = verify_recovery_output(contract, partial, expectation)
     _atomic_json(contract.result_path, {"schema": 1, "job_id": contract.job_id, "verification": verification.to_dict()})
+    if verification.frame_count is None:
+        raise RecoveryError("Verificacao final nao informou contagem exata de quadros")
     if not verification.passed:
         details = " | ".join(f"{issue.code}: {issue.message}" for issue in verification.errors)
         raise RecoveryError("Verificacao final falhou: " + details)

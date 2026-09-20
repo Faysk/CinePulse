@@ -4,10 +4,12 @@ import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from cinepulse.hardware import HardwareProfile
+import cinepulse.rife_recovery as rife_recovery
 from cinepulse.rife_recovery import (
     acceptable_segment_frame_counts,
     ai_cache_key,
@@ -15,16 +17,73 @@ from cinepulse.rife_recovery import (
     contiguous_segments,
     frame_count_from_container_duration,
     original_target_counts,
+    recovery_audio_expectation,
     recovery_cpu_threads,
     recovery_gpu_index,
     recovery_uses_uhd,
     remaining_schedule,
     source_chunk_counts,
+    verify_recovery_output,
     without_faststart,
 )
 
 
 class RifeRecoveryTests(unittest.TestCase):
+    def test_recovery_master_concat_does_not_use_duration_clip(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        start = source.index("def concatenate_master(")
+        end = source.index("\ndef _final_filter(", start)
+        block = source[start:end]
+        self.assertNotIn('"-t"', block)
+        self.assertIn("inspect_matroska_segment(partial)", block)
+        self.assertIn("contract.total_target_frames", block)
+
+    def test_recovery_final_delivery_is_frame_bound_and_exactly_verified(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        start = source.index("def _final_command(")
+        end = source.index("\ndef self_test(", start)
+        block = source[start:end]
+        self.assertIn('"-frames:v", str(frame_limit)', block)
+        self.assertIn("if float(duration) + 1e-9 < float(contract.duration):", block)
+        self.assertIn('command += ["-t", f"{duration:.6f}"]', block)
+
+        final_start = source.index("def finalize(")
+        final_end = source.index("\ndef _space_check(", final_start)
+        final_block = source[final_start:final_end]
+        self.assertIn("frame_tolerance=0", final_block)
+        self.assertIn("candidate.frame_count is not None", final_block)
+        self.assertIn("if verification.frame_count is None:", final_block)
+        self.assertIn("staged_quality.packet_count != contract.total_target_frames", final_block)
+
+    def test_recovery_verification_honors_quick_and_deep_contract(self) -> None:
+        expected = object()
+        path = Path("candidate.mp4")
+
+        quick_contract = SimpleNamespace(
+            deep_verify=False,
+            ffmpeg=Path("ffmpeg.exe"),
+            ffprobe=Path("ffprobe.exe"),
+        )
+        with mock.patch("cinepulse.rife_recovery.quick_verify", return_value="quick") as quick:
+            self.assertEqual("quick", verify_recovery_output(quick_contract, path, expected))
+            quick.assert_called_once_with("ffprobe.exe", path, expected)
+
+        deep_contract = SimpleNamespace(
+            deep_verify=True,
+            ffmpeg=Path("ffmpeg.exe"),
+            ffprobe=Path("ffprobe.exe"),
+        )
+        with mock.patch("cinepulse.rife_recovery.deep_verify", return_value="deep") as deep:
+            self.assertEqual("deep", verify_recovery_output(deep_contract, path, expected))
+            deep.assert_called_once_with("ffmpeg.exe", "ffprobe.exe", path, expected)
+
+    def test_recovery_uses_persisted_delivery_profile_and_verification_level(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        self.assertIn("profile=contract.delivery_profile", source)
+        self.assertIn('delivery_profile=str(settings.get("delivery_profile") or PROFILE_AUTO)', source)
+        self.assertIn('deep_verify=bool(expected.get("deep", settings.get("deep_verify", False)))', source)
+        self.assertIn("verify_recovery_output(contract, partial, expectation)", source)
+
     def test_without_faststart_preserves_other_muxer_arguments(self) -> None:
         self.assertEqual(
             without_faststart(["-tag:v", "hvc1", "-movflags", "+faststart"]),
@@ -64,6 +123,91 @@ class RifeRecoveryTests(unittest.TestCase):
             {2, 3, 4},
             acceptable_segment_frame_counts(legacy[0], distributed[0].target_frames),
         )
+
+    def test_recovery_audio_expectation_uses_persisted_contract(self) -> None:
+        source_info = {
+            "streams": [
+                {"codec_type": "video"},
+                {"codec_type": "audio", "channels": 6, "sample_rate": "44100"},
+            ]
+        }
+        self.assertEqual(
+            (True, 6, 48000),
+            recovery_audio_expectation(
+                {
+                    "expect_audio": True,
+                    "audio_channels": 6,
+                    "audio_sample_rate": 48000,
+                },
+                {"preserve_audio": True},
+                source_info,
+            ),
+        )
+
+    def test_recovery_audio_expectation_supports_silent_jobs(self) -> None:
+        source_info = {"streams": [{"codec_type": "video"}]}
+        self.assertEqual(
+            (False, None, None),
+            recovery_audio_expectation(
+                {"expect_audio": False},
+                {"preserve_audio": False},
+                source_info,
+            ),
+        )
+
+    def test_legacy_recovery_audio_expectation_falls_back_to_source_shape(self) -> None:
+        source_info = {
+            "streams": [
+                {"codec_type": "audio", "channels": 1, "sample_rate": "44100"},
+            ]
+        }
+        self.assertEqual(
+            (True, 1, 44100),
+            recovery_audio_expectation(
+                {},
+                {"preserve_audio": True},
+                source_info,
+            ),
+        )
+
+    def test_recovery_final_delivery_respects_audio_presence_and_mastering(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+
+        command_start = source.index("def _final_command(")
+        command_end = source.index("\ndef self_test(", command_start)
+        command_block = source[command_start:command_end]
+        self.assertIn("if contract.expect_audio:", command_block)
+        self.assertIn('command += ["-map", "0:v:0", "-an"]', command_block)
+        self.assertIn('command += ["-af", audio_filter]', command_block)
+
+        final_start = source.index("def finalize(")
+        final_end = source.index("\ndef _space_check(", final_start)
+        final_block = source[final_start:final_end]
+        self.assertIn("analyze_loudness(", final_block)
+        self.assertIn("build_audio_filter(contract.audio_mode, measurements)", final_block)
+        self.assertIn("audio mastering contract requires a fresh 1.2.7 encode", final_block)
+        self.assertIn("expect_audio=contract.expect_audio", final_block)
+        self.assertIn("audio_channels=contract.audio_channels if contract.expect_audio else None", final_block)
+
+    def test_recovery_preserves_original_cpu_or_gpu_backend(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        self.assertIn('use_cpu = bool(settings.get("use_cpu", False))', source)
+        self.assertIn("gpu_index=-1 if use_cpu else recovery_gpu_index()", source)
+        self.assertIn('rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index', source)
+        self.assertIn('rife_jobs = "1:2:2" if contract.use_cpu else "1:1:1"', source)
+        self.assertGreaterEqual(source.count("use_cpu=contract.use_cpu"), 2)
+
+    def test_recovery_self_test_uses_original_container_and_codec_contract(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        start = source.index("def self_test(")
+        end = source.index("\ndef verify_recovery_output(", start)
+        block = source[start:end]
+        self.assertIn('suffix = contract.output.suffix or ".mp4"', block)
+        self.assertIn('f"recovery-self-test{suffix}"', block)
+        self.assertNotIn('"recovery-self-test.mp4"', block)
+        self.assertIn("video_codec=delivery.video_codec", block)
+        self.assertIn("frame_tolerance=0", block)
+        self.assertIn("verification.frame_count is None", block)
 
     def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
         with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=28):

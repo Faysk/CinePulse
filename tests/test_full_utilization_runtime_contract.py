@@ -10,6 +10,7 @@ QUALITY_VIEW = ROOT / "src" / "cinepulse" / "ui" / "quality_view.py"
 RIFE = ROOT / "src" / "cinepulse" / "rife_safe_runner.py"
 RIFE_ENGINE = ROOT / "src" / "cinepulse" / "rife_engine.py"
 RIFE_RECOVERY = ROOT / "src" / "cinepulse" / "rife_recovery.py"
+VFX = ROOT / "src" / "cinepulse" / "vfx.py"
 
 
 class FullUtilizationRuntimeContractTests(unittest.TestCase):
@@ -20,6 +21,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         cls.rife = RIFE.read_text(encoding="utf-8")
         cls.rife_engine = RIFE_ENGINE.read_text(encoding="utf-8")
         cls.rife_recovery = RIFE_RECOVERY.read_text(encoding="utf-8")
+        cls.vfx = VFX.read_text(encoding="utf-8")
 
     def test_worker_has_no_removed_headroom_local_reference(self) -> None:
         self.assertNotIn("neural_headroom", self.studio)
@@ -73,8 +75,12 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         )
         self.assertIn('"--gpu-index"', self.rife_engine)
         self.assertIn("gpu_index=args.gpu_index", self.rife)
-        self.assertIn('"-g", str(contract.gpu_index)', self.rife_recovery)
-        self.assertIn("gpu_index=contract.gpu_index", self.rife_recovery)
+        self.assertIn(
+            "rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index",
+            self.rife_recovery,
+        )
+        self.assertIn('"-g", str(rife_gpu_index)', self.rife_recovery)
+        self.assertIn("gpu_index=max(0, contract.gpu_index)", self.rife_recovery)
 
     def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
         self.assertIn("distributed_chunk_target_count(", self.studio)
@@ -82,6 +88,43 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("produced_target != total_target_count", self.studio)
         self.assertIn("RIFE terminou fora da contagem alvo", self.studio)
         self.assertNotIn("round(chunk_duration * target_fps)", self.studio)
+
+    def test_rife_master_concat_is_not_duration_clipped(self) -> None:
+        self.assertIn("master_quality = inspect_matroska_segment(interpolated)", self.studio)
+        self.assertIn("master_quality.packet_count != total_target_count", self.studio)
+        self.assertIn("Master de recuperacao existente nao cumpre o contrato", self.rife_recovery)
+        self.assertIn("master_quality.packet_count == contract.total_target_frames", self.rife_recovery)
+        self.assertIn("Master concatenado tem", self.rife_recovery)
+        self.assertNotIn(
+            '"-c", "copy",\n                "-t", f"{duration:.6f}"',
+            self.studio,
+        )
+        self.assertNotIn(
+            '"-c", "copy", "-t", f"{contract.duration:.6f}"',
+            self.rife_recovery,
+        )
+
+    def test_final_cfr_delivery_is_frame_bound_not_timestamp_clipped(self) -> None:
+        self.assertIn(
+            "final_target_frames = max(1, int(round(project_duration * target_fps)))",
+            self.studio,
+        )
+        self.assertIn('"-frames:v", str(final_target_frames)', self.studio)
+        self.assertNotIn(
+            '"-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t"',
+            self.studio,
+        )
+        self.assertIn(
+            "output_frame_count = max(1, int(round(float(duration) * float(output_fps))))",
+            self.vfx,
+        )
+        self.assertIn('"-frames:v", str(output_frame_count)', self.vfx)
+        self.assertNotIn('command += ["-t", f"{duration:.6f}"', self.vfx)
+
+    def test_final_verification_rejects_any_frame_count_drift(self) -> None:
+        self.assertIn("frame_tolerance=0", self.studio)
+        self.assertIn("if result.frame_count is None:", self.studio)
+        self.assertIn("FFprobe não informou a contagem exata de quadros", self.studio)
 
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)

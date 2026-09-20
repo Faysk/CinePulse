@@ -239,7 +239,7 @@ def build_vfx_filter_graph(
     return (
         f"[0:v]format={output_pixel_format},setpts=PTS-STARTPTS[base];"
         f"[1:v]{scale}setpts=PTS-STARTPTS[effect];"
-        "[base][effect]overlay=0:0:format=auto,"
+        "[base][effect]overlay=0:0:format=auto:eof_action=repeat:shortest=0:repeatlast=1,"
         "eq=contrast=1.025:saturation=1.04,"
         f"format={output_pixel_format},"
         f"setparams=range={set_range}:color_primaries={output_primaries}:color_trc={output_transfer}:colorspace={output_space}[vout]"
@@ -370,7 +370,8 @@ def render_vfx_intermediate(
         command += ["-map", "2:a:0"]
     else:
         command += ["-an"]
-    command += ["-t", f"{duration:.6f}", "-r", f"{output_fps:.8f}"]
+    output_frame_count = max(1, int(round(float(duration) * float(output_fps))))
+    command += ["-frames:v", str(output_frame_count), "-r", f"{output_fps:.8f}"]
 
     if final_delivery:
         command += list(final_video_args or ())
