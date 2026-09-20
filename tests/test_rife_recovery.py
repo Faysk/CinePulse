@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 from cinepulse.rife_recovery import (
     ai_cache_key,
@@ -12,6 +13,7 @@ from cinepulse.rife_recovery import (
     contiguous_segments,
     frame_count_from_container_duration,
     original_target_counts,
+    recovery_cpu_threads,
     remaining_schedule,
     source_chunk_counts,
     without_faststart,
@@ -42,6 +44,15 @@ class RifeRecoveryTests(unittest.TestCase):
     def test_matroska_duration_recovers_redistributed_frame_count(self) -> None:
         self.assertEqual(frame_count_from_container_duration(0.133, 120.0), 16)
         self.assertEqual(frame_count_from_container_duration(0.141, 120.0), 17)
+
+    def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
+        with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=28):
+            self.assertEqual(28, recovery_cpu_threads(4))
+
+    def test_recovery_cpu_falls_back_to_legacy_value_when_detection_is_unavailable(self) -> None:
+        with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=None):
+            self.assertEqual(4, recovery_cpu_threads(4))
+            self.assertEqual(1, recovery_cpu_threads(None))
 
     def test_source_chunks_merge_one_frame_tail(self) -> None:
         counts = source_chunk_counts(21745, 8)
