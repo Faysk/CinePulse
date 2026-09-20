@@ -209,6 +209,14 @@ def ai_cache_key(
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
 
+def recovery_cpu_threads(legacy_value: int | None = None) -> int:
+    """Use the complete logical CPU envelope while keeping old jobs readable."""
+    detected = os.cpu_count()
+    if detected is not None and int(detected) > 0:
+        return int(detected)
+    return max(1, int(legacy_value or 1))
+
+
 def source_chunk_counts(total_source_frames: int, chunk_frames: int) -> list[int]:
     if total_source_frames < 2 or chunk_frames < 2:
         raise ValueError("RIFE recovery requires at least two frames per chunk")
@@ -395,7 +403,7 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         target_height=int(target_spec["height"]), target_fps=target_fps,
         total_source_frames=round(duration * source_fps), total_target_frames=round(duration * target_fps),
         chunk_frames=int(storage.get("rife_chunk_frames") or 0),
-        cpu_threads=int(settings.get("cpu_threads") or 1),
+        cpu_threads=recovery_cpu_threads(settings.get("cpu_threads")),
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
