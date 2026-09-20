@@ -38,14 +38,12 @@ from .gpu_compositor import (
     GpuCompositorStore,
     OverlayLayer,
     build_cuda_overlay_stack_filter,
-    compositor_vram_floor_mb,
     detect_gpu_compositor_capabilities,
 )
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_media import detect_gpu_media_capabilities
 from .hardware import HardwareProfile, detect_hardware
 from .paths import PATHS
-from .pipeline_runtime import vram_free_mb
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
 
@@ -471,17 +469,9 @@ def export_composer_auto(
                 route.layers,
                 resident_decoder,
             )
-            resident_floor = compositor_vram_floor_mb(
-                request.profile.width,
-                request.profile.height,
-                len(route.layers),
-            )
-            resident_vram = vram_free_mb(resident_key.gpu_index)
             if (
                 not resident_route.use_gpu
                 and evidence_store.benchmark_due(resident_key)
-                and resident_vram is not None
-                and resident_vram >= resident_floor
             ):
                 try:
                     if _learn_exact_gpu_route(
@@ -516,67 +506,34 @@ def export_composer_auto(
         and evidence_store.benchmark_due(route.key)
         and "evidence is absent or stale" in route.reason
     ):
-        learn_floor = compositor_vram_floor_mb(
-            request.profile.width,
-            request.profile.height,
-            len(route.layers),
-        )
-        learn_vram = vram_free_mb(route.key.gpu_index)
-        if learn_vram is not None and learn_vram >= learn_floor:
-            try:
-                if _learn_exact_gpu_route(
-                    request,
-                    route,
-                    evidence_store,
-                    cancelled=cancel,
-                    log=logger,
-                    envelopes=envelopes,
-                ):
-                    route = ComposerGpuRoute(
-                        True,
-                        "exact H6 evidence learned on this machine",
-                        route.layer,
-                        route.key,
-                        route.layers,
-                        route.base_decoder,
-                    )
-            except InterruptedError:
-                raise
-            except Exception as exc:
-                evidence_store.record_benchmark_failure(route.key, exc)
-                logger(
-                    "H6 Composer: benchmark físico local falhou; cooldown aplicado e "
-                    "CPU reference preservado. "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-    if route.use_gpu:
-        vram_floor = compositor_vram_floor_mb(
-            request.profile.width,
-            request.profile.height,
-            len(route.layers),
-        )
-        live_vram = vram_free_mb(route.key.gpu_index)
-        if live_vram is None or live_vram < vram_floor:
-            logger(
-                "H6 Composer: evidência CUDA preservada, mas VRAM livre atual "
-                f"({live_vram if live_vram is not None else 'n/a'} MiB) não cobre "
-                f"o piso do stack ({vram_floor:.0f} MiB); CPU reference neste export."
-            )
-            result = export_composer_reference(
+        try:
+            if _learn_exact_gpu_route(
                 request,
+                route,
+                evidence_store,
                 cancelled=cancel,
-                progress=progress,
                 log=logger,
                 envelopes=envelopes,
+            ):
+                route = ComposerGpuRoute(
+                    True,
+                    "exact H6 evidence learned on this machine",
+                    route.layer,
+                    route.key,
+                    route.layers,
+                    route.base_decoder,
+                )
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            evidence_store.record_benchmark_failure(route.key, exc)
+            logger(
+                "H6 Composer: benchmark físico local falhou; cooldown aplicado e "
+                "CPU reference preservado. "
+                f"{type(exc).__name__}: {exc}"
             )
-            return ComposerAutoExportResult(
-                result.output,
-                result.frames,
-                "cpu-reference",
-                False,
-                "insufficient-live-vram",
-            )
+
+    if route.use_gpu:
         try:
             result = _export_gpu(request, route, cancelled=cancel, log=logger)
             if progress:
@@ -586,11 +543,14 @@ def export_composer_auto(
             raise
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
-            current_vram = vram_free_mb(route.key.gpu_index)
-            integrity_failure = "composer gpu verification failed" in str(exc).lower()
+            failure_text = str(exc).lower()
+            oom_like = any(
+                token in failure_text
+                for token in ("out of memory", "oom", "failed to allocate", "cuda_error_out_of_memory")
+            )
+            integrity_failure = "composer verification failed" in failure_text
             gpu_failure = looks_like_gpu_runtime_failure(exc)
-            enough_headroom = current_vram is not None and current_vram >= vram_floor
-            should_invalidate = integrity_failure or (gpu_failure and enough_headroom)
+            should_invalidate = integrity_failure or (gpu_failure and not oom_like)
             if route.key is not None and should_invalidate:
                 evidence_store.invalidate(route.key)
                 evidence_text = "evidência exata invalidada"
