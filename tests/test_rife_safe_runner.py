@@ -168,6 +168,51 @@ class RifeSafeRunnerTests(unittest.TestCase):
             self.assertEqual("2:2:2", applied.jobs)
             self.assertEqual(2, calls["count"])
 
+    def test_repeated_oom_walks_fallback_to_serial_without_live_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            native_dir = Path(temporary) / "native"
+            aggressive = RifeExecutionPolicy(
+                uhd=False,
+                jobs="3:3:3",
+                native_target=8,
+                requested_target=8,
+                gpu_index=0,
+                measured=False,
+            )
+            fallback = RifeExecutionPolicy(
+                uhd=False,
+                jobs="2:2:2",
+                native_target=8,
+                requested_target=8,
+                gpu_index=0,
+                measured=False,
+            )
+            calls: list[str] = []
+
+            def fake_run(command, *, cwd=None):
+                jobs = command[command.index("-j") + 1]
+                calls.append(jobs)
+                if len(calls) <= 2:
+                    raise RuntimeError("VK_ERROR_OUT_OF_DEVICE_MEMORY")
+
+            with (
+                patch("cinepulse.rife_safe_runner._run", side_effect=fake_run),
+                patch("cinepulse.rife_safe_runner.validate_png_sequence", return_value=[]),
+            ):
+                applied = _run_native_with_rollback(
+                    rife_executable=Path("rife-ncnn-vulkan.exe"),
+                    model=Path("rife-v4.6"),
+                    incoming=Path("incoming"),
+                    native_dir=native_dir,
+                    policy=aggressive,
+                    fallback=fallback,
+                    tuning_key=None,
+                    tuning_store=None,
+                )
+
+            self.assertEqual(["3:3:3", "2:2:2", "1:1:1"], calls)
+            self.assertEqual("1:1:1", applied.jobs)
+
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
         self.assertEqual("1:2:2", policy.jobs)
