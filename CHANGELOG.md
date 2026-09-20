@@ -9,6 +9,8 @@
 - encode final CFR substitui o corte global por duração por `-frames:v` calculado a partir de `round(project_duration*target_fps)`;
 - VFX final/intermediário usa contagem exata de frames e torna explícito `overlay` com `eof_action=repeat`, `shortest=0` e `repeatlast=1`, evitando encurtar a base quando o layer reativo termina primeiro;
 - verificação final do Studio passa a exigir contagem de quadros conhecida e tolerância zero; uma saída com frame faltando/sobrando ou contagem indeterminada não é promovida;
+- recovery passa a restaurar o contrato real de áudio do job: suporta saída silenciosa quando esperado, preserva canais reais, ajusta sample rate conforme o codec de entrega e reaplica o `audio_mode`/loudness do render original;
+- partials antigos de recovery com masterização de áudio não são reutilizados sem prova do filtro aplicado; a 1.2.7 força um encode novo nesses casos.
 - adiciona contratos de regressão para master RIFE, recovery e entrega final frame-bound.
 
 ## 1.2.6 — 2026-09-20
