@@ -290,7 +290,7 @@ class RifeSafeRunnerTests(unittest.TestCase):
             jobs="1:1:1",
             native_target=4,
             requested_target=4,
-            gpu_index=0,
+            gpu_index=2,
             measured=False,
         )
         output = io.StringIO()
@@ -307,11 +307,48 @@ class RifeSafeRunnerTests(unittest.TestCase):
                     "--frames", "4",
                     "--device", "gpu",
                     "--jobs-override", "1:1:1",
+                    "--gpu-index", "2",
                 ]
             )
         self.assertEqual(0, code)
-        self.assertIn("CINEPULSE_RIFE_SAFE APPLIED jobs=1:1:1 gpu=0", output.getvalue())
+        self.assertIn("CINEPULSE_RIFE_SAFE APPLIED jobs=1:1:1 gpu=2", output.getvalue())
         self.assertEqual("1:1:1", run.call_args.kwargs["jobs_override"])
+        self.assertEqual(2, run.call_args.kwargs["gpu_index"])
+
+    def test_pinned_gpu_index_skips_adapter_rediscovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            outgoing = root / "out"
+
+            def fake_rollback(**kwargs):
+                return kwargs["policy"]
+
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.validate_png_sequence",
+                    return_value=[Path("00000000.png"), Path("00000001.png")],
+                ),
+                patch("cinepulse.rife_safe_runner.validate_png", return_value=(1920, 1080)),
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    side_effect=AssertionError("pinned GPU must not rediscover adapters"),
+                ),
+                patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
+                patch("cinepulse.rife_safe_runner._move_native_frames"),
+            ):
+                applied = run_safe_rife(
+                    rife_executable=root / "rife.exe",
+                    model=root / "rife-v4.6",
+                    incoming=incoming,
+                    outgoing=outgoing,
+                    requested_target=4,
+                    device="gpu",
+                    gpu_index=2,
+                )
+
+            self.assertEqual(2, applied.gpu_index)
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
