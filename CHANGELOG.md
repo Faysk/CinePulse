@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.8 — 2026-09-21
+
+- adiciona `bounded_audio_input_args()` para aplicar a janela de duração como opção do input de áudio (`-t ... -i audio`), nunca como corte global do mux;
+- preview/final normal, VFX fused e recovery passam a usar a mesma regra, evitando que a faixa inteira continue depois do último frame de vídeo em previews/autotestes;
+- o self-test do recovery deixa de adicionar `-t` global depois de `-frames:v`, preservando a contagem exata de vídeo enquanto limita apenas o áudio;
+- master intermediário do Studio substitui `-t video_duration` por `-frames:v round(video_duration*work_fps)`;
+- materialização de cor FFV1 usa contagem exata de frames e valida `packet_count` depois da escrita;
+- comparação A/B passa a usar o FPS real do resultado processado, `hstack` com cadência explícita e `-frames:v`, removendo o último `-t` global do Studio;
+- loudness analysis usa o mesmo helper de input de áudio limitado;
+- adiciona testes de regressão para janelas de áudio, intermediários frame-bound e comparação A/B.
+
 ## 1.2.7 — 2026-09-21
 
 - remove `-t duration` do concat do master RIFE para impedir corte do último frame quando `round(duration*fps)` exige um frame além do timestamp decimal;
