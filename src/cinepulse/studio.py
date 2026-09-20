@@ -5759,11 +5759,19 @@ class VideoOptimizerStudio:
                             for token in ("out of memory", "oom", "failed to allocate", "vk_error_out_of_device_memory")
                         )
                         retry_policy = conservative_policy
+                        if oom_like and policy == conservative_policy and policy.process_jobs > 1:
+                            retry_policy = RealEsrganPolicy(
+                                tile=policy.tile,
+                                load_jobs=1,
+                                process_jobs=1,
+                                save_jobs=1,
+                                gpu_index=policy.gpu_index,
+                            )
                         if policy != retry_policy and retry_policy not in attempted:
                             self._log(
                                 f"H3 Real-ESRGAN: {'OOM real' if oom_like else 'falha/integridade'} "
-                                f"com tile={policy.tile} pipeline={policy.pipeline}; repetindo uma vez "
-                                f"com fallback fixo {retry_policy.pipeline}, sem nova medição de recursos."
+                                f"com tile={policy.tile} pipeline={policy.pipeline}; retry "
+                                f"{retry_policy.pipeline} acionado somente após a falha, sem nova medição de recursos."
                             )
                             policy = retry_policy
                             continue
