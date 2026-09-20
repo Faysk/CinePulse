@@ -414,7 +414,9 @@ def run_safe_rife(
         )
         if jobs_override:
             override_policy = RifePolicy(jobs_override, active_gpu_index)
-            if override_policy.pressure > aggressive_policy.pressure:
+            override_values = tuple(int(value) for value in override_policy.jobs.split(":"))
+            aggressive_values = tuple(int(value) for value in aggressive_policy.jobs.split(":"))
+            if any(current > maximum for current, maximum in zip(override_values, aggressive_values, strict=True)):
                 raise ValueError(
                     "RIFE jobs override não pode exceder a política full-utilization "
                     f"({override_policy.jobs} > {aggressive_policy.jobs})"
