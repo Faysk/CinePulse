@@ -22,6 +22,10 @@ O Studio passa `frame_tolerance=0` para a verificação final e recusa promoçã
 
 O render VFX também passa a ser limitado por quantidade de quadros. O overlay declara explicitamente `eof_action=repeat`, `shortest=0` e `repeatlast=1`, então um layer reativo que termina alguns milissegundos antes não encurta a base.
 
+## Recovery preserva o áudio do job
+
+O recovery deixa de assumir estéreo/48 kHz e passa a restaurar `expect_audio`, canais e sample rate a partir do contrato persistido do render. Jobs silenciosos continuam silenciosos. Quando o job original usava normalização/masterização, o recovery repete a análise loudness de duas passagens quando possível e usa o mesmo fallback dinâmico do Studio se a medição falhar. Partials antigos sem prova dessa masterização são preservados como rejeitados e um encode novo é criado.
+
 ## Proteções mantidas
 
 Continuam ativos AtomicOutput, verificação final, validação de PNG/mídia, fallback pós-falha real, cancelamento seguro, full-utilization e pinning multi-GPU.
