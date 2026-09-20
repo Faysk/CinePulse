@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STUDIO = ROOT / "src" / "cinepulse" / "studio.py"
 QUALITY_VIEW = ROOT / "src" / "cinepulse" / "ui" / "quality_view.py"
+RIFE = ROOT / "src" / "cinepulse" / "rife_safe_runner.py"
 
 
 class FullUtilizationRuntimeContractTests(unittest.TestCase):
@@ -14,6 +15,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.studio = STUDIO.read_text(encoding="utf-8")
         cls.quality = QUALITY_VIEW.read_text(encoding="utf-8")
+        cls.rife = RIFE.read_text(encoding="utf-8")
 
     def test_worker_has_no_removed_headroom_local_reference(self) -> None:
         self.assertNotIn("neural_headroom", self.studio)
@@ -49,6 +51,16 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("retry_policy = conservative_policy", self.studio)
         self.assertIn("sem nova medição de recursos", self.studio)
         self.assertIn("gpu_media_runtime_disabled = True", self.studio)
+        self.assertIn("policy == conservative_policy and policy.process_jobs > 1", self.studio)
+        self.assertIn("load_jobs=1", self.studio)
+        self.assertIn("process_jobs=1", self.studio)
+        self.assertIn("save_jobs=1", self.studio)
+
+    def test_rife_uses_failure_driven_serial_fallback_and_unique_staging(self) -> None:
+        self.assertIn('current.jobs == "1:1:1"', self.rife)
+        self.assertIn('jobs="1:1:1"', self.rife)
+        self.assertIn("time.time_ns()", self.rife)
+        self.assertNotIn("vram_free_mb(", self.rife)
 
 
 if __name__ == "__main__":
