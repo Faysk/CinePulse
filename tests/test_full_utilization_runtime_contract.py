@@ -10,6 +10,7 @@ QUALITY_VIEW = ROOT / "src" / "cinepulse" / "ui" / "quality_view.py"
 RIFE = ROOT / "src" / "cinepulse" / "rife_safe_runner.py"
 RIFE_ENGINE = ROOT / "src" / "cinepulse" / "rife_engine.py"
 RIFE_RECOVERY = ROOT / "src" / "cinepulse" / "rife_recovery.py"
+VFX = ROOT / "src" / "cinepulse" / "vfx.py"
 
 
 class FullUtilizationRuntimeContractTests(unittest.TestCase):
@@ -20,6 +21,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         cls.rife = RIFE.read_text(encoding="utf-8")
         cls.rife_engine = RIFE_ENGINE.read_text(encoding="utf-8")
         cls.rife_recovery = RIFE_RECOVERY.read_text(encoding="utf-8")
+        cls.vfx = VFX.read_text(encoding="utf-8")
 
     def test_worker_has_no_removed_headroom_local_reference(self) -> None:
         self.assertNotIn("neural_headroom", self.studio)
@@ -97,6 +99,23 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             '"-c", "copy", "-t", f"{contract.duration:.6f}"',
             self.rife_recovery,
         )
+
+    def test_final_cfr_delivery_is_frame_bound_not_timestamp_clipped(self) -> None:
+        self.assertIn(
+            "final_target_frames = max(1, int(round(project_duration * target_fps)))",
+            self.studio,
+        )
+        self.assertIn('"-frames:v", str(final_target_frames)', self.studio)
+        self.assertNotIn(
+            '"-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)), "-t"',
+            self.studio,
+        )
+        self.assertIn(
+            "output_frame_count = max(1, int(round(float(duration) * float(output_fps))))",
+            self.vfx,
+        )
+        self.assertIn('"-frames:v", str(output_frame_count)', self.vfx)
+        self.assertNotIn('command += ["-t", f"{duration:.6f}"', self.vfx)
 
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)
