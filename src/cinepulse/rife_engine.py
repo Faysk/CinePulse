@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,26 @@ def target_frame_count(duration: float, fps: float, minimum: int = 2) -> int:
     return max(minimum, round(max(0.0, duration) * max(1.0, fps)))
 
 
+def applied_jobs_from_log(lines: Iterable[str]) -> str:
+    """Return the last successful RIFE jobs policy reported by the safe runner."""
+    for line in reversed(tuple(lines)):
+        if not str(line).startswith("CINEPULSE_RIFE_SAFE APPLIED "):
+            continue
+        for token in str(line).split():
+            if not token.startswith("jobs="):
+                continue
+            jobs = token.partition("=")[2].strip()
+            parts = jobs.split(":")
+            try:
+                values = tuple(int(value) for value in parts)
+            except ValueError:
+                return ""
+            if len(values) == 3 and all(1 <= value <= 8 for value in values):
+                return jobs
+            return ""
+    return ""
+
+
 def build_command(
     paths: RifePaths,
     incoming: Path,
@@ -30,6 +51,7 @@ def build_command(
     use_cpu: bool,
     *,
     component_fingerprint: str = "",
+    jobs_override: str = "",
 ) -> list[str]:
     """Build the crash-safe CinePulse RIFE wrapper command.
 
@@ -64,4 +86,6 @@ def build_command(
     ]
     if component_fingerprint:
         command += ["--component-fingerprint", str(component_fingerprint)]
+    if jobs_override and not use_cpu:
+        command += ["--jobs-override", str(jobs_override)]
     return command
