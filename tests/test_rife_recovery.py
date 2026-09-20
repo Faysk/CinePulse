@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -22,6 +23,7 @@ from cinepulse.rife_recovery import (
     recovery_uses_uhd,
     remaining_schedule,
     source_chunk_counts,
+    verify_recovery_output,
     without_faststart,
 )
 
@@ -52,6 +54,35 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertIn("candidate.frame_count is not None", final_block)
         self.assertIn("if verification.frame_count is None:", final_block)
         self.assertIn("staged_quality.packet_count != contract.total_target_frames", final_block)
+
+    def test_recovery_verification_honors_quick_and_deep_contract(self) -> None:
+        expected = object()
+        path = Path("candidate.mp4")
+
+        quick_contract = SimpleNamespace(
+            deep_verify=False,
+            ffmpeg=Path("ffmpeg.exe"),
+            ffprobe=Path("ffprobe.exe"),
+        )
+        with mock.patch("cinepulse.rife_recovery.quick_verify", return_value="quick") as quick:
+            self.assertEqual("quick", verify_recovery_output(quick_contract, path, expected))
+            quick.assert_called_once_with("ffprobe.exe", path, expected)
+
+        deep_contract = SimpleNamespace(
+            deep_verify=True,
+            ffmpeg=Path("ffmpeg.exe"),
+            ffprobe=Path("ffprobe.exe"),
+        )
+        with mock.patch("cinepulse.rife_recovery.deep_verify", return_value="deep") as deep:
+            self.assertEqual("deep", verify_recovery_output(deep_contract, path, expected))
+            deep.assert_called_once_with("ffmpeg.exe", "ffprobe.exe", path, expected)
+
+    def test_recovery_uses_persisted_delivery_profile_and_verification_level(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        self.assertIn("profile=contract.delivery_profile", source)
+        self.assertIn('delivery_profile=str(settings.get("delivery_profile") or PROFILE_AUTO)', source)
+        self.assertIn('deep_verify=bool(expected.get("deep", settings.get("deep_verify", False)))', source)
+        self.assertIn("verify_recovery_output(contract, partial, expectation)", source)
 
     def test_without_faststart_preserves_other_muxer_arguments(self) -> None:
         self.assertEqual(
