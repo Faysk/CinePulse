@@ -115,9 +115,12 @@ def composer_has_audio_stream(ffprobe: str, path: str | Path) -> bool:
             timeout=15,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and bool((result.stdout or "").strip())
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"composer audio probe failed: {exc}") from exc
+    if result.returncode:
+        details = (result.stderr or "").strip()
+        raise RuntimeError(details or "composer audio probe failed")
+    return bool((result.stdout or "").strip())
 
 
 def verify_composer_product(
