@@ -5148,6 +5148,8 @@ class VideoOptimizerStudio:
     ) -> Path:
         comparison = processed.with_name(processed.stem + "_COMPARACAO.mp4")
         self._set_stage("Comparando", "Montando original e resultado lado a lado para conferência visual.")
+        comparison_fps = max(1.0, first_video_fps(probe_media(str(processed))))
+        comparison_frames = max(1, int(round(duration * comparison_fps)))
         command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
         if settings.mode == MODE_MUSIC:
             command += ["-stream_loop", "-1"]
@@ -5159,12 +5161,13 @@ class VideoOptimizerStudio:
             "pad=640:720:(ow-iw)/2:(oh-ih)/2:color=black[left];"
             "[1:v]scale=640:720:force_original_aspect_ratio=decrease:flags=lanczos,"
             "pad=640:720:(ow-iw)/2:(oh-ih)/2:color=black[right];"
-            "[left][right]hstack=inputs=2,format=yuv420p[out]"
+            f"[left][right]hstack=inputs=2:shortest=0,fps={comparison_fps:.8f},format=yuv420p[out]"
         )
         command += [
             "-filter_complex", graph, "-map", "[out]", "-map", "1:a:0?",
         ] + self._h264_encoder(1280, 720, settings.use_cpu) + [
-            "-c:a", "copy", "-threads", str(cpu_threads), "-t", f"{duration:.6f}",
+            "-c:a", "copy", "-frames:v", str(comparison_frames),
+            "-threads", str(cpu_threads),
             "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(comparison),
         ]
         self._run_ffmpeg(command, duration, 100, 0)
