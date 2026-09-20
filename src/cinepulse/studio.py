@@ -6544,6 +6544,10 @@ class VideoOptimizerStudio:
         )
         for issue in result.issues:
             self._log(f"VERIFY {issue.severity.upper()} [{issue.code}] {issue.message}")
+        if result.frame_count is None:
+            raise RuntimeError(
+                "A verificação final falhou: FFprobe não informou a contagem exata de quadros."
+            )
         if not result.passed:
             errors = " • ".join(issue.message for issue in result.errors)
             raise RuntimeError("A verificação final falhou: " + errors)
