@@ -76,6 +76,12 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn('"-g", str(contract.gpu_index)', self.rife_recovery)
         self.assertIn("gpu_index=contract.gpu_index", self.rife_recovery)
 
+    def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
+        self.assertIn("distributed_chunk_target_count(", self.studio)
+        self.assertIn("produced_target != total_target_count", self.studio)
+        self.assertIn("RIFE terminou fora da contagem alvo", self.studio)
+        self.assertNotIn("round(chunk_duration * target_fps)", self.studio)
+
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)
         self.assertIn("jobs_override=rife_jobs_override", self.studio)
