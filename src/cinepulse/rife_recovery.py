@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .audio_mastering import analyze_loudness, build_audio_filter
+from .audio_mastering import analyze_loudness, bounded_audio_input_args, build_audio_filter
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
 from .hardware import detect_hardware
@@ -1050,7 +1050,7 @@ def _final_command(
     ]
     if contract.expect_audio:
         command += [
-            "-t", f"{duration:.6f}", "-i", str(contract.source),
+            *bounded_audio_input_args(str(contract.source), duration),
             "-map", "0:v:0", "-map", "1:a:0",
         ]
     else:
