@@ -26,6 +26,7 @@ from typing import Any, Callable, Iterable
 
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
+from .hardware import detect_hardware
 from .matroska_quality import inspect_matroska_segment
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .verification import VerifyExpectation, quick_verify
@@ -69,6 +70,7 @@ class RecoveryContract:
     total_target_frames: int
     chunk_frames: int
     cpu_threads: int
+    gpu_index: int = 0
 
     @property
     def state_path(self) -> Path:
@@ -215,6 +217,12 @@ def recovery_cpu_threads(legacy_value: int | None = None) -> int:
     if detected is not None and int(detected) > 0:
         return int(detected)
     return max(1, int(legacy_value or 1))
+
+
+def recovery_gpu_index() -> int:
+    """Use the same detected NVIDIA adapter index as the normal RIFE runtime."""
+    hardware = detect_hardware()
+    return max(0, int(hardware.gpu_index if hardware.gpu else 0))
 
 
 def source_chunk_counts(total_source_frames: int, chunk_frames: int) -> list[int]:
@@ -404,6 +412,7 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         total_source_frames=round(duration * source_fps), total_target_frames=round(duration * target_fps),
         chunk_frames=int(storage.get("rife_chunk_frames") or 0),
         cpu_threads=recovery_cpu_threads(settings.get("cpu_threads")),
+        gpu_index=recovery_gpu_index(),
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -665,7 +674,7 @@ def generate_rife_frames_safe(
     rife = [
         str(contract.rife_exe), "-i", str(incoming), "-o", str(outgoing),
         "-n", str(native_target), "-m", str(contract.rife_model),
-        "-g", "0", "-j", "1:1:1", "-u", "-f", "%08d.png",
+        "-g", str(contract.gpu_index), "-j", "1:1:1", "-u", "-f", "%08d.png",
     ]
     _run_logged(
         rife,
