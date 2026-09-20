@@ -4659,11 +4659,14 @@ class VideoOptimizerStudio:
                 ]
                 if working_start > 0:
                     command += ["-ss", f"{working_start:.6f}"]
+                master_target_frames = max(1, int(round(video_duration * work_fps)))
                 command += [
                     "-i", working_video,
-                    "-map", "0:v:0", "-an", "-t", f"{video_duration:.6f}", "-vf", master_filter,
+                    "-map", "0:v:0", "-an", "-vf", master_filter,
                 ] + self._intermediate_encoder(work_w, work_h, settings.use_cpu, color_plan) + [
-                    "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)), "-progress", "pipe:1", "-nostats", str(master)
+                    "-frames:v", str(master_target_frames),
+                    "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)),
+                    "-progress", "pipe:1", "-nostats", str(master),
                 ]
                 self._run_ffmpeg(command, video_duration, progress_base, 10)
                 self._release_temp_path(working_video, temp_paths)
@@ -5039,16 +5042,23 @@ class VideoOptimizerStudio:
         command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
         if start_time > 0:
             command += ["-ss", f"{start_time:.6f}"]
+        color_target_frames = max(1, int(round(duration * source_fps)))
         command += [
             "-i", video,
-            "-map", "0:v:0", "-an", "-t", f"{duration:.6f}",
+            "-map", "0:v:0", "-an",
             "-vf", color_plan.normalize_filter(stage="working"),
             "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1",
             "-g", "1", "-slicecrc", "1", "-pix_fmt", color_plan.working_pix_fmt,
         ] + color_plan.metadata_args(output=False) + [
+            "-frames:v", str(color_target_frames),
             "-threads", str(max(1, cpu_threads)), "-progress", "pipe:1", "-nostats", str(output),
         ]
         self._run_ffmpeg(command, duration, base, weight)
+        color_quality = inspect_matroska_segment(output)
+        if color_quality.packet_count != color_target_frames:
+            raise RuntimeError(
+                f"Estágio de cor ficou com {color_quality.packet_count}/{color_target_frames} quadros."
+            )
         return str(output)
 
     def _scale_filter(
