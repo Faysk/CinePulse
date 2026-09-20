@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 STUDIO = ROOT / "src" / "cinepulse" / "studio.py"
 QUALITY_VIEW = ROOT / "src" / "cinepulse" / "ui" / "quality_view.py"
 RIFE = ROOT / "src" / "cinepulse" / "rife_safe_runner.py"
+RIFE_ENGINE = ROOT / "src" / "cinepulse" / "rife_engine.py"
+RIFE_RECOVERY = ROOT / "src" / "cinepulse" / "rife_recovery.py"
 
 
 class FullUtilizationRuntimeContractTests(unittest.TestCase):
@@ -16,6 +18,8 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         cls.studio = STUDIO.read_text(encoding="utf-8")
         cls.quality = QUALITY_VIEW.read_text(encoding="utf-8")
         cls.rife = RIFE.read_text(encoding="utf-8")
+        cls.rife_engine = RIFE_ENGINE.read_text(encoding="utf-8")
+        cls.rife_recovery = RIFE_RECOVERY.read_text(encoding="utf-8")
 
     def test_worker_has_no_removed_headroom_local_reference(self) -> None:
         self.assertNotIn("neural_headroom", self.studio)
@@ -61,6 +65,31 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn('jobs="1:1:1"', self.rife)
         self.assertIn("time.time_ns()", self.rife)
         self.assertNotIn("vram_free_mb(", self.rife)
+
+    def test_multi_gpu_routes_stay_pinned_to_selected_adapter(self) -> None:
+        self.assertGreaterEqual(
+            self.studio.count("gpu_index=self._hardware.gpu_index"),
+            4,
+        )
+        self.assertIn('"--gpu-index"', self.rife_engine)
+        self.assertIn("gpu_index=args.gpu_index", self.rife)
+        self.assertIn('"-g", str(contract.gpu_index)', self.rife_recovery)
+        self.assertIn("gpu_index=contract.gpu_index", self.rife_recovery)
+
+    def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
+        self.assertIn("distributed_chunk_target_count(", self.studio)
+        self.assertIn("timed_concat_manifest(chunks, chunk_frame_counts, target_fps)", self.studio)
+        self.assertIn("produced_target != total_target_count", self.studio)
+        self.assertIn("RIFE terminou fora da contagem alvo", self.studio)
+        self.assertNotIn("round(chunk_duration * target_fps)", self.studio)
+
+    def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
+        self.assertIn('rife_jobs_override = ""', self.studio)
+        self.assertIn("jobs_override=rife_jobs_override", self.studio)
+        self.assertIn("applied_jobs_from_log(recent)", self.studio)
+        self.assertIn("será reutilizada nos próximos", self.studio)
+        self.assertIn("render-session failure memory override", self.rife)
+        self.assertIn("selected_policy.pressure < fallback_spec.pressure", self.rife)
 
 
 if __name__ == "__main__":

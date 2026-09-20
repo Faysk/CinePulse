@@ -4,13 +4,62 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cinepulse.rife_engine import SAFE_RUNNER_MODULE, RifePaths, build_command, target_frame_count
+from cinepulse.rife_engine import (
+    SAFE_RUNNER_MODULE,
+    RifePaths,
+    applied_jobs_from_log,
+    build_command,
+    distributed_chunk_target_count,
+    target_frame_count,
+    timed_concat_manifest,
+)
 
 
 class RifeEngineTests(unittest.TestCase):
     def test_target_count_is_deterministic(self) -> None:
         self.assertEqual(120, target_frame_count(2.0, 60))
         self.assertEqual(2, target_frame_count(0, 60))
+
+    def test_timed_concat_manifest_uses_exact_frame_durations(self) -> None:
+        manifest = timed_concat_manifest(
+            [Path("segment_00001.mkv"), Path("segment_00002.mkv")],
+            [16, 17],
+            120.0,
+        )
+        self.assertEqual(2, manifest.count("file '"))
+        self.assertIn("duration 0.133333333333", manifest)
+        self.assertIn("duration 0.141666666667", manifest)
+
+    def test_distributed_chunk_targets_eliminate_ntsc_rounding_drift(self) -> None:
+        total_source = 21745
+        total_target = 43533
+        chunk_limit = 8
+        processed_source = 0
+        produced_target = 0
+        chunk_targets: list[int] = []
+
+        while processed_source < total_source:
+            remaining = total_source - processed_source
+            count = min(chunk_limit, remaining)
+            if remaining - count == 1:
+                count += 1
+            count = min(count, remaining)
+            if count < 2:
+                break
+            desired = distributed_chunk_target_count(
+                source_after=processed_source + count,
+                total_source=total_source,
+                produced_target=produced_target,
+                total_target=total_target,
+            )
+            chunk_targets.append(desired)
+            processed_source += count
+            produced_target += desired
+
+        self.assertEqual(total_source, processed_source)
+        self.assertEqual(total_target, produced_target)
+        self.assertTrue(all(value in {16, 17, 18} for value in chunk_targets))
+        self.assertIn(17, chunk_targets)
 
     def test_command_routes_through_safe_runner_and_selected_device(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -46,6 +95,90 @@ class RifeEngineTests(unittest.TestCase):
                 fingerprint,
                 command[command.index("--component-fingerprint") + 1],
             )
+
+    def test_gpu_session_override_is_forwarded_to_safe_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=False,
+                jobs_override="1:1:1",
+            )
+            self.assertEqual("1:1:1", command[command.index("--jobs-override") + 1])
+
+    def test_cpu_mode_does_not_forward_gpu_session_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=True,
+                jobs_override="1:1:1",
+            )
+            self.assertNotIn("--jobs-override", command)
+
+    def test_applied_jobs_parser_uses_last_valid_success_marker(self) -> None:
+        self.assertEqual(
+            "1:1:1",
+            applied_jobs_from_log(
+                [
+                    "CINEPULSE_RIFE_SAFE APPLIED jobs=2:2:2 gpu=0",
+                    "other line",
+                    "CINEPULSE_RIFE_SAFE APPLIED jobs=1:1:1 gpu=0",
+                ]
+            ),
+        )
+        self.assertEqual(
+            "",
+            applied_jobs_from_log(["CINEPULSE_RIFE_SAFE APPLIED jobs=broken gpu=0"]),
+        )
+
+    def test_selected_gpu_index_is_forwarded_to_safe_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=False,
+                gpu_index=2,
+            )
+            self.assertEqual("2", command[command.index("--gpu-index") + 1])
+
+    def test_cpu_mode_does_not_forward_gpu_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            command = build_command(
+                RifePaths(executable, model),
+                root / "in",
+                root / "out",
+                60,
+                use_cpu=True,
+                gpu_index=2,
+            )
+            self.assertNotIn("--gpu-index", command)
 
     def test_gpu_mode_is_delegated_to_safe_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.6 — 2026-09-20
+
+- memoriza a política RIFE realmente aplicada em um chunk e a reutiliza nos chunks seguintes do mesmo render, evitando repetir OOM já conhecido;
+- corrige drift de contagem em RIFE chunked para taxas fracionárias como 59.94→120 fps: o alvo passa a ser distribuído cumulativamente, a montagem exige contagem final exata e o concat FFV1 usa durações derivadas de frames para não acumular o timebase de 1 ms do Matroska;
+- o safe runner aceita apenas overrides de sessão iguais ou menos agressivos que a política full-utilization e mantém esse nível como piso de rollback, sem upshift oculto;
+- o Studio passa o `gpu_index` já selecionado ao RIFE, evitando redescoberta via `nvidia-smi` em cada chunk e mantendo o mesmo adaptador por todo o render;
+- corrige encode final HEVC/NVENC baseline e recovery para usar o mesmo índice de GPU selecionado, em vez de cair silenciosamente no default GPU 0;
+- o recovery de jobs antigos deixa de respeitar limites históricos de `cpu_threads` e usa todos os threads lógicos detectados na máquina atual;
+- o recovery RIFE usa o adaptador detectado e só envia `-u` quando a geometria realmente é UHD;
+- recovery reconhece tanto o scheduling legado por chunk quanto o novo scheduling cumulativo da 1.2.6, evitando rejeitar segmentos válidos após interrupção;
+- amplia testes de sessão RIFE, CLI `APPLIED`, multi-GPU, recovery e contratos do modo full-utilization.
+
 ## 1.2.5 — 2026-09-20
 
 - corrige o caminho Real-ESRGAN da 1.2.4 que ainda referenciava `neural_headroom` depois da remoção do probe de headroom, evitando `NameError` antes do upscale;

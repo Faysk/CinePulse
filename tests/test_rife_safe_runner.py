@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import struct
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +14,8 @@ from cinepulse.rife_safe_runner import (
     _run_native_with_rollback,
     RifeExecutionPolicy,
     execution_policy,
+    main,
+    run_safe_rife,
     validate_png,
     validate_png_sequence,
 )
@@ -212,6 +216,149 @@ class RifeSafeRunnerTests(unittest.TestCase):
 
             self.assertEqual(["3:3:3", "2:2:2", "1:1:1"], calls)
             self.assertEqual("1:1:1", applied.jobs)
+
+    def test_session_override_becomes_rollback_floor_without_upshift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            outgoing = root / "out"
+            captured = {}
+
+            def fake_rollback(**kwargs):
+                captured["policy"] = kwargs["policy"]
+                captured["fallback"] = kwargs["fallback"]
+                return kwargs["policy"]
+
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.validate_png_sequence",
+                    return_value=[Path("00000000.png"), Path("00000001.png")],
+                ),
+                patch("cinepulse.rife_safe_runner.validate_png", return_value=(1920, 1080)),
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    return_value=HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0),
+                ),
+                patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
+                patch("cinepulse.rife_safe_runner._move_native_frames"),
+            ):
+                applied = run_safe_rife(
+                    rife_executable=root / "rife.exe",
+                    model=root / "rife-v4.6",
+                    incoming=incoming,
+                    outgoing=outgoing,
+                    requested_target=4,
+                    device="gpu",
+                    jobs_override="1:1:1",
+                )
+
+            self.assertEqual("1:1:1", applied.jobs)
+            self.assertEqual("1:1:1", captured["policy"].jobs)
+            self.assertEqual("1:1:1", captured["fallback"].jobs)
+
+    def test_session_override_cannot_exceed_full_utilization_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.validate_png_sequence",
+                    return_value=[Path("00000000.png"), Path("00000001.png")],
+                ),
+                patch("cinepulse.rife_safe_runner.validate_png", return_value=(1920, 1080)),
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    return_value=HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0),
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "não pode exceder"):
+                    run_safe_rife(
+                        rife_executable=root / "rife.exe",
+                        model=root / "rife-v4.6",
+                        incoming=incoming,
+                        outgoing=root / "out",
+                        requested_target=4,
+                        device="gpu",
+                        jobs_override="8:8:8",
+                    )
+                with self.assertRaisesRegex(ValueError, "não pode exceder"):
+                    run_safe_rife(
+                        rife_executable=root / "rife.exe",
+                        model=root / "rife-v4.6",
+                        incoming=incoming,
+                        outgoing=root / "out2",
+                        requested_target=4,
+                        device="gpu",
+                        jobs_override="8:1:8",
+                    )
+
+    def test_cli_reports_applied_policy_for_parent_session_memory(self) -> None:
+        applied = RifeExecutionPolicy(
+            uhd=False,
+            jobs="1:1:1",
+            native_target=4,
+            requested_target=4,
+            gpu_index=2,
+            measured=False,
+        )
+        output = io.StringIO()
+        with (
+            patch("cinepulse.rife_safe_runner.run_safe_rife", return_value=applied) as run,
+            redirect_stdout(output),
+        ):
+            code = main(
+                [
+                    "--rife", "rife.exe",
+                    "--model", "rife-v4.6",
+                    "--input", "in",
+                    "--output", "out",
+                    "--frames", "4",
+                    "--device", "gpu",
+                    "--jobs-override", "1:1:1",
+                    "--gpu-index", "2",
+                ]
+            )
+        self.assertEqual(0, code)
+        self.assertIn("CINEPULSE_RIFE_SAFE APPLIED jobs=1:1:1 gpu=2", output.getvalue())
+        self.assertEqual("1:1:1", run.call_args.kwargs["jobs_override"])
+        self.assertEqual(2, run.call_args.kwargs["gpu_index"])
+
+    def test_pinned_gpu_index_skips_adapter_rediscovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            outgoing = root / "out"
+
+            def fake_rollback(**kwargs):
+                return kwargs["policy"]
+
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.validate_png_sequence",
+                    return_value=[Path("00000000.png"), Path("00000001.png")],
+                ),
+                patch("cinepulse.rife_safe_runner.validate_png", return_value=(1920, 1080)),
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    side_effect=AssertionError("pinned GPU must not rediscover adapters"),
+                ),
+                patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
+                patch("cinepulse.rife_safe_runner._move_native_frames"),
+            ):
+                applied = run_safe_rife(
+                    rife_executable=root / "rife.exe",
+                    model=root / "rife-v4.6",
+                    incoming=incoming,
+                    outgoing=outgoing,
+                    requested_target=4,
+                    device="gpu",
+                    gpu_index=2,
+                )
+
+            self.assertEqual(2, applied.gpu_index)
 
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")

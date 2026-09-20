@@ -11,23 +11,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 import queue
 import shutil
 import subprocess
-import sys
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
+from .hardware import detect_hardware
 from .matroska_quality import inspect_matroska_segment
 from .process_control import popen_group_kwargs, terminate_process_tree
+from .rife_engine import timed_concat_manifest
 from .verification import VerifyExpectation, quick_verify
 
 
@@ -69,6 +69,7 @@ class RecoveryContract:
     total_target_frames: int
     chunk_frames: int
     cpu_threads: int
+    gpu_index: int = 0
 
     @property
     def state_path(self) -> Path:
@@ -209,6 +210,27 @@ def ai_cache_key(
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
 
+def recovery_cpu_threads(legacy_value: int | None = None) -> int:
+    """Use the complete logical CPU envelope while keeping old jobs readable."""
+    detected = os.cpu_count()
+    if detected is not None and int(detected) > 0:
+        return int(detected)
+    return max(1, int(legacy_value or 1))
+
+
+def recovery_gpu_index() -> int:
+    """Use the same detected NVIDIA adapter index as the normal RIFE runtime."""
+    hardware = detect_hardware()
+    return max(0, int(hardware.gpu_index if hardware.gpu else 0))
+
+
+def recovery_uses_uhd(width: int, height: int) -> bool:
+    """Match the normal safe-runner UHD threshold instead of forcing -u."""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    return max(width, height) >= 3840 or width * height >= 3840 * 2160
+
+
 def source_chunk_counts(total_source_frames: int, chunk_frames: int) -> list[int]:
     if total_source_frames < 2 or chunk_frames < 2:
         raise ValueError("RIFE recovery requires at least two frames per chunk")
@@ -232,6 +254,15 @@ def source_chunk_counts(total_source_frames: int, chunk_frames: int) -> list[int
 def original_target_counts(source_counts: Iterable[int], source_fps: float, target_fps: float) -> list[int]:
     return [max(2, round(count / source_fps * target_fps)) for count in source_counts]
 
+
+def acceptable_segment_frame_counts(nominal: int, distributed: int) -> set[int]:
+    """Counts accepted from legacy, recovered, and cumulative 1.2.6 schedules."""
+
+    return {
+        value
+        for value in (int(nominal), int(nominal) + 1, int(distributed))
+        if value > 0
+    }
 
 def frame_count_from_container_duration(duration: float, fps: float) -> int:
     """Infer a short segment's frame count from its Matroska duration.
@@ -395,7 +426,8 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         target_height=int(target_spec["height"]), target_fps=target_fps,
         total_source_frames=round(duration * source_fps), total_target_frames=round(duration * target_fps),
         chunk_frames=int(storage.get("rife_chunk_frames") or 0),
-        cpu_threads=int(settings.get("cpu_threads") or 1),
+        cpu_threads=recovery_cpu_threads(settings.get("cpu_threads")),
+        gpu_index=recovery_gpu_index(),
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -438,6 +470,15 @@ def validate_contract(contract: RecoveryContract, log: Callable[[str], None], *,
     segments = contiguous_segments(contract.chunk_root)
     source_counts = source_chunk_counts(contract.total_source_frames, contract.chunk_frames)
     original_targets = original_target_counts(source_counts, contract.source_fps, contract.target_fps)
+    distributed_targets = [
+        item.target_frames
+        for item in remaining_schedule(
+            source_counts=source_counts,
+            completed_chunks=0,
+            completed_target_frames=0,
+            total_target_frames=contract.total_target_frames,
+        )
+    ]
     if len(segments) > len(source_counts):
         raise RecoveryError("Ha mais segmentos que lotes previstos")
     completed_target = sum(original_targets[:len(segments)])
@@ -451,14 +492,19 @@ def validate_contract(contract: RecoveryContract, log: Callable[[str], None], *,
             actual_duration = _duration(info)
             inferred_frames = frame_count_from_container_duration(actual_duration, contract.target_fps)
             nominal_frames = original_targets[number - 1]
-            # Recovery deliberately adds one frame to selected chunks so that
-            # independent per-chunk rounding does not leave the final render
-            # short.  Validate that permitted residual distribution instead of
-            # comparing every resumed segment with the old nominal schedule.
-            if inferred_frames not in {nominal_frames, nominal_frames + 1}:
+            distributed_frames = distributed_targets[number - 1]
+            # Pre-1.2.6 chunks used independent rounding; recovery may add one
+            # residual frame. New 1.2.6 chunks use cumulative distribution,
+            # which can be nominal-1, nominal, or nominal+1 depending on cadence.
+            allowed_frames = acceptable_segment_frame_counts(
+                nominal_frames,
+                distributed_frames,
+            )
+            if inferred_frames not in allowed_frames:
+                expected_text = ", ".join(str(value) for value in sorted(allowed_frames))
                 raise RecoveryError(
                     f"{segment.name}: duracao {actual_duration:.6f}s implica {inferred_frames} quadros; "
-                    f"esperado {nominal_frames} ou {nominal_frames + 1}"
+                    f"esperado um de [{expected_text}]"
                 )
             inferred_duration = inferred_frames / contract.target_fps
             if abs(actual_duration - inferred_duration) > 0.002:
@@ -651,14 +697,17 @@ def generate_rife_frames_safe(
     timeout_minutes: float,
     stop_file: Path,
 ) -> tuple[list[Path], Path]:
-    """Generate native 2x UHD frames, then uniformly retime odd counts."""
+    """Generate native 2x frames, enabling RIFE UHD mode only when required."""
 
     native_target = source_frames * 2
     rife = [
         str(contract.rife_exe), "-i", str(incoming), "-o", str(outgoing),
         "-n", str(native_target), "-m", str(contract.rife_model),
-        "-g", "0", "-j", "1:1:1", "-u", "-f", "%08d.png",
+        "-g", str(contract.gpu_index), "-j", "1:1:1",
     ]
+    if recovery_uses_uhd(contract.target_width, contract.target_height):
+        rife.append("-u")
+    rife += ["-f", "%08d.png"]
     _run_logged(
         rife,
         label=label,
@@ -780,7 +829,7 @@ def resume_rife(contract: RecoveryContract, log: Callable[[str], None], *, timeo
             )
         if segment_quality.solid_black_frames:
             raise RecoveryError(
-                f"Lote {chunk.index}: modo UHD produziu {segment_quality.solid_black_frames} quadros pretos"
+                f"Lote {chunk.index}: RIFE produziu {segment_quality.solid_black_frames} quadros pretos"
             )
         os.replace(partial_segment, final_segment)
         _safe_rmtree_child(contract.chunk_root, incoming)
@@ -815,32 +864,10 @@ def resume_rife(contract: RecoveryContract, log: Callable[[str], None], *, timeo
     return concatenate_master(contract, segments, log, timeout_minutes=timeout_minutes)
 
 
-def _concat_line(path: Path) -> str:
-    escaped = str(path.resolve()).replace("\\", "/").replace("'", "'\\''")
-    return f"file '{escaped}'"
-
-
 def concat_manifest(segments: list[Path], packet_counts: list[int], fps: float) -> str:
-    """Build a concat manifest whose timeline is derived from frame counts.
+    """Build the recovery concat timeline from exact frame-count durations."""
 
-    The short FFV1 Matroska segments use a 1 ms time base.  Letting FFmpeg infer
-    every segment duration therefore accumulates sub-millisecond rounding over
-    thousands of files.  Explicit durations keep the concatenated master on the
-    exact CFR timeline without re-encoding any frame.
-    """
-
-    if len(segments) != len(packet_counts):
-        raise ValueError("segments and packet_counts must have the same length")
-    if fps <= 0:
-        raise ValueError("fps must be positive")
-    lines: list[str] = []
-    for segment, packet_count in zip(segments, packet_counts, strict=True):
-        if packet_count <= 0:
-            raise ValueError(f"{segment.name}: packet count must be positive")
-        lines.append(_concat_line(segment))
-        lines.append(f"duration {packet_count / fps:.12f}")
-    return "\n".join(lines) + "\n"
-
+    return timed_concat_manifest(segments, packet_counts, fps)
 
 def concatenate_master(
     contract: RecoveryContract,
@@ -955,6 +982,7 @@ def _final_command(contract: RecoveryContract, master: Path, destination: Path, 
     command += delivery.video_args(
         use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
         bitrate_mbps=bitrate_mbps, fps=round(contract.target_fps),
+        gpu_index=contract.gpu_index,
     )
     command += color_plan.metadata_args(output=True)
     command += delivery.audio_args()
