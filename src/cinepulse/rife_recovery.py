@@ -1085,19 +1085,37 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
     segments, _completed_target = validate_contract(contract, log, full_scan=False)
     if not segments:
         raise RecoveryError("Nenhum segmento existente para o autoteste")
-    destination = contract.job_dir / "recovery-self-test.mp4"
-    command, _color, _delivery = _final_command(contract, segments[0], destination, duration=0.10)
+    suffix = contract.output.suffix or ".mp4"
+    destination = contract.job_dir / f"recovery-self-test{suffix}"
+    command, _color, delivery = _final_command(contract, segments[0], destination, duration=0.10)
     _run_logged(command, label="final-encoder-self-test", log=log, timeout_seconds=timeout_minutes * 60)
-    info = _validate_video(
-        ffprobe=contract.ffprobe, path=destination, width=contract.target_width,
-        height=contract.target_height, fps=contract.target_fps, codec="hevc",
+    expected_audio_rate = (
+        48000
+        if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
+        else contract.audio_sample_rate
     )
-    has_audio = any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
-    if contract.expect_audio and not has_audio:
-        raise RecoveryError("Autoteste final nao preservou audio")
-    if not contract.expect_audio and has_audio:
-        raise RecoveryError("Autoteste final produziu audio inesperado")
-    log(f"SELF_TEST_OK {destination} size={destination.stat().st_size}")
+    expectation = VerifyExpectation(
+        width=contract.target_width,
+        height=contract.target_height,
+        fps=contract.target_fps,
+        duration=0.10,
+        expect_audio=contract.expect_audio,
+        video_codec=delivery.video_codec,
+        audio_codec=delivery.audio_codec if contract.expect_audio else None,
+        audio_channels=contract.audio_channels if contract.expect_audio else None,
+        audio_sample_rate=expected_audio_rate if contract.expect_audio else None,
+        frame_tolerance=0,
+    )
+    verification = quick_verify(str(contract.ffprobe), destination, expectation)
+    if verification.frame_count is None:
+        raise RecoveryError("Autoteste final nao informou contagem exata de quadros")
+    if not verification.passed:
+        details = " | ".join(f"{issue.code}: {issue.message}" for issue in verification.errors)
+        raise RecoveryError("Autoteste final falhou: " + details)
+    log(
+        f"SELF_TEST_OK {destination} size={destination.stat().st_size} "
+        f"codec={delivery.video_codec} frames={verification.frame_count}"
+    )
     return destination
 
 
