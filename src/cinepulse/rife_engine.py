@@ -56,11 +56,11 @@ def build_command(
     """Build the crash-safe CinePulse RIFE wrapper command.
 
     The wrapper intentionally owns the neural invocation instead of exposing a
-    raw ``rife-ncnn-vulkan`` command to Studio.  It generates the native 2x
-    frame count first, uses conservative UHD execution when required, validates
-    every produced PNG, and only then retimes a residual target such as 17/18
-    frames.  Existing callers keep the same API and therefore inherit the
-    safety policy without duplicating it in UI/orchestration code.
+    raw ``rife-ncnn-vulkan`` command to Studio. It generates the native 2x
+    frame count first, starts from the full-utilization policy, validates every
+    produced PNG, and only then retimes a residual target such as 17/18 frames.
+    ``jobs_override`` carries a lower-pressure policy already proven necessary
+    by an earlier chunk in the same render; it never raises concurrency.
     """
 
     if not paths.available:
