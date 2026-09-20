@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from cinepulse.hardware import HardwareProfile
+import cinepulse.rife_recovery as rife_recovery
 from cinepulse.rife_recovery import (
     acceptable_segment_frame_counts,
     ai_cache_key,
@@ -25,6 +26,15 @@ from cinepulse.rife_recovery import (
 
 
 class RifeRecoveryTests(unittest.TestCase):
+    def test_recovery_master_concat_does_not_use_duration_clip(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        start = source.index("def concatenate_master(")
+        end = source.index("\ndef _final_filter(", start)
+        block = source[start:end]
+        self.assertNotIn('"-t"', block)
+        self.assertIn("inspect_matroska_segment(partial)", block)
+        self.assertIn("contract.total_target_frames", block)
+
     def test_without_faststart_preserves_other_muxer_arguments(self) -> None:
         self.assertEqual(
             without_faststart(["-tag:v", "hvc1", "-movflags", "+faststart"]),
