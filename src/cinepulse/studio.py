@@ -6270,6 +6270,7 @@ class VideoOptimizerStudio:
                     use_cpu,
                     component_fingerprint=rife_component_fingerprint,
                     jobs_override=rife_jobs_override,
+                    gpu_index=self._hardware.gpu_index if not use_cpu else None,
                 )
                 self._log("Comando RIFE: " + subprocess.list2cmdline(command))
                 recent: deque[str] = deque(maxlen=60)
