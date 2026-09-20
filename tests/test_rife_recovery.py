@@ -35,6 +35,23 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertIn("inspect_matroska_segment(partial)", block)
         self.assertIn("contract.total_target_frames", block)
 
+    def test_recovery_final_delivery_is_frame_bound_and_exactly_verified(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        start = source.index("def _final_command(")
+        end = source.index("\ndef self_test(", start)
+        block = source[start:end]
+        self.assertIn('"-frames:v", str(frame_limit)', block)
+        self.assertIn("if float(duration) + 1e-9 < float(contract.duration):", block)
+        self.assertIn('command += ["-t", f"{duration:.6f}"]', block)
+
+        final_start = source.index("def finalize(")
+        final_end = source.index("\ndef _space_check(", final_start)
+        final_block = source[final_start:final_end]
+        self.assertIn("frame_tolerance=0", final_block)
+        self.assertIn("candidate.frame_count is not None", final_block)
+        self.assertIn("if verification.frame_count is None:", final_block)
+        self.assertIn("staged_quality.packet_count != contract.total_target_frames", final_block)
+
     def test_without_faststart_preserves_other_muxer_arguments(self) -> None:
         self.assertEqual(
             without_faststart(["-tag:v", "hvc1", "-movflags", "+faststart"]),
