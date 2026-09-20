@@ -386,6 +386,7 @@ def run_safe_rife(
     ffmpeg: str = "",
     component_fingerprint: str = "",
     jobs_override: str = "",
+    gpu_index: int | None = None,
 ) -> RifeExecutionPolicy:
     input_frames = validate_png_sequence(incoming, len(list(incoming.glob("*.png"))))
     if len(input_frames) < 2:
@@ -398,10 +399,13 @@ def run_safe_rife(
     selected_measured = False
     active_gpu_index = 0
     if device == "gpu":
-        # Detect only adapter identity/index. Live VRAM and tuning admission are
-        # deliberately not consulted for throttling in full-utilization mode.
-        runtime_hardware = detect_hardware()
-        active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
+        # Studio may pin the adapter selected for the render. Direct callers
+        # without an explicit index retain the existing largest-VRAM detection.
+        if gpu_index is None:
+            runtime_hardware = detect_hardware()
+            active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
+        else:
+            active_gpu_index = max(0, int(gpu_index))
         aggressive_policy, _aggressive_measured, aggressive_reason = _limit_policy_by_live_vram(
             None,
             uhd=uhd,
@@ -516,6 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ffmpeg", default="")
     parser.add_argument("--component-fingerprint", default="")
     parser.add_argument("--jobs-override", default="")
+    parser.add_argument("--gpu-index", type=int)
     return parser
 
 
@@ -532,6 +537,7 @@ def main(argv: list[str] | None = None) -> int:
             ffmpeg=args.ffmpeg,
             component_fingerprint=args.component_fingerprint,
             jobs_override=args.jobs_override,
+            gpu_index=args.gpu_index,
         )
         print(
             f"CINEPULSE_RIFE_SAFE APPLIED jobs={applied.jobs} gpu={applied.gpu_index}",
