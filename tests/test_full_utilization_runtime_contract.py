@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+STUDIO = ROOT / "src" / "cinepulse" / "studio.py"
+QUALITY_VIEW = ROOT / "src" / "cinepulse" / "ui" / "quality_view.py"
+
+
+class FullUtilizationRuntimeContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.studio = STUDIO.read_text(encoding="utf-8")
+        cls.quality = QUALITY_VIEW.read_text(encoding="utf-8")
+
+    def test_worker_has_no_removed_headroom_local_reference(self) -> None:
+        self.assertNotIn("neural_headroom", self.studio)
+        self.assertNotIn("measure_resource_headroom(", self.studio)
+        self.assertIn("vram_free_mb=None", self.studio)
+
+    def test_runtime_settings_always_canonicalize_cpu_to_full_machine(self) -> None:
+        self.assertIn(
+            'cpu_threads=max(1, int(self._hardware.cpu_threads))',
+            self.studio,
+        )
+        self.assertIn(
+            'clean["cpu_threads"] = default_cpu_threads(os.cpu_count() or 4)',
+            self.studio,
+        )
+        self.assertIn(
+            '"cpu_threads": max(1, int(self._hardware.cpu_threads))',
+            self.studio,
+        )
+        self.assertNotIn('(self.cpu_threads, "cpu_threads")', self.studio)
+        self.assertNotIn('(self.cpu_threads, settings.cpu_threads)', self.studio)
+
+    def test_quality_ui_does_not_offer_fake_cpu_throttling_controls(self) -> None:
+        self.assertNotIn("Threads CPU", self.quality)
+        self.assertNotIn("Perfil de utilização", self.quality)
+        self.assertNotIn("MACHINE_PROFILES", self.quality)
+        self.assertNotIn("profile_for_threads", self.quality)
+        self.assertNotIn("machine_budget", self.quality)
+        self.assertIn("utilização total", self.quality)
+        self.assertIn("falhar/OOM", self.quality)
+
+    def test_integrity_fallback_contract_is_still_visible(self) -> None:
+        self.assertIn("retry_policy = conservative_policy", self.studio)
+        self.assertIn("sem nova medição de recursos", self.studio)
+        self.assertIn("gpu_media_runtime_disabled = True", self.studio)
+
+
+if __name__ == "__main__":
+    unittest.main()
