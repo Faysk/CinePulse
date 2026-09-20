@@ -9,6 +9,7 @@
 - corrige encode final HEVC/NVENC baseline e recovery para usar o mesmo índice de GPU selecionado, em vez de cair silenciosamente no default GPU 0;
 - o recovery de jobs antigos deixa de respeitar limites históricos de `cpu_threads` e usa todos os threads lógicos detectados na máquina atual;
 - o recovery RIFE usa o adaptador detectado e só envia `-u` quando a geometria realmente é UHD;
+- recovery reconhece tanto o scheduling legado por chunk quanto o novo scheduling cumulativo da 1.2.6, evitando rejeitar segmentos válidos após interrupção;
 - amplia testes de sessão RIFE, CLI `APPLIED`, multi-GPU, recovery e contratos do modo full-utilization.
 
 ## 1.2.5 — 2026-09-20
