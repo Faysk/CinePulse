@@ -51,7 +51,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("retry_policy = conservative_policy", self.studio)
         self.assertIn("sem nova medição de recursos", self.studio)
         self.assertIn("gpu_media_runtime_disabled = True", self.studio)
-        self.assertIn("policy == conservative_policy and policy.process_jobs > 1", self.studio)
+        self.assertIn('policy == conservative_policy and policy.pipeline != "1:1:1"', self.studio)
         self.assertIn("load_jobs=1", self.studio)
         self.assertIn("process_jobs=1", self.studio)
         self.assertIn("save_jobs=1", self.studio)
