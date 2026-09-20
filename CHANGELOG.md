@@ -3,6 +3,7 @@
 ## 1.2.6 — 2026-09-20
 
 - memoriza a política RIFE realmente aplicada em um chunk e a reutiliza nos chunks seguintes do mesmo render, evitando repetir OOM já conhecido;
+- corrige drift de contagem em RIFE chunked para taxas fracionárias como 59.94→120 fps: o alvo passa a ser distribuído cumulativamente e a montagem exige contagem final exata;
 - o safe runner aceita apenas overrides de sessão iguais ou menos agressivos que a política full-utilization e mantém esse nível como piso de rollback, sem upshift oculto;
 - o Studio passa o `gpu_index` já selecionado ao RIFE, evitando redescoberta via `nvidia-smi` em cada chunk e mantendo o mesmo adaptador por todo o render;
 - corrige encode final HEVC/NVENC baseline e recovery para usar o mesmo índice de GPU selecionado, em vez de cair silenciosamente no default GPU 0;
