@@ -6536,6 +6536,7 @@ class VideoOptimizerStudio:
             audio_codec=delivery_plan.audio_codec if delivery_plan and expected_audio else None,
             audio_channels=expected_audio_channels if expected_audio else None,
             audio_sample_rate=expected_audio_sample_rate if expected_audio else None,
+            frame_tolerance=0,
         )
         result = (
             deep_verify(FFMPEG, FFPROBE, path, expected)
