@@ -11,6 +11,7 @@ from cinepulse.rife_engine import (
     build_command,
     distributed_chunk_target_count,
     target_frame_count,
+    timed_concat_manifest,
 )
 
 
@@ -18,6 +19,16 @@ class RifeEngineTests(unittest.TestCase):
     def test_target_count_is_deterministic(self) -> None:
         self.assertEqual(120, target_frame_count(2.0, 60))
         self.assertEqual(2, target_frame_count(0, 60))
+
+    def test_timed_concat_manifest_uses_exact_frame_durations(self) -> None:
+        manifest = timed_concat_manifest(
+            [Path("segment_00001.mkv"), Path("segment_00002.mkv")],
+            [16, 17],
+            120.0,
+        )
+        self.assertEqual(2, manifest.count("file '"))
+        self.assertIn("duration 0.133333333333", manifest)
+        self.assertIn("duration 0.141666666667", manifest)
 
     def test_distributed_chunk_targets_eliminate_ntsc_rounding_drift(self) -> None:
         total_source = 21745
