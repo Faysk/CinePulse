@@ -1,0 +1,23 @@
+# CinePulse 1.2.7
+
+Esta release fecha a integridade temporal do pipeline CFR. A 1.2.6 já distribuía corretamente a contagem de frames entre chunks; a 1.2.7 remove os últimos limites por timestamp decimal que ainda podiam cortar um frame na concatenação ou na entrega final.
+
+## Master RIFE sem corte por duração
+
+O concat FFV1 não usa mais `-t duration`. Os segmentos já têm timeline explícita `frames/fps`; depois da montagem, o CinePulse lê estruturalmente o Matroska e exige exatamente `total_target_count` pacotes antes de aceitar o master.
+
+## Recovery mais estrito
+
+Um master de recovery existente só é reutilizado se, além da geometria/FPS/duração aceitáveis, tiver exatamente a contagem esperada de pacotes. O concat de recovery também não usa mais `-t` e valida a contagem após a montagem.
+
+## Entrega final orientada por frames
+
+O encode final usa `-frames:v round(project_duration*target_fps)` em vez de cortar todo o mux por um timestamp decimal. Isso preserva a cadência CFR esperada e deixa o áudio terminar naturalmente.
+
+## VFX
+
+O render VFX também passa a ser limitado por quantidade de quadros. O overlay declara explicitamente `eof_action=repeat`, `shortest=0` e `repeatlast=1`, então um layer reativo que termina alguns milissegundos antes não encurta a base.
+
+## Proteções mantidas
+
+Continuam ativos AtomicOutput, verificação final, validação de PNG/mídia, fallback pós-falha real, cancelamento seguro, full-utilization e pinning multi-GPU.
