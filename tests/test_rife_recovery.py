@@ -189,6 +189,14 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertIn("expect_audio=contract.expect_audio", final_block)
         self.assertIn("audio_channels=contract.audio_channels if contract.expect_audio else None", final_block)
 
+    def test_recovery_preserves_original_cpu_or_gpu_backend(self) -> None:
+        source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
+        self.assertIn('use_cpu = bool(settings.get("use_cpu", False))', source)
+        self.assertIn("gpu_index=-1 if use_cpu else recovery_gpu_index()", source)
+        self.assertIn('rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index', source)
+        self.assertIn('rife_jobs = "1:2:2" if contract.use_cpu else "1:1:1"', source)
+        self.assertGreaterEqual(source.count("use_cpu=contract.use_cpu"), 2)
+
     def test_recovery_uses_full_detected_cpu_instead_of_legacy_cap(self) -> None:
         with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=28):
             self.assertEqual(28, recovery_cpu_threads(4))
