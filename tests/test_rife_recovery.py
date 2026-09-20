@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
+from cinepulse.hardware import HardwareProfile
 from cinepulse.rife_recovery import (
     ai_cache_key,
     concat_manifest,
@@ -14,6 +15,7 @@ from cinepulse.rife_recovery import (
     frame_count_from_container_duration,
     original_target_counts,
     recovery_cpu_threads,
+    recovery_gpu_index,
     remaining_schedule,
     source_chunk_counts,
     without_faststart,
@@ -53,6 +55,11 @@ class RifeRecoveryTests(unittest.TestCase):
         with mock.patch("cinepulse.rife_recovery.os.cpu_count", return_value=None):
             self.assertEqual(4, recovery_cpu_threads(4))
             self.assertEqual(1, recovery_cpu_threads(None))
+
+    def test_recovery_uses_detected_gpu_index(self) -> None:
+        hardware = HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 2)
+        with mock.patch("cinepulse.rife_recovery.detect_hardware", return_value=hardware):
+            self.assertEqual(2, recovery_gpu_index())
 
     def test_source_chunks_merge_one_frame_tail(self) -> None:
         counts = source_chunk_counts(21745, 8)
