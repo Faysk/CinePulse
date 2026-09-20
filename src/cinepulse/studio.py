@@ -60,6 +60,7 @@ from .hardware import detect_hardware
 from .performance_policy import default_cpu_threads, realesrgan_pipeline_threads
 from .resource_scheduler import detect_cpu_topology
 from .realesrgan_tuning import RealEsrganPolicy
+from .matroska_quality import inspect_matroska_segment
 from .media_profile import ColorProfile
 from .delivery import (
     DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
@@ -6390,9 +6391,14 @@ class VideoOptimizerStudio:
             concat = [
                 FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
                 "-f", "concat", "-safe", "0", "-i", str(concat_file), "-map", "0:v:0", "-an", "-c", "copy",
-                "-t", f"{duration:.6f}", "-progress", "pipe:1", "-nostats", str(interpolated),
+                "-progress", "pipe:1", "-nostats", str(interpolated),
             ]
             self._run_ffmpeg(concat, duration, base + weight * 0.90, weight * 0.10)
+            master_quality = inspect_matroska_segment(interpolated)
+            if master_quality.packet_count != total_target_count:
+                raise RuntimeError(
+                    f"RIFE master ficou com {master_quality.packet_count}/{total_target_count} quadros após concat."
+                )
             return str(interpolated)
         finally:
             if prefetch is not None:
