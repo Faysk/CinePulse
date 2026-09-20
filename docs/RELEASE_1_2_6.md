@@ -19,6 +19,7 @@ O Studio passa ao RIFE o índice de GPU já selecionado para o render. Isso evit
 - jobs antigos usam todos os threads lógicos detectados atualmente, mesmo que tenham sido salvos com um `cpu_threads` menor;
 - RIFE recovery usa o índice de GPU detectado em vez de `-g 0` fixo;
 - o sinalizador `-u` é aplicado apenas para geometria UHD, mantendo 1080p/1440p fora do modo UHD desnecessário;
+- validação de segmentos aceita o scheduling legado e o novo scheduling cumulativo, preservando retomada de jobs antigos e novos;
 - diagnósticos de recovery deixam de rotular todo erro de quadro preto como 'modo UHD'.
 
 ## Segurança mantida
