@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from tkinter import StringVar, ttk
-
-from ..performance_policy import MACHINE_PROFILES, machine_budget, profile_for_threads
+from tkinter import ttk
 from .polish_view import register_responsive_split
 
 
@@ -188,71 +186,43 @@ def build_quality_tab(
         button.pack(side="left", fill="x", expand=True, padx=(0, 6))
         studio._quality_processor_buttons[cpu_value] = button
     logical_threads = max(1, int(studio._hardware.cpu_threads))
-    profile_value = StringVar(value=profile_for_threads(studio.cpu_threads.get(), logical_threads))
-    profile_detail = StringVar(value="")
-
-    def _refresh_machine_profile_detail() -> None:
-        selected = profile_for_threads(studio.cpu_threads.get(), logical_threads)
-        profile_value.set(selected)
-        if selected in MACHINE_PROFILES:
-            budget = machine_budget(selected, logical_threads, studio._hardware.vram_mb)
-            profile_detail.set(
-                f"{budget.cpu_threads}/{budget.logical_threads} threads • reserva {budget.reserved_threads} • Real-ESRGAN {budget.realesrgan_pipeline}"
-            )
-        else:
-            profile_detail.set(f"Manual • {studio.cpu_threads.get()}/{logical_threads} threads lógicas")
-
-    def _sync_machine_profile() -> None:
-        _refresh_machine_profile_detail()
-        studio._quality_setting_changed()
-
-    def _apply_machine_profile(profile: str) -> None:
-        budget = machine_budget(profile, logical_threads, studio._hardware.vram_mb)
-        studio.cpu_threads.set(budget.cpu_threads)
-        _refresh_machine_profile_detail()
-        studio._quality_setting_changed()
-
-    _refresh_machine_profile_detail()
-
-    ttk.Label(machine, text="Threads CPU", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=5)
-    threads = ttk.Spinbox(machine, from_=1, to=logical_threads, textvariable=studio.cpu_threads, width=8, command=_sync_machine_profile)
-    threads.grid(row=3, column=1, sticky="w", pady=5)
-    threads.bind("<FocusOut>", lambda _event: _sync_machine_profile())
-    ttk.Label(machine, text="Reserva de disco", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=5)
+    studio.cpu_threads.set(logical_threads)
+    ttk.Label(machine, text="CPU", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=5)
+    ttk.Label(
+        machine,
+        text=f"{logical_threads}/{logical_threads} threads lógicas • utilização total",
+        style="CardMuted.TLabel",
+    ).grid(row=3, column=1, columnspan=2, sticky="w", pady=5)
+    ttk.Label(
+        machine,
+        text="O render não reduz CPU, RAM/VRAM ou overlap por telemetria. Se uma etapa realmente falhar/OOM, o fallback daquela etapa entra automaticamente.",
+        style="CardMuted.TLabel",
+        wraplength=395,
+        justify="left",
+    ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 7))
+    ttk.Label(machine, text="Reserva de disco", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=5)
     reserve = ttk.Spinbox(machine, from_=1, to=500, increment=1, textvariable=studio.minimum_free_gb, width=8, command=studio._quality_setting_changed)
-    reserve.grid(row=4, column=1, sticky="w", pady=5)
+    reserve.grid(row=5, column=1, sticky="w", pady=5)
     reserve.bind("<FocusOut>", lambda _event: studio._quality_setting_changed())
-    ttk.Label(machine, text="GB livres mínimos", style="CardMuted.TLabel").grid(row=4, column=2, sticky="w", padx=(7, 0))
+    ttk.Label(machine, text="GB livres mínimos", style="CardMuted.TLabel").grid(row=5, column=2, sticky="w", padx=(7, 0))
 
-    ttk.Label(machine, text="Disco scratch", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=5)
+    ttk.Label(machine, text="Disco scratch", style="Card.TLabel").grid(row=6, column=0, sticky="w", pady=5)
     scratch = ttk.Entry(machine, textvariable=studio.scratch_dir, width=30)
-    scratch.grid(row=5, column=1, sticky="ew", pady=5)
+    scratch.grid(row=6, column=1, sticky="ew", pady=5)
     scratch.bind("<FocusOut>", lambda _event: studio._quality_setting_changed())
     ttk.Button(machine, text="Escolher…", style="Ghost.TButton", command=studio._choose_scratch_dir).grid(
-        row=5, column=2, sticky="e", padx=(7, 0), pady=5
+        row=6, column=2, sticky="e", padx=(7, 0), pady=5
     )
 
-    ttk.Label(machine, text="Limite do cache", style="Card.TLabel").grid(row=6, column=0, sticky="w", pady=5)
+    ttk.Label(machine, text="Limite do cache", style="Card.TLabel").grid(row=7, column=0, sticky="w", pady=5)
     cache_quota = ttk.Spinbox(
         machine, from_=1, to=2000, increment=5, textvariable=studio.cache_quota_gb, width=8,
         command=studio._quality_setting_changed,
     )
-    cache_quota.grid(row=6, column=1, sticky="w", pady=5)
+    cache_quota.grid(row=7, column=1, sticky="w", pady=5)
     cache_quota.bind("<FocusOut>", lambda _event: studio._quality_setting_changed())
-    ttk.Label(machine, text="GB • limpeza LRU automática", style="CardMuted.TLabel").grid(row=6, column=2, sticky="w", padx=(7, 0))
+    ttk.Label(machine, text="GB • limpeza LRU automática", style="CardMuted.TLabel").grid(row=7, column=2, sticky="w", padx=(7, 0))
 
-
-    ttk.Label(machine, text="Perfil de utilização", style="Card.TLabel").grid(row=7, column=0, sticky="w", pady=(10, 5))
-    profiles = ttk.Frame(machine, style="Card.TFrame")
-    profiles.grid(row=7, column=1, columnspan=2, sticky="ew", pady=(10, 5))
-    for profile in MACHINE_PROFILES:
-        ttk.Button(
-            profiles, text=profile, style="Ghost.TButton",
-            command=lambda value=profile: _apply_machine_profile(value),
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-    ttk.Label(
-        machine, textvariable=profile_detail, style="CardMuted.TLabel", wraplength=395, justify="left"
-    ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(0, 2))
 
     # --- Impact panel -------------------------------------------------
     impact = ttk.Frame(right, style="Card.TFrame", padding=14)
