@@ -127,6 +127,8 @@ def verify_composer_product(
     expect_audio: bool,
 ) -> None:
     p = request.profile
+    half_frame_tolerance = (0.5 / max(float(p.fps), 1e-9)) + 0.005
+    timing_tolerance = max(0.12, half_frame_tolerance)
     verification = quick_verify(
         str(request.ffprobe),
         path,
@@ -138,8 +140,8 @@ def verify_composer_product(
             expect_audio=expect_audio,
             video_codec="ffv1",
             frame_tolerance=0,
-            duration_tolerance=0.12,
-            sync_tolerance=0.12,
+            duration_tolerance=timing_tolerance,
+            sync_tolerance=timing_tolerance,
         ),
     )
     if verification.frame_count is None:
