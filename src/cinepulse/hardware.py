@@ -67,7 +67,8 @@ def detect_hardware(gpu_index: int | None = None) -> HardwareProfile:
             if adapters:
                 if requested_gpu_index is None:
                     # Prefer the adapter with the largest physical VRAM envelope.
-                    # Live headroom gates still decide per-operation admission.
+                    # Full-utilization scheduling pins that adapter for the render;
+                    # stage-specific fallbacks react only after concrete failures.
                     selected_adapter = max(
                         adapters,
                         key=lambda item: (item[3], -item[0]),
