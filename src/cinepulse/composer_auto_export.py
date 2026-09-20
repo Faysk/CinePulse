@@ -17,7 +17,15 @@ import tempfile
 import time
 from collections.abc import Callable
 
-from .composer_export import ComposerExportRequest, ComposerExportResult, export_composer_reference
+from .composer_export import (
+    ComposerExportRequest,
+    ComposerExportResult,
+    _mux_command,
+    composer_frame_count,
+    composer_has_audio_stream as _has_audio_stream,
+    export_composer_reference,
+    verify_composer_product as _verify_gpu_product,
+)
 from .composer_gpu_route import (
     ComposerGpuRoute,
     build_compositor_stack_key,
@@ -40,7 +48,6 @@ from .paths import PATHS
 from .pipeline_runtime import vram_free_mb
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput
-from .verification import VerifyExpectation, quick_verify
 
 
 @dataclass(frozen=True)
@@ -88,24 +95,12 @@ def _gpu_visual_command(request: ComposerExportRequest, route: ComposerGpuRoute,
     command += [
         "-filter_complex", graph,
         "-map", "[vfinal]", "-an", "-sn",
-        "-t", f"{p.duration:.6f}",
+        "-frames:v", str(composer_frame_count(request)),
         "-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrap",
         "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "pc",
         str(target),
     ]
     return command
-
-
-def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:
-    audio = request.output_audio or request.source
-    return [
-        str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-i", str(visual), "-i", str(audio),
-        "-map", "0:v:0", "-map", "1:a:0?",
-        "-c:v", "copy", "-c:a", "copy",
-        "-t", f"{request.profile.duration:.6f}",
-        str(target),
-    ]
 
 
 def _probe_source_codec(ffprobe: str, path: str | Path) -> str:
@@ -126,48 +121,6 @@ def _probe_source_codec(ffprobe: str, path: str | Path) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return (result.stdout or "").strip().lower() if result.returncode == 0 else ""
-
-
-def _has_audio_stream(ffprobe: str, path: str | Path) -> bool:
-    try:
-        result = subprocess.run(
-            [
-                str(ffprobe), "-v", "error", "-select_streams", "a:0",
-                "-show_entries", "stream=index", "-of", "csv=p=0", str(path),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and bool((result.stdout or "").strip())
-
-
-def _verify_gpu_product(request: ComposerExportRequest, path: Path, *, expect_audio: bool) -> None:
-    p = request.profile
-    verification = quick_verify(
-        str(request.ffprobe),
-        path,
-        VerifyExpectation(
-            width=p.width,
-            height=p.height,
-            fps=p.fps,
-            duration=p.duration,
-            expect_audio=expect_audio,
-            video_codec="ffv1",
-            frame_tolerance=1,
-            duration_tolerance=0.12,
-            sync_tolerance=0.12,
-        ),
-    )
-    if not verification.passed:
-        detail = "; ".join(issue.message for issue in verification.errors)
-        raise RuntimeError("composer GPU verification failed: " + (detail or "unknown integrity error"))
 
 
 def _run_cancellable(
