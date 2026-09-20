@@ -4460,8 +4460,6 @@ class VideoOptimizerStudio:
 
             cpu_topology = detect_cpu_topology()
             full_cpu_threads = max(1, int(cpu_topology.logical_cpus))
-            overnight_mode = False
-            machine_mode = "full"
             self._log(
                 f"FULL CPU: {full_cpu_threads}/{full_cpu_threads} threads lógicos disponíveis; "
                 "tuning/perfil do usuário não reduz o render nesta versão."
@@ -4575,7 +4573,7 @@ class VideoOptimizerStudio:
                     chunk_budget_gb=realesrgan_budget.chunk_budget_gb,
                     overlap_extract=realesrgan_budget.overlap_extract,
                     overlap_pack=realesrgan_budget.overlap_pack,
-                    vram_free_mb=neural_headroom.vram_free_mb,
+                    vram_free_mb=None,
                     runtime_guard=h5_ai_guard,
                     runtime_reporter=h5_ai_controller.record_throughput,
                 )
