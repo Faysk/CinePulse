@@ -255,6 +255,15 @@ def original_target_counts(source_counts: Iterable[int], source_fps: float, targ
     return [max(2, round(count / source_fps * target_fps)) for count in source_counts]
 
 
+def acceptable_segment_frame_counts(nominal: int, distributed: int) -> set[int]:
+    """Counts accepted from legacy, recovered, and cumulative 1.2.6 schedules."""
+
+    return {
+        value
+        for value in (int(nominal), int(nominal) + 1, int(distributed))
+        if value > 0
+    }
+
 def frame_count_from_container_duration(duration: float, fps: float) -> int:
     """Infer a short segment's frame count from its Matroska duration.
 
@@ -461,6 +470,15 @@ def validate_contract(contract: RecoveryContract, log: Callable[[str], None], *,
     segments = contiguous_segments(contract.chunk_root)
     source_counts = source_chunk_counts(contract.total_source_frames, contract.chunk_frames)
     original_targets = original_target_counts(source_counts, contract.source_fps, contract.target_fps)
+    distributed_targets = [
+        item.target_frames
+        for item in remaining_schedule(
+            source_counts=source_counts,
+            completed_chunks=0,
+            completed_target_frames=0,
+            total_target_frames=contract.total_target_frames,
+        )
+    ]
     if len(segments) > len(source_counts):
         raise RecoveryError("Ha mais segmentos que lotes previstos")
     completed_target = sum(original_targets[:len(segments)])
@@ -474,14 +492,19 @@ def validate_contract(contract: RecoveryContract, log: Callable[[str], None], *,
             actual_duration = _duration(info)
             inferred_frames = frame_count_from_container_duration(actual_duration, contract.target_fps)
             nominal_frames = original_targets[number - 1]
-            # Recovery deliberately adds one frame to selected chunks so that
-            # independent per-chunk rounding does not leave the final render
-            # short.  Validate that permitted residual distribution instead of
-            # comparing every resumed segment with the old nominal schedule.
-            if inferred_frames not in {nominal_frames, nominal_frames + 1}:
+            distributed_frames = distributed_targets[number - 1]
+            # Pre-1.2.6 chunks used independent rounding; recovery may add one
+            # residual frame. New 1.2.6 chunks use cumulative distribution,
+            # which can be nominal-1, nominal, or nominal+1 depending on cadence.
+            allowed_frames = acceptable_segment_frame_counts(
+                nominal_frames,
+                distributed_frames,
+            )
+            if inferred_frames not in allowed_frames:
+                expected_text = ", ".join(str(value) for value in sorted(allowed_frames))
                 raise RecoveryError(
                     f"{segment.name}: duracao {actual_duration:.6f}s implica {inferred_frames} quadros; "
-                    f"esperado {nominal_frames} ou {nominal_frames + 1}"
+                    f"esperado um de [{expected_text}]"
                 )
             inferred_duration = inferred_frames / contract.target_fps
             if abs(actual_duration - inferred_duration) > 0.002:
