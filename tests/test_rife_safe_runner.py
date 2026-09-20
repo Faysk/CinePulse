@@ -283,6 +283,16 @@ class RifeSafeRunnerTests(unittest.TestCase):
                         device="gpu",
                         jobs_override="8:8:8",
                     )
+                with self.assertRaisesRegex(ValueError, "não pode exceder"):
+                    run_safe_rife(
+                        rife_executable=root / "rife.exe",
+                        model=root / "rife-v4.6",
+                        incoming=incoming,
+                        outgoing=root / "out2",
+                        requested_target=4,
+                        device="gpu",
+                        jobs_override="8:1:8",
+                    )
 
     def test_cli_reports_applied_policy_for_parent_session_memory(self) -> None:
         applied = RifeExecutionPolicy(
