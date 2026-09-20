@@ -882,10 +882,20 @@ def concatenate_master(
             height=contract.target_height, fps=contract.target_fps, codec="ffv1",
             duration_minimum=contract.duration - 0.5,
         )
-        if abs(_duration(info) - contract.duration) <= 0.5:
-            log(f"MASTER_REUSE {contract.master_path} duration={_duration(info):.3f}s")
+        master_quality = inspect_matroska_segment(contract.master_path)
+        if (
+            abs(_duration(info) - contract.duration) <= 0.5
+            and master_quality.packet_count == contract.total_target_frames
+        ):
+            log(
+                f"MASTER_REUSE {contract.master_path} duration={_duration(info):.3f}s "
+                f"packets={master_quality.packet_count}"
+            )
             return contract.master_path
-        raise RecoveryError("Master de recuperacao existente nao cumpre o contrato")
+        raise RecoveryError(
+            "Master de recuperacao existente nao cumpre o contrato "
+            f"(packets={master_quality.packet_count}/{contract.total_target_frames})"
+        )
     packet_counts: list[int] = []
     for number, segment in enumerate(segments, start=1):
         quality = inspect_matroska_segment(segment)
@@ -910,7 +920,7 @@ def concatenate_master(
     command = [
         str(contract.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", str(concat_file), "-map", "0:v:0", "-an",
-        "-c", "copy", "-t", f"{contract.duration:.6f}", "-progress", "pipe:1", "-nostats", str(partial),
+        "-c", "copy", "-progress", "pipe:1", "-nostats", str(partial),
     ]
     _run_logged(command, label="concat-master", log=log, timeout_seconds=max(3600, timeout_minutes * 60))
     info = _validate_video(
@@ -920,6 +930,11 @@ def concatenate_master(
     )
     if abs(_duration(info) - contract.duration) > 0.5:
         raise RecoveryError(f"Master concatenado tem duracao {_duration(info):.3f}s; esperado {contract.duration:.3f}s")
+    master_quality = inspect_matroska_segment(partial)
+    if master_quality.packet_count != contract.total_target_frames:
+        raise RecoveryError(
+            f"Master concatenado tem {master_quality.packet_count}/{contract.total_target_frames} pacotes"
+        )
     os.replace(partial, contract.master_path)
     _write_state(
         contract, phase="master_ready", completed_segments=len(segments),
