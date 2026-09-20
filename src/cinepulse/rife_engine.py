@@ -23,6 +23,38 @@ def target_frame_count(duration: float, fps: float, minimum: int = 2) -> int:
     return max(minimum, round(max(0.0, duration) * max(1.0, fps)))
 
 
+def distributed_chunk_target_count(
+    *,
+    source_after: int,
+    total_source: int,
+    produced_target: int,
+    total_target: int,
+    minimum: int = 2,
+) -> int:
+    """Allocate this chunk from the cumulative source-to-target frame contract.
+
+    Independent per-chunk rounding drifts on rates such as 60000/1001 to 120.
+    Rounding the cumulative target position instead distributes the residual
+    across chunks and guarantees that the final chunk reaches total_target.
+    """
+
+    total_source = max(1, int(total_source))
+    total_target = max(0, int(total_target))
+    produced_target = max(0, int(produced_target))
+    source_after = max(0, min(total_source, int(source_after)))
+    remaining = max(0, total_target - produced_target)
+    if remaining <= 0:
+        return 0
+    target_after = total_target if source_after >= total_source else round(
+        source_after / total_source * total_target
+    )
+    desired = max(0, target_after - produced_target)
+    if desired < int(minimum):
+        raise ValueError(
+            f"RIFE chunk target would be {desired} frame(s), below minimum {minimum}"
+        )
+    return min(remaining, desired)
+
 def applied_jobs_from_log(lines: Iterable[str]) -> str:
     """Return the last successful RIFE jobs policy reported by the safe runner."""
     for line in reversed(tuple(lines)):
