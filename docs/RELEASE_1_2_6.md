@@ -8,7 +8,7 @@ Quando um chunk precisa recuar de `3:3:3` para `2:2:2` ou `1:1:1` após OOM real
 
 ## Contagem exata em RIFE chunked
 
-Taxas fracionárias como 60000/1001→120 podiam acumular erro ao arredondar cada chunk isoladamente. Em um caso de 21.745 frames fonte, isso representava 43 frames de saída a menos. A 1.2.6 distribui o alvo pela posição cumulativa dos chunks e bloqueia a montagem se a contagem final não coincidir exatamente com o contrato.
+Taxas fracionárias como 60000/1001→120 podiam acumular erro ao arredondar cada chunk isoladamente. Em um caso de 21.745 frames fonte, isso representava 43 frames de saída a menos. A 1.2.6 distribui o alvo pela posição cumulativa dos chunks e bloqueia a montagem se a contagem final não coincidir exatamente com o contrato. O concat dos segmentos FFV1 também passa a declarar `duration = frames/fps`, evitando acumular o arredondamento de timestamp de 1 ms do Matroska em milhares de chunks.
 
 ## GPU fixa por render
 
