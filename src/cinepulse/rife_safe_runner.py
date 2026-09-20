@@ -385,6 +385,7 @@ def run_safe_rife(
     device: str,
     ffmpeg: str = "",
     component_fingerprint: str = "",
+    jobs_override: str = "",
 ) -> RifeExecutionPolicy:
     input_frames = validate_png_sequence(incoming, len(list(incoming.glob("*.png"))))
     if len(input_frames) < 2:
@@ -401,18 +402,39 @@ def run_safe_rife(
         # deliberately not consulted for throttling in full-utilization mode.
         runtime_hardware = detect_hardware()
         active_gpu_index = runtime_hardware.gpu_index if runtime_hardware.gpu else 0
-        selected_policy, selected_measured, reason = _limit_policy_by_live_vram(
+        aggressive_policy, _aggressive_measured, aggressive_reason = _limit_policy_by_live_vram(
             None,
             uhd=uhd,
             free_vram_mb=None,
             gpu_index=active_gpu_index,
         )
+        if jobs_override:
+            override_policy = RifePolicy(jobs_override, active_gpu_index)
+            if override_policy.pressure > aggressive_policy.pressure:
+                raise ValueError(
+                    "RIFE jobs override não pode exceder a política full-utilization "
+                    f"({override_policy.jobs} > {aggressive_policy.jobs})"
+                )
+            selected_policy = override_policy
+            reason = "render-session failure memory override"
+        else:
+            selected_policy = aggressive_policy
+            reason = aggressive_reason
         print(
             "CINEPULSE_RIFE_SAFE FULL_UTILIZATION "
             f"selected={selected_policy.jobs} gpu={active_gpu_index} reason={reason}",
             flush=True,
         )
     fallback_spec = fallback_policy(uhd=uhd, gpu_index=active_gpu_index)
+    if (
+        device == "gpu"
+        and jobs_override
+        and selected_policy is not None
+        and selected_policy.pressure < fallback_spec.pressure
+    ):
+        # A remembered lower-pressure policy must never upshift on a later
+        # non-OOM failure. Preserve the session floor as the rollback floor.
+        fallback_spec = selected_policy
     fallback = execution_policy(
         len(input_frames), width, height, requested_target, device,
         jobs_override=fallback_spec.jobs if device == "gpu" else "",
@@ -493,13 +515,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", choices=("gpu", "cpu"), default="gpu")
     parser.add_argument("--ffmpeg", default="")
     parser.add_argument("--component-fingerprint", default="")
+    parser.add_argument("--jobs-override", default="")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        run_safe_rife(
+        applied = run_safe_rife(
             rife_executable=Path(args.rife),
             model=Path(args.model),
             incoming=Path(args.input),
@@ -508,6 +531,11 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             ffmpeg=args.ffmpeg,
             component_fingerprint=args.component_fingerprint,
+            jobs_override=args.jobs_override,
+        )
+        print(
+            f"CINEPULSE_RIFE_SAFE APPLIED jobs={applied.jobs} gpu={applied.gpu_index}",
+            flush=True,
         )
         return 0
     except Exception as exc:
