@@ -55,6 +55,28 @@ def distributed_chunk_target_count(
         )
     return min(remaining, desired)
 
+def timed_concat_manifest(
+    segments: Iterable[Path],
+    frame_counts: Iterable[int],
+    fps: float,
+) -> str:
+    """Build an FFmpeg concat manifest from exact frame-count durations."""
+
+    segment_list = tuple(Path(item) for item in segments)
+    count_list = tuple(int(value) for value in frame_counts)
+    if len(segment_list) != len(count_list):
+        raise ValueError("segments and frame_counts must have the same length")
+    if float(fps) <= 0:
+        raise ValueError("fps must be positive")
+    lines: list[str] = []
+    for segment, frame_count in zip(segment_list, count_list, strict=True):
+        if frame_count <= 0:
+            raise ValueError(f"{segment.name}: frame count must be positive")
+        escaped = str(segment.resolve()).replace("\\", "/").replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+        lines.append(f"duration {frame_count / float(fps):.12f}")
+    return "\n".join(lines) + "\n"
+
 def applied_jobs_from_log(lines: Iterable[str]) -> str:
     """Return the last successful RIFE jobs policy reported by the safe runner."""
     for line in reversed(tuple(lines)):
