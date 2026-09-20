@@ -74,6 +74,7 @@ from .rife_engine import (
     RifePaths,
     build_command as build_rife_command,
     target_frame_count,
+    timed_concat_manifest,
 )
 from .pipeline_budget import derive_pipeline_budget
 from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
@@ -6147,6 +6148,7 @@ class VideoOptimizerStudio:
         )
         chunk_root = Path(tempfile.mkdtemp(prefix=f"rife_{time.time_ns()}_", dir=job_dir))
         chunks: list[Path] = []
+        chunk_frame_counts: list[int] = []
         processed_source = 0
         produced_target = 0
         chunk_index = 0
@@ -6357,6 +6359,7 @@ class VideoOptimizerStudio:
                     weight * fraction_chunk * 0.14,
                 )
                 chunks.append(chunk_video)
+                chunk_frame_counts.append(len(frames))
                 safe_rmtree(incoming)
                 safe_rmtree(outgoing)
                 processed_source += count
@@ -6374,7 +6377,7 @@ class VideoOptimizerStudio:
                 raise RuntimeError("RIFE não produziu segmentos interpolados.")
             concat_file = chunk_root / "concat.txt"
             concat_file.write_text(
-                "\n".join("file '" + str(item.resolve()).replace("'", "'\\''") + "'" for item in chunks) + "\n",
+                timed_concat_manifest(chunks, chunk_frame_counts, target_fps),
                 encoding="utf-8",
             )
             interpolated = self._temp_file(
