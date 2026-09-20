@@ -77,6 +77,7 @@ class RecoveryContract:
     audio_mode: str = "Preservar dinâmica original"
     delivery_profile: str = PROFILE_AUTO
     deep_verify: bool = False
+    use_cpu: bool = False
 
     @property
     def state_path(self) -> Path:
@@ -453,6 +454,7 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         settings,
         source_info,
     )
+    use_cpu = bool(settings.get("use_cpu", False))
     contract = RecoveryContract(
         job_id=str(job["job_id"]), source=source, cache=cache, output=output,
         history_dir=history_dir, job_dir=job_dir, chunk_root=chunk_root, app_root=app_root,
@@ -464,13 +466,14 @@ def load_contract(args: argparse.Namespace) -> RecoveryContract:
         total_source_frames=round(duration * source_fps), total_target_frames=round(duration * target_fps),
         chunk_frames=int(storage.get("rife_chunk_frames") or 0),
         cpu_threads=recovery_cpu_threads(settings.get("cpu_threads")),
-        gpu_index=recovery_gpu_index(),
+        gpu_index=-1 if use_cpu else recovery_gpu_index(),
         expect_audio=expect_audio,
         audio_channels=audio_channels,
         audio_sample_rate=audio_sample_rate,
         audio_mode=str(settings.get("audio_mode") or "Preservar dinâmica original"),
         delivery_profile=str(settings.get("delivery_profile") or PROFILE_AUTO),
         deep_verify=bool(expected.get("deep", settings.get("deep_verify", False))),
+        use_cpu=use_cpu,
     )
     if min(contract.duration, contract.source_fps, contract.target_fps) <= 0:
         raise RecoveryError("Contrato temporal invalido")
@@ -743,10 +746,12 @@ def generate_rife_frames_safe(
     """Generate native 2x frames, enabling RIFE UHD mode only when required."""
 
     native_target = source_frames * 2
+    rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index
+    rife_jobs = "1:2:2" if contract.use_cpu else "1:1:1"
     rife = [
         str(contract.rife_exe), "-i", str(incoming), "-o", str(outgoing),
         "-n", str(native_target), "-m", str(contract.rife_model),
-        "-g", str(contract.gpu_index), "-j", "1:1:1",
+        "-g", str(rife_gpu_index), "-j", rife_jobs,
     ]
     if recovery_uses_uhd(contract.target_width, contract.target_height):
         rife.append("-u")
@@ -1033,7 +1038,7 @@ def _final_command(
     delivery = build_delivery_plan(
         output=contract.output, profile=contract.delivery_profile, color_plan=color_plan,
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
-        preview=False, use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
+        preview=False, use_cpu=contract.use_cpu, nvenc_available="hevc_nvenc" in encoders,
         available_encoders=encoders,
     )
     if delivery.blocking:
@@ -1049,9 +1054,9 @@ def _final_command(
         command += ["-map", "0:v:0", "-an"]
     command += ["-vf", _final_filter(contract, color_plan)]
     command += delivery.video_args(
-        use_cpu=False, nvenc_available="hevc_nvenc" in encoders,
+        use_cpu=contract.use_cpu, nvenc_available="hevc_nvenc" in encoders,
         bitrate_mbps=bitrate_mbps, fps=round(contract.target_fps),
-        gpu_index=contract.gpu_index,
+        gpu_index=max(0, contract.gpu_index),
     )
     command += color_plan.metadata_args(output=True)
     if contract.expect_audio:
