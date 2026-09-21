@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.9 — 2026-09-21
+
+- introduz `frame_bound_duration(frame_count, fps)` como fonte única da duração real de uma linha do tempo CFR;
+- Studio calcula a janela de áudio final a partir de `final_target_frames / target_fps`, em vez de reutilizar o decimal original de `project_duration`;
+- VFX fused limita o input de áudio pela duração exata dos frames realmente entregues;
+- recovery calcula a janela de áudio a partir do `frame_limit` real do self-test/final e não do duration original;
+- adiciona `atrim + asetpts + apad` ao áudio de entrega para garantir que a faixa termine exatamente junto do vídeo mesmo quando o arredondamento de frames sobe e a fonte termina alguns milissegundos antes;
+- mastering/loudness continua preservado dentro da cadeia de áudio exata;
+- adiciona testes para duração frame-bound, trim/pad e contratos Studio/VFX/recovery.
+
 ## 1.2.8 — 2026-09-21
 
 - adiciona `bounded_audio_input_args()` para aplicar a janela de duração como opção do input de áudio (`-t ... -i audio`), nunca como corte global do mux;

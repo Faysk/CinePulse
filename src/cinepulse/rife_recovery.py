@@ -22,7 +22,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .audio_mastering import analyze_loudness, bounded_audio_input_args, build_audio_filter
+from .audio_mastering import (
+    analyze_loudness,
+    bound_delivery_audio_filter,
+    bounded_audio_input_args,
+    build_audio_filter,
+    frame_bound_duration,
+)
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
 from .hardware import detect_hardware
@@ -1044,13 +1050,15 @@ def _final_command(
     if delivery.blocking:
         raise RecoveryError("Contrato de entrega bloqueado: " + " | ".join(delivery.errors))
     bitrate_mbps = max(8, min(600, round(12 * contract.target_width * contract.target_height / (1920 * 1080) * max(1, contract.target_fps / 60))))
+    frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
+    delivery_audio_duration = frame_bound_duration(frame_limit, contract.target_fps)
     command = [
         str(contract.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-i", str(master),
     ]
     if contract.expect_audio:
         command += [
-            *bounded_audio_input_args(str(contract.source), duration),
+            *bounded_audio_input_args(str(contract.source), delivery_audio_duration),
             "-map", "0:v:0", "-map", "1:a:0",
         ]
     else:
@@ -1063,10 +1071,8 @@ def _final_command(
     )
     command += color_plan.metadata_args(output=True)
     if contract.expect_audio:
-        if audio_filter:
-            command += ["-af", audio_filter]
+        command += ["-af", bound_delivery_audio_filter(delivery_audio_duration, audio_filter)]
         command += delivery.audio_args()
-    frame_limit = max(1, int(round(float(duration) * float(contract.target_fps))))
     command += ["-threads", str(contract.cpu_threads), "-frames:v", str(frame_limit)]
     # This is a local 30+ GiB deliverable.  Relocating the MP4 index to the
     # beginning adds a second full-file pass and failed on the external target.

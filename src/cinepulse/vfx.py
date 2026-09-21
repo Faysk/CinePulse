@@ -17,7 +17,7 @@ EFFECT_WIDTH = 320
 EFFECT_HEIGHT = 180
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
-from .audio_mastering import bounded_audio_input_args
+from .audio_mastering import bounded_audio_input_args, frame_bound_duration
 from .music_envelope import (
     DEFAULT_ANALYSIS_FPS,
     analyze_music_structure,
@@ -327,6 +327,8 @@ def render_vfx_intermediate(
     progress(0.02)
 
     final_delivery = final_video_args is not None
+    output_frame_count = max(1, int(round(float(duration) * float(output_fps))))
+    output_audio_duration = frame_bound_duration(output_frame_count, output_fps)
     command = [
         ffmpeg,
         "-y",
@@ -349,7 +351,7 @@ def render_vfx_intermediate(
         "pipe:0",
     ]
     if final_delivery and final_audio_source:
-        command += bounded_audio_input_args(final_audio_source, duration)
+        command += bounded_audio_input_args(final_audio_source, output_audio_duration)
     command += [
         "-filter_complex",
         build_vfx_filter_graph(
@@ -371,7 +373,6 @@ def render_vfx_intermediate(
         command += ["-map", "2:a:0"]
     else:
         command += ["-an"]
-    output_frame_count = max(1, int(round(float(duration) * float(output_fps))))
     command += ["-frames:v", str(output_frame_count), "-r", f"{output_fps:.8f}"]
 
     if final_delivery:

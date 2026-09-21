@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.8`. Mantém a integridade temporal da 1.2.7 e fecha as janelas de áudio/intermediários: preview, VFX fused e recovery limitam somente o input de áudio, sem voltar a cortar o vídeo por duração global; master, conversão de cor e comparação A/B também passam a ser frame-bound. O Studio deixa de usar `-t` como limite global de vídeo.
+> Estado Stable: `1.2.9`. Mantém o pipeline frame-bound da 1.2.8 e alinha o áudio à duração exata representada pelos quadros de vídeo: `frame_count / fps`. Studio, VFX fused e recovery agora fazem trim/reset/pad da faixa até essa linha do tempo exata, evitando tanto cauda de áudio quanto áudio alguns milissegundos curto quando o arredondamento de frames sobe.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

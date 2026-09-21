@@ -44,7 +44,9 @@ class RifeRecoveryTests(unittest.TestCase):
         end = source.index("\ndef self_test(", start)
         block = source[start:end]
         self.assertIn('"-frames:v", str(frame_limit)', block)
-        self.assertIn("*bounded_audio_input_args(str(contract.source), duration)", block)
+        self.assertIn("delivery_audio_duration = frame_bound_duration(frame_limit, contract.target_fps)", block)
+        self.assertIn("*bounded_audio_input_args(str(contract.source), delivery_audio_duration)", block)
+        self.assertIn("bound_delivery_audio_filter(delivery_audio_duration, audio_filter)", block)
         self.assertNotIn('command += ["-t", f"{duration:.6f}"]', block)
 
         final_start = source.index("def finalize(")
@@ -178,7 +180,7 @@ class RifeRecoveryTests(unittest.TestCase):
         command_block = source[command_start:command_end]
         self.assertIn("if contract.expect_audio:", command_block)
         self.assertIn('command += ["-map", "0:v:0", "-an"]', command_block)
-        self.assertIn('command += ["-af", audio_filter]', command_block)
+        self.assertIn("bound_delivery_audio_filter(delivery_audio_duration, audio_filter)", command_block)
 
         final_start = source.index("def finalize(")
         final_end = source.index("\ndef _space_check(", final_start)
