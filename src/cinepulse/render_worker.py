@@ -137,6 +137,9 @@ class RenderWorker:
         self.lease.acquire(phase="preflight")
         context = WorkerContext(self)
         try:
+            # Only the lease owner may recover commands stranded by a previous
+            # worker. Queue instances used by the UI never requeue processing files.
+            self.commands.recover_processing()
             self._enter_running()
             self.lease.heartbeat(phase="running", progress=True)
             executor(context)

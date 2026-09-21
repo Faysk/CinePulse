@@ -79,5 +79,22 @@ class RenderWorkerTests(unittest.TestCase):
             self.assertEqual("WORKER-FAILED", manifest.last_error["code"])
 
 
+    def test_restart_recovers_cancel_claimed_by_crashed_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            worker = self._worker(root)
+            command = WorkerCommand.create("job-1", "cancel")
+            worker.commands.submit(command)
+            claimed = worker.commands.next()
+            self.assertIsNotNone(claimed)
+            self.assertTrue(list(worker.commands.processing.glob("*.json")))
+
+            restarted = RenderWorker(root, "job-1", stale_after=1.0)
+            result = restarted.run(lambda context: context.checkpoint(phase="rife", unit="segment-1"))
+            self.assertEqual("cancelled", result.state)
+            self.assertFalse(list(restarted.commands.processing.glob("*.json")))
+            self.assertTrue(restarted.commands.read_reply(command.request_id).ok)
+
+
 if __name__ == "__main__":
     unittest.main()
