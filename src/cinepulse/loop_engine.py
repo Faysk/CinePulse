@@ -14,6 +14,7 @@ from tkinter import Tk, StringVar, filedialog, messagebox
 from tkinter import ttk
 
 from . import aurora
+from .ai_suite import real_esrgan_available
 from .paths import PATHS, component_path
 
 
@@ -371,7 +372,7 @@ class LoopMusicApp:
             estimated_bytes = (bitrate_mbps * 1_000_000 / 8) * (audio_duration + video_duration)
             use_ai = ai_mode == AI_REAL_ESRGAN_X2
             if use_ai:
-                if not REAL_ESRGAN.is_file() or not REAL_ESRGAN_MODELS.is_dir():
+                if not real_esrgan_available():
                     raise RuntimeError(
                         "O módulo Real-ESRGAN não foi encontrado na pasta tools\\real-esrgan."
                     )

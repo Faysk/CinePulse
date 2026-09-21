@@ -85,6 +85,8 @@ class RifeRuntimeFallbackTests(unittest.TestCase):
             rife_exe.write_bytes(b"x")
             rife_model = root / "rife-v4.6"
             rife_model.mkdir()
+            (rife_model / "flownet.bin").write_bytes(b"synthetic-model")
+            (rife_model / "flownet.param").write_bytes(b"synthetic-param")
             studio = VideoOptimizerStudio.__new__(VideoOptimizerStudio)
             studio._cancelled = False
             studio._process = None

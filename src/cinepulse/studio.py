@@ -1332,17 +1332,15 @@ class VideoOptimizerStudio:
         missing: list[str] = []
         if (
             self.enhancement.get() == ENHANCE_AI
-            and not REAL_ESRGAN.is_file()
+            and not ai_suite.real_esrgan_available()
             and self._ai_upscale_required(self._settings())
         ):
             self.enhancement.set(ENHANCE_SIMPLE)
             missing.append("Real-ESRGAN")
-        if self.interpolation.get() == RIFE_OPTION and not RIFE_EXE.is_file():
+        if self.interpolation.get() == RIFE_OPTION and not ai_suite.rife_available():
             self.interpolation.set("Movimento suave — FFmpeg")
             missing.append("RIFE")
-        demucs_ready = ai_suite.VENV_PYTHON.is_file() and (
-            ai_suite.MODELS / "demucs" / "local_repo" / "htdemucs_ft.yaml"
-        ).is_file()
+        demucs_ready = ai_suite.demucs_available()
         if self.use_stems.get() and not demucs_ready:
             self.use_stems.set(False)
             missing.append("Demucs")
@@ -2086,8 +2084,8 @@ class VideoOptimizerStudio:
         else:
             self.resolution.set("4K UHD")
             self.fps.set(60)
-            self.enhancement.set(ENHANCE_AI if REAL_ESRGAN.is_file() else ENHANCE_SIMPLE)
-            self.interpolation.set(RIFE_OPTION if RIFE_EXE.is_file() else "Movimento suave — FFmpeg")
+            self.enhancement.set(ENHANCE_AI if ai_suite.real_esrgan_available() else ENHANCE_SIMPLE)
+            self.interpolation.set(RIFE_OPTION if ai_suite.rife_available() else "Movimento suave — FFmpeg")
             self.use_cpu.set(False if self._nvenc else True)
             for name, variable in self.effect_vars.items():
                 variable.set(name in {"Aurora", "Pulso cinematográfico"})
@@ -2720,10 +2718,10 @@ class VideoOptimizerStudio:
         box.bind("<<ComboboxSelected>>", lambda _e: changed())
 
     def _quality_real_esrgan_available(self) -> bool:
-        return REAL_ESRGAN.is_file()
+        return ai_suite.real_esrgan_available()
 
     def _quality_rife_available(self) -> bool:
-        return RIFE_EXE.is_file()
+        return ai_suite.rife_available()
 
     def _set_quality_status_style(self, target: str, level: str) -> None:
         label = getattr(self, f"quality_{target}_badge_label", None)
@@ -3218,7 +3216,7 @@ class VideoOptimizerStudio:
                 missing.append(title.casefold())
         if (
             self.enhancement.get() == ENHANCE_AI
-            and not REAL_ESRGAN.is_file()
+            and not ai_suite.real_esrgan_available()
             and self._ai_upscale_required(self._settings())
         ):
             missing.append("Real-ESRGAN é necessário para ampliar esta fonte, mas o componente local não está instalado")
@@ -3623,8 +3621,8 @@ class VideoOptimizerStudio:
                 source_transfer=color_profile.transfer,
                 source_space=color_profile.space,
                 source_range=color_profile.range,
-                realesrgan_available=REAL_ESRGAN.is_file(),
-                rife_available=RIFE_EXE.is_file(),
+                realesrgan_available=ai_suite.real_esrgan_available(),
+                rife_available=ai_suite.rife_available(),
                 auto_loop_may_add_transition=bool(auto_loop_may_add_transition),
                 output_suffix=(".mp4" if preview else (Path(settings.output).suffix.lower() or ".mp4")),
                 delivery_profile=settings.delivery_profile,
@@ -3805,7 +3803,7 @@ class VideoOptimizerStudio:
             warnings.append("A aceleração NVIDIA não foi detectada; a codificação usará CPU e será mais lenta.")
         if settings.mode == MODE_MUSIC and Path(settings.audio).suffix.lower() not in {".wav", ".flac"}:
             warnings.append("Para preservar melhor a música, prefira WAV ou FLAC como fonte.")
-        if render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION and not RIFE_EXE.is_file():
+        if render_plan.step("rife_final").attempts and settings.interpolation == RIFE_OPTION and not ai_suite.rife_available():
             warnings.append("RIFE é necessário para atingir o FPS solicitado, mas não foi encontrado; o render usará fallback FFmpeg.")
         blocking_reasons = list(storage.blocking_reasons)
         blocking_reasons.extend(neural_ram_blockers)
@@ -3962,7 +3960,7 @@ class VideoOptimizerStudio:
             messagebox.showerror(APP_TITLE, f"O CinePulse não consegue gravar os arquivos necessários.\n\n{exc}")
             return False
         ai_upscale_required = settings.enhancement == ENHANCE_AI and self._ai_upscale_required(settings, preview)
-        if ai_upscale_required and not REAL_ESRGAN.is_file():
+        if ai_upscale_required and not ai_suite.real_esrgan_available():
             self._set_feedback(
                 "error", "Real-ESRGAN necessário para esta configuração",
                 "O upscale por IA foi selecionado, mas o componente local não está instalado.",
