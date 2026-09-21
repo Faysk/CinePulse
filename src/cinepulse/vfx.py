@@ -510,6 +510,11 @@ def render_vfx_intermediate(
             except (OSError, ValueError):
                 pass
             reader.join(timeout=2)
+            try:
+                if process.stdout is not None and not process.stdout.closed:
+                    process.stdout.close()
+            except (OSError, ValueError, AttributeError):
+                pass
             process_changed(None)
 
     attempts = [primary_video_args]
