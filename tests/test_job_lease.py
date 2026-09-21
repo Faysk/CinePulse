@@ -84,6 +84,70 @@ class JobLeaseTests(unittest.TestCase):
             self.assertEqual(200, record.pid)
             self.assertTrue(list(root.glob("lease.json.stale-*")))
 
+    def test_expired_remote_lease_does_not_treat_local_pid_collision_as_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lease.json"
+            clock = Clock()
+            owner = JobLease(
+                path,
+                "job-1",
+                stale_after=10,
+                clock=clock,
+                pid=100,
+                process_token=lambda _pid: "owner-start",
+                alive=lambda _pid: True,
+            )
+            record = owner.acquire(phase="rife")
+            payload = record.to_dict()
+            payload["host_id"] = "remote-host"
+            payload["subprocesses"] = [777]
+            path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+            clock.value += 100
+
+            challenger = JobLease(
+                path,
+                "job-1",
+                stale_after=10,
+                clock=clock,
+                pid=200,
+                process_token=lambda pid: f"local-{pid}",
+                # PID 777 exists locally, but belongs to an unrelated process.
+                alive=lambda pid: pid == 777,
+            )
+            acquired = challenger.acquire(phase="rife")
+            self.assertEqual(200, acquired.pid)
+
+    def test_fresh_remote_lease_is_still_protected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lease.json"
+            clock = Clock()
+            owner = JobLease(
+                path,
+                "job-1",
+                stale_after=10,
+                clock=clock,
+                pid=100,
+                process_token=lambda _pid: "owner-start",
+                alive=lambda _pid: True,
+            )
+            record = owner.acquire(phase="rife")
+            payload = record.to_dict()
+            payload["host_id"] = "remote-host"
+            payload["subprocesses"] = [777]
+            path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+
+            challenger = JobLease(
+                path,
+                "job-1",
+                stale_after=10,
+                clock=clock,
+                pid=200,
+                process_token=lambda pid: f"local-{pid}",
+                alive=lambda pid: pid == 777,
+            )
+            with self.assertRaises(LeaseBusy):
+                challenger.acquire(phase="rife")
+
     def test_registered_live_subprocess_blocks_stale_takeover(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "lease.json"
