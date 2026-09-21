@@ -104,6 +104,72 @@ class VfxTimingTests(unittest.TestCase):
         self.assertEqual("libx264", commands[1][commands[1].index("-c:v") + 1])
         self.assertNotIn("-gpu", commands[1])
 
+    def test_fused_vfx_nvenc_failure_uses_explicit_cpu_delivery_args(self) -> None:
+        commands: list[list[str]] = []
+        return_codes = iter((1, 0))
+
+        def fake_popen(command, **_kwargs):
+            commands.append(list(command))
+            return _FakeProcess(next(return_codes))
+
+        with (
+            patch("cinepulse.vfx.load_music_envelope", return_value=_FakeEnvelope()),
+            patch(
+                "cinepulse.vfx.choose_vfx_render_spec",
+                return_value=SimpleNamespace(
+                    width=2,
+                    height=2,
+                    fps=1.0,
+                    label="test",
+                    native_spatial=True,
+                    native_temporal=True,
+                ),
+            ),
+            patch(
+                "cinepulse.vfx.StudioFrameGenerator",
+                return_value=SimpleNamespace(make=lambda *args, **kwargs: b"frame"),
+            ),
+            patch("cinepulse.vfx.subprocess.Popen", side_effect=fake_popen),
+        ):
+            vfx_module.render_vfx_intermediate(
+                "ffmpeg",
+                "master.mp4",
+                "audio.wav",
+                "out.mp4",
+                1.0,
+                {"Aurora"},
+                "#ffffff",
+                1.0,
+                0.5,
+                1920,
+                1080,
+                30.0,
+                "50M",
+                "100M",
+                "200M",
+                False,
+                8,
+                "Todos equilibrados",
+                80.0,
+                80.0,
+                False,
+                70.0,
+                lambda _value: None,
+                lambda: False,
+                lambda _process: None,
+                lambda _line: None,
+                final_video_args=["-c:v", "hevc_nvenc", "-gpu", "2"],
+                fallback_video_args=["-c:v", "libx265", "-preset", "medium"],
+                final_muxer_args=["-movflags", "+faststart"],
+                gpu_index=2,
+            )
+
+        self.assertEqual(2, len(commands))
+        self.assertEqual("hevc_nvenc", commands[0][commands[0].index("-c:v") + 1])
+        self.assertEqual("libx265", commands[1][commands[1].index("-c:v") + 1])
+        self.assertNotIn("-gpu", commands[1])
+        self.assertIn("+faststart", commands[1])
+
     def test_vfx_has_one_shot_cpu_encoder_fallbacks(self) -> None:
         source = inspect.getsource(vfx_module.render_vfx_intermediate)
         self.assertIn("fallback_video_args: list[str] | None = None", source)
