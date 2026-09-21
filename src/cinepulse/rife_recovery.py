@@ -1092,7 +1092,14 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
         raise RecoveryError("Nenhum segmento existente para o autoteste")
     suffix = contract.output.suffix or ".mp4"
     destination = contract.job_dir / f"recovery-self-test{suffix}"
-    command, _color, delivery = _final_command(contract, segments[0], destination, duration=0.10)
+    self_test_frames = max(1, int(round(0.10 * float(contract.target_fps))))
+    self_test_duration = frame_bound_duration(self_test_frames, contract.target_fps)
+    command, _color, delivery = _final_command(
+        contract,
+        segments[0],
+        destination,
+        duration=self_test_duration,
+    )
     _run_logged(command, label="final-encoder-self-test", log=log, timeout_seconds=timeout_minutes * 60)
     expected_audio_rate = (
         48000
@@ -1103,7 +1110,7 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
         width=contract.target_width,
         height=contract.target_height,
         fps=contract.target_fps,
-        duration=0.10,
+        duration=self_test_duration,
         expect_audio=contract.expect_audio,
         video_codec=delivery.video_codec,
         audio_codec=delivery.audio_codec if contract.expect_audio else None,
@@ -1164,6 +1171,10 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             f"packets={staged_quality.packet_count}"
         )
     partial = contract.output.with_name(f".{contract.output.stem}.recovery-partial{contract.output.suffix}")
+    delivery_duration = frame_bound_duration(
+        contract.total_target_frames,
+        contract.target_fps,
+    )
     audio_filter = ""
     if contract.expect_audio and contract.audio_mode != "Preservar dinâmica original":
         measurements = None
@@ -1171,7 +1182,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             measurements = analyze_loudness(
                 str(contract.ffmpeg),
                 str(contract.source),
-                contract.duration,
+                delivery_duration,
                 contract.audio_mode,
             )
             log(f"AUDIO_ANALYSIS_OK mode={contract.audio_mode} measurements={measurements}")
@@ -1185,7 +1196,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
         contract,
         master,
         partial,
-        duration=contract.duration,
+        duration=delivery_duration,
         audio_filter=audio_filter,
     )
     expected_audio_rate = (
@@ -1195,7 +1206,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
     )
     expectation = VerifyExpectation(
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
-        duration=contract.duration, expect_audio=contract.expect_audio, video_codec=delivery.video_codec,
+        duration=delivery_duration, expect_audio=contract.expect_audio, video_codec=delivery.video_codec,
         audio_codec=delivery.audio_codec if contract.expect_audio else None,
         audio_channels=contract.audio_channels if contract.expect_audio else None,
         audio_sample_rate=expected_audio_rate if contract.expect_audio else None,
@@ -1207,7 +1218,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
         if contract.expect_audio and contract.audio_mode != "Preservar dinâmica original":
             candidate = None
             details = (
-                "audio mastering contract requires a fresh 1.2.7 encode "
+                "frame-bound audio mastering contract requires a fresh encode "
                 f"(mode={contract.audio_mode})"
             )
         else:
