@@ -235,6 +235,9 @@ function Get-VerifiedDownload {
             if ($Input) { $Input.Dispose() }
             if ($Response) { $Response.Dispose() }
             $Client.Dispose()
+            if (-not $Downloaded -and (Test-Path -LiteralPath $Partial)) {
+                Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
+            }
         }
     }
     if (-not $Downloaded -or -not (Test-Path -LiteralPath $Partial)) {
