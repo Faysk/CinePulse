@@ -9,6 +9,23 @@ from cinepulse.safe_output import AtomicOutput, RenderJournal, process_alive
 
 
 class SafeOutputTests(unittest.TestCase):
+    def test_same_process_outputs_use_unique_partial_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            first = AtomicOutput.for_path(final, pid=123)
+            second = AtomicOutput.for_path(final, pid=123)
+            self.assertNotEqual(first.partial, second.partial)
+            self.assertEqual(first.final, second.final)
+
+    def test_explicit_nonce_keeps_partial_path_deterministic_for_recovery_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            atomic = AtomicOutput.for_path(final, pid=123, nonce="abc")
+            self.assertEqual(
+                final.with_name(".video.partial-123-abc.mp4"),
+                atomic.partial,
+            )
+
     def test_commit_replaces_existing_only_after_partial_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             final = Path(temporary) / "video.mp4"
