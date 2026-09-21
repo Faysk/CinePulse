@@ -333,6 +333,13 @@ class JobLease:
         age = max(0.0, self.clock() - record.heartbeat_at)
         if age <= self.stale_after:
             return False
+        if record.host_id != socket.gethostname():
+            # PIDs and process-start tokens are host-local. Once a remote
+            # owner's heartbeat has exceeded the lease timeout, do not inspect
+            # its owner/subprocess PIDs against this machine: an unrelated
+            # local process may have the same numeric PID and would otherwise
+            # keep a dead remote lease alive indefinitely.
+            return True
         if self._same_process(record):
             return False
         if any(self._alive(pid) for pid in record.subprocesses):
