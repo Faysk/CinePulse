@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.17`. Mantém o recovery/CI da 1.2.16 e endurece a recuperação do arquivo final interrompido: o `.partial` só pode ser promovido se cumprir o contrato completo gravado no journal — resolução, FPS, duração CFR, contagem exata de frames, codec e áudio esperado. Journals antigos/incompletos falham fechado e preservam o arquivo para análise; renders configurados com Deep Verify mantêm o mesmo nível antes da promoção.
+> Estado Stable: `1.2.18`. Mantém o recovery rigoroso da 1.2.17 e corrige a integridade temporal do Overlay Composer: o mux final deixa de cortar por `-t duration`, usa a duração CFR real `frames/fps` apenas para limitar o input de áudio, preserva o vídeo por `-frames:v` e só promove o resultado quando o FFprobe confirma exatamente a contagem de quadros renderizada.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
