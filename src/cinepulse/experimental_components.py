@@ -118,13 +118,44 @@ def _marker_matches(marker: Path, expected_hash: str) -> bool:
     return bool(expected_tree and expected_tree == _tree_fingerprint(marker.parent))
 
 
-def _download(url: str, destination: Path, expected_hash: str, log: Callable[[str], None]) -> None:
+def _download(
+    url: str,
+    destination: Path,
+    expected_hash: str,
+    log: Callable[[str], None],
+    *,
+    expected_bytes: int | None = None,
+) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_file() and _sha256(destination).lower() == expected_hash.lower():
-        log(f"Já verificado: {destination.name}")
-        return
+    expected_size = int(expected_bytes) if expected_bytes is not None else None
+    if expected_size is not None and expected_size <= 0:
+        raise RuntimeError(f"Tamanho esperado inválido para {destination.name}: {expected_size}.")
+
+    if destination.is_file():
+        actual_size = destination.stat().st_size
+        size_ok = expected_size is None or actual_size == expected_size
+        if size_ok and _sha256(destination).lower() == expected_hash.lower():
+            log(f"Já verificado: {destination.name}")
+            return
+        # A destination that failed its pinned size/hash contract is not a
+        # recoverable previous version. Removing it first prevents a corrupt
+        # multi-gigabyte asset from doubling temporary disk pressure.
+        destination.unlink()
+
     partial = destination.with_name(destination.name + ".part")
     existing = partial.stat().st_size if partial.is_file() else 0
+    if expected_size is not None and existing > expected_size:
+        partial.unlink(missing_ok=True)
+        existing = 0
+
+    if expected_size is not None:
+        remaining = max(0, expected_size - existing)
+        if shutil.disk_usage(destination.parent).free < remaining:
+            raise RuntimeError(
+                f"Espaço insuficiente para baixar {destination.name}: "
+                f"faltam até {remaining} bytes do artefato verificado."
+            )
+
     headers = {"User-Agent": "CinePulse-Experimental/1"}
     if existing:
         headers["Range"] = f"bytes={existing}-"
@@ -134,8 +165,18 @@ def _download(url: str, destination: Path, expected_hash: str, log: Callable[[st
         resumed = existing > 0 and getattr(response, "status", 200) == 206
         if not resumed:
             existing = 0
-        response_size = int(response.headers.get("Content-Length") or 0)
-        total = existing + response_size if response_size else 0
+        try:
+            response_size = int(response.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            response_size = 0
+        projected = existing + response_size if response_size else 0
+        if expected_size is not None and projected > expected_size:
+            partial.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Download de {destination.name} excede o tamanho fixado no manifesto "
+                f"({projected} > {expected_size} bytes)."
+            )
+        total = projected or expected_size or 0
         received = existing
         next_report = min(100, (int(received * 100 / total) // 10 + 1) * 10) if total else 10
         with partial.open("ab" if resumed else "wb") as output:
@@ -143,6 +184,13 @@ def _download(url: str, destination: Path, expected_hash: str, log: Callable[[st
                 block = response.read(1024 * 1024)
                 if not block:
                     break
+                if expected_size is not None and received + len(block) > expected_size:
+                    output.close()
+                    partial.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Download de {destination.name} excedeu o tamanho fixado "
+                        f"de {expected_size} bytes."
+                    )
                 output.write(block)
                 received += len(block)
                 if total:
@@ -150,10 +198,20 @@ def _download(url: str, destination: Path, expected_hash: str, log: Callable[[st
                     if percent >= next_report:
                         log(f"{destination.name}: {percent}%")
                         next_report = min(100, percent + 10)
+            output.flush()
+            os.fsync(output.fileno())
+
+    if expected_size is not None and received != expected_size:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Download incompleto para {destination.name}: "
+            f"{received}/{expected_size} bytes recebidos."
+        )
     if _sha256(partial).lower() != expected_hash.lower():
         partial.unlink(missing_ok=True)
         raise RuntimeError(f"SHA-256 inválido para {destination.name}; nada foi instalado.")
     os.replace(partial, destination)
+    _fsync_directory(destination.parent)
 
 
 def _safe_extract_archive(archive: Path, destination: Path) -> None:
@@ -208,7 +266,13 @@ def _install_archive(entry: dict, log: Callable[[str], None]) -> None:
     with tempfile.TemporaryDirectory(prefix="experimental-", dir=staging) as temp_value:
         temp = Path(temp_value)
         archive = temp / "source.zip"
-        _download(entry["url"], archive, entry["sha256"], log)
+        _download(
+            entry["url"],
+            archive,
+            entry["sha256"],
+            log,
+            expected_bytes=entry.get("bytes"),
+        )
         unpacked = temp / "unpacked"
         _safe_extract_archive(archive, unpacked)
         roots = [item for item in unpacked.iterdir() if item.is_dir()]
@@ -255,8 +319,14 @@ def install(keys: Iterable[str], log: Callable[[str], None]) -> None:
     for key in selected:
         entry = catalog.get(key, {})
         for asset in entry.get("assets", []):
-            if not (PATHS.components / "ai" / asset["path"]).is_file():
-                required_bytes += int(asset.get("bytes") or 0)
+            asset_path = PATHS.components / "ai" / asset["path"]
+            expected_size = int(asset.get("bytes") or 0)
+            try:
+                size_matches = asset_path.is_file() and asset_path.stat().st_size == expected_size
+            except OSError:
+                size_matches = False
+            if not size_matches:
+                required_bytes += expected_size
         archive = entry.get("archive")
         if archive:
             archive_marker = PATHS.components / "ai" / archive["destination"] / ".cinepulse-experimental.json"
@@ -275,7 +345,13 @@ def install(keys: Iterable[str], log: Callable[[str], None]) -> None:
         entry = catalog[key]
         log(f"Componente experimental: {key} • licença: {entry['license']}")
         for asset in entry.get("assets", []):
-            _download(asset["url"], PATHS.components / "ai" / asset["path"], asset["sha256"], log)
+            _download(
+                asset["url"],
+                PATHS.components / "ai" / asset["path"],
+                asset["sha256"],
+                log,
+                expected_bytes=asset.get("bytes"),
+            )
         if entry.get("archive"):
             _install_archive(entry["archive"], log)
         log(f"Arquivos experimentais prontos: {key}")
