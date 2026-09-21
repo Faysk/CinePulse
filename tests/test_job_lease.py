@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import json
+import os
+import socket
 import tempfile
 import threading
 import time
@@ -147,6 +150,66 @@ class JobLeaseTests(unittest.TestCase):
             )
             with self.assertRaises(LeaseBusy):
                 challenger.acquire(phase="rife")
+
+    def test_remote_lease_uses_file_freshness_not_remote_wall_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lease.json"
+            now = time.time()
+            lease = JobLease(path, "job-1", stale_after=10)
+            payload = {
+                "schema": 1,
+                "job_id": "job-1",
+                "pid": 123,
+                "process_start": "remote-start",
+                "nonce": "remote",
+                "host_id": "definitely-remote",
+                # Deliberately absurd wall-clock skew in both directions.
+                "acquired_at": now - 3600,
+                "heartbeat_at": now - 3600,
+                "progress_counter": 1,
+                "phase": "rife",
+                "unit": "segment-1",
+                "subprocesses": [777],
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            fresh = lease.read()
+            self.assertIsNotNone(fresh)
+            self.assertFalse(lease.is_stale(fresh))
+
+            old = now - 120
+            os.utime(path, (old, old))
+            stale = lease.read()
+            self.assertIsNotNone(stale)
+            self.assertTrue(lease.is_stale(stale))
+
+            payload["heartbeat_at"] = now + 3600
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            os.utime(path, (old, old))
+            future_clock = lease.read()
+            self.assertIsNotNone(future_clock)
+            self.assertTrue(lease.is_stale(future_clock))
+
+    def test_remote_guard_uses_filesystem_age_when_remote_clock_is_in_future(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lease.json"
+            lease = JobLease(path, "job-1")
+            guard = lease._guard_path
+            guard.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "pid": 123,
+                        "process_start": "remote-start",
+                        "nonce": "remote",
+                        "host_id": "definitely-remote",
+                        "created_at": time.time() + 3600,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old = time.time() - 120
+            os.utime(guard, (old, old))
+            self.assertTrue(lease._guard_is_stale())
 
     def test_registered_live_subprocess_blocks_stale_takeover(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
