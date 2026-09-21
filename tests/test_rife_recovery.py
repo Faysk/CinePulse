@@ -185,9 +185,16 @@ class RifeRecoveryTests(unittest.TestCase):
         final_start = source.index("def finalize(")
         final_end = source.index("\ndef _space_check(", final_start)
         final_block = source[final_start:final_end]
+        self.assertIn(
+            "delivery_duration = frame_bound_duration(",
+            final_block,
+        )
+        self.assertIn("contract.total_target_frames", final_block)
         self.assertIn("analyze_loudness(", final_block)
+        self.assertIn("delivery_duration,", final_block)
         self.assertIn("build_audio_filter(contract.audio_mode, measurements)", final_block)
-        self.assertIn("audio mastering contract requires a fresh 1.2.7 encode", final_block)
+        self.assertIn("frame-bound audio mastering contract requires a fresh encode", final_block)
+        self.assertIn("duration=delivery_duration", final_block)
         self.assertIn("expect_audio=contract.expect_audio", final_block)
         self.assertIn("audio_channels=contract.audio_channels if contract.expect_audio else None", final_block)
 
@@ -208,6 +215,9 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertIn('f"recovery-self-test{suffix}"', block)
         self.assertNotIn('"recovery-self-test.mp4"', block)
         self.assertIn("video_codec=delivery.video_codec", block)
+        self.assertIn("self_test_frames = max(1, int(round(0.10 * float(contract.target_fps))))", block)
+        self.assertIn("self_test_duration = frame_bound_duration(self_test_frames, contract.target_fps)", block)
+        self.assertIn("duration=self_test_duration", block)
         self.assertIn("frame_tolerance=0", block)
         self.assertIn("verification.frame_count is None", block)
 
