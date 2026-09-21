@@ -66,7 +66,7 @@ class VfxTimingTests(unittest.TestCase):
                 "cinepulse.vfx.StudioFrameGenerator",
                 return_value=SimpleNamespace(make=lambda *args, **kwargs: b"frame"),
             ),
-            patch("cinepulse.vfx.subprocess.Popen", side_effect=fake_popen),
+            patch("cinepulse.vfx._spawn_vfx_process", side_effect=fake_popen),
         ):
             vfx_module.render_vfx_intermediate(
                 "ffmpeg",
@@ -129,7 +129,7 @@ class VfxTimingTests(unittest.TestCase):
                 "cinepulse.vfx.StudioFrameGenerator",
                 return_value=SimpleNamespace(make=lambda *args, **kwargs: b"frame"),
             ),
-            patch("cinepulse.vfx.subprocess.Popen", side_effect=fake_popen),
+            patch("cinepulse.vfx._spawn_vfx_process", side_effect=fake_popen),
         ):
             vfx_module.render_vfx_intermediate(
                 "ffmpeg",
