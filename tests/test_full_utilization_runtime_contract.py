@@ -104,6 +104,26 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             self.rife_recovery,
         )
 
+    def test_studio_final_contracts_share_exact_frame_bound_duration(self) -> None:
+        self.assertIn(
+            "final_timeline_duration = frame_bound_duration(final_target_frames, target_fps)",
+            self.studio,
+        )
+        self.assertIn(
+            '{"duration": final_timeline_duration, "width": target_w, "height": target_h, "fps": target_fps}',
+            self.studio,
+        )
+        self.assertIn('"duration": final_timeline_duration, "expect_audio": expected_audio', self.studio)
+        self.assertIn(
+            "str(partial_output), final_timeline_duration, target_w, target_h, target_fps",
+            self.studio,
+        )
+        self.assertIn(
+            "output_path, settings, verification, final_timeline_duration, render_plan=render_plan",
+            self.studio,
+        )
+        self.assertNotIn("final_audio_duration", self.studio)
+
     def test_final_cfr_delivery_is_frame_bound_not_timestamp_clipped(self) -> None:
         self.assertIn(
             "final_target_frames = max(1, int(round(project_duration * target_fps)))",
