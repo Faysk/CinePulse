@@ -20,6 +20,7 @@ import numpy as np
 
 from .composer_audio import VisualizerAudioEnvelope
 from .composer_audio_binding import composer_audio_features, load_bound_visualizer_envelopes
+from .audio_mastering import bounded_audio_input_args, frame_bound_duration
 from .composer_base_probe import ComposerBaseProfile
 from .composer_decode_stream import ComposerMediaDecoderPool
 from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
@@ -94,16 +95,50 @@ def _video_encode_command(request: ComposerExportRequest, target: Path) -> list[
     ]
 
 
+def _composer_frame_count(profile: ComposerBaseProfile) -> int:
+    return max(1, int(round(float(profile.duration) * float(profile.fps))))
+
+
+def _composer_timeline_duration(profile: ComposerBaseProfile) -> float:
+    return frame_bound_duration(_composer_frame_count(profile), profile.fps)
+
+
 def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> list[str]:
     audio = request.output_audio or request.source
+    frames = _composer_frame_count(request.profile)
+    duration = _composer_timeline_duration(request.profile)
     return [
         str(request.ffmpeg), "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-i", str(visual), "-i", str(audio),
+        "-i", str(visual),
+        *bounded_audio_input_args(str(audio), duration),
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c:v", "copy", "-c:a", "copy",
-        "-t", f"{request.profile.duration:.6f}",
+        "-frames:v", str(frames),
         str(target),
     ]
+
+
+def _muxed_video_frame_count(ffprobe: str, path: Path) -> int:
+    command = [
+        str(ffprobe), "-v", "error", "-count_frames", "-select_streams", "v:0",
+        "-show_entries", "stream=nb_read_frames", "-of", "default=nw=1:nk=1", str(path),
+    ]
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError((result.stderr or "").strip() or "FFprobe could not count Composer output frames")
+    try:
+        return int((result.stdout or "").strip())
+    except ValueError as exc:
+        raise RuntimeError("FFprobe did not return an exact Composer output frame count") from exc
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -133,7 +168,7 @@ def _resolve_audio_envelopes(
         request.state,
         ffmpeg=str(request.ffmpeg),
         sources=sources,
-        duration=request.profile.duration,
+        duration=_composer_timeline_duration(request.profile),
         log=logger,
     )
 
@@ -209,7 +244,7 @@ def export_composer_reference(
     if not ordered:
         raise ValueError("composer project has no layers or visualizers")
     infos = _validate_media(request)
-    frames = max(1, round(request.profile.duration * request.profile.fps))
+    frames = _composer_frame_count(request.profile)
     frame_bytes = request.profile.width * request.profile.height * 4
     output.parent.mkdir(parents=True, exist_ok=True)
     validate_composer_resources(request.profile, output.parent)
@@ -310,6 +345,11 @@ def export_composer_reference(
                 )
                 if cancel():
                     raise InterruptedError("composer export cancelled")
+                muxed_frames = _muxed_video_frame_count(request.ffprobe, atomic.partial)
+                if muxed_frames != frames:
+                    raise RuntimeError(
+                        f"composer mux produced {muxed_frames}/{frames} video frames"
+                    )
                 atomic.commit()
             finally:
                 atomic.discard()
