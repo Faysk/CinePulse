@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import stat
 import tempfile
 import unittest
 import urllib.request
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cinepulse.update_manager import (
@@ -17,8 +19,11 @@ from cinepulse.update_manager import (
     _handoff_script,
     _read_limited,
     _safe_extract,
+    _stage_portable,
     _validated_update_info,
+    check,
     check_github_release,
+    configured_channel,
     is_newer,
     launch_staged,
     stage,
@@ -296,6 +301,88 @@ class UpdateManagerTests(unittest.TestCase):
                 bundle.writestr("cinepulse/file.txt", b"two")
             with self.assertRaises(ValueError):
                 _safe_extract(archive, destination)
+
+
+    def test_configured_channel_rejects_non_object_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            channel = Path(temporary) / "update-channel.json"
+            channel.write_text("[]", encoding="utf-8")
+            with (
+                patch("cinepulse.update_manager.CHANNEL_FILE", channel),
+                patch.dict(os.environ, {"CINEPULSE_UPDATE_MANIFEST": ""}, clear=False),
+            ):
+                with self.assertRaisesRegex(ValueError, "objeto JSON"):
+                    configured_channel()
+
+    def test_configured_channel_rejects_string_boolean(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            channel = Path(temporary) / "update-channel.json"
+            channel.write_text(
+                json.dumps({
+                    "schema": 2,
+                    "manifest_url": "https://example.invalid/update.json",
+                    "require_signature": "false",
+                }),
+                encoding="utf-8",
+            )
+            with (
+                patch("cinepulse.update_manager.CHANNEL_FILE", channel),
+                patch.dict(os.environ, {"CINEPULSE_UPDATE_MANIFEST": ""}, clear=False),
+            ):
+                with self.assertRaisesRegex(ValueError, "booleano"):
+                    configured_channel()
+
+    def test_manifest_channel_rejects_non_object_json(self) -> None:
+        with patch(
+            "cinepulse.update_manager.urllib.request.urlopen",
+            return_value=_Response(b"[]"),
+        ):
+            with self.assertRaisesRegex(ValueError, "objeto JSON"):
+                check("https://example.invalid/update.json", "1.0.0")
+
+    def test_github_release_rejects_non_object_json(self) -> None:
+        with patch(
+            "cinepulse.update_manager.urllib.request.urlopen",
+            return_value=_Response(b"[]"),
+        ):
+            with self.assertRaisesRegex(ValueError, "objeto JSON"):
+                check_github_release("1.0.0", installation="portable")
+
+    def test_portable_pending_state_is_fsynced_and_atomically_promoted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".cinepulse-portable").write_text("", encoding="utf-8")
+            info = UpdateInfo(
+                "1.2.0",
+                "https://example.invalid/CinePulse.zip",
+                "a" * 64,
+                package_kind="portable",
+            )
+
+            def fake_download(_request, destination: Path, _limit: int) -> str:
+                destination.write_bytes(b"synthetic-archive")
+                return "a" * 64
+
+            def fake_extract(_archive: Path, extracted: Path) -> Path:
+                package = extracted / "CinePulse"
+                package.mkdir()
+                return package
+
+            with (
+                patch("cinepulse.update_manager.PATHS", SimpleNamespace(root=root)),
+                patch.dict(os.environ, {"CINEPULSE_PORTABLE": "1"}, clear=False),
+                patch("cinepulse.update_manager._download_limited", side_effect=fake_download),
+                patch("cinepulse.update_manager._safe_extract", side_effect=fake_extract),
+                patch("cinepulse.update_manager.os.fsync", wraps=os.fsync) as fsync,
+            ):
+                pending = _stage_portable(info, "1.2.0", "a" * 64)
+
+            self.assertTrue(pending.is_file())
+            payload = json.loads(pending.read_text(encoding="utf-8"))
+            self.assertEqual(1, payload["schema"])
+            self.assertEqual("1.2.0", payload["version"])
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual([], list((root / ".runtime").glob("pending-update-*.json")))
 
 
 if __name__ == "__main__":
