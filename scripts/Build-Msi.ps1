@@ -65,14 +65,20 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'CinePulse-Installed.cmd') -Desti
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'Install-CinePulse-Installed.cmd') -Destination (Join-Path $Payload 'Install-CinePulse-Installed.cmd') -Force
 if (-not (Test-Path -LiteralPath (Join-Path $Payload 'assets\cinepulse.ico'))) { throw 'Ícone Windows ausente do payload MSI.' }
 $MsiVersion = ConvertTo-MsiVersion -SemanticVersion $Version
-$IntegrityFiles = [ordered]@{}
+# Keep MSI and Portable on the same package-manifest shape. The runtime reader
+# still accepts the legacy path->hash mapping for already installed packages.
+$IntegrityFiles = @()
 Get-ChildItem -LiteralPath $Payload -File -Recurse | Sort-Object FullName | ForEach-Object {
-    $Relative = $_.FullName.Substring($Payload.Length + 1).Replace('\', '/')
+    $Relative = $_.FullName.Substring($Payload.Length + 1).Replace('\\', '/')
     if ($Relative -ne 'cinepulse-files.json') {
-        $IntegrityFiles[$Relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+        $IntegrityFiles += @{
+            path = $Relative
+            sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            size = $_.Length
+        }
     }
 }
-[ordered]@{ schema = 1; files = $IntegrityFiles } | ConvertTo-Json -Depth 4 |
+[ordered]@{ schema = 1; version = $Version; files = $IntegrityFiles } | ConvertTo-Json -Depth 5 |
     Set-Content -LiteralPath (Join-Path $Payload 'cinepulse-files.json') -Encoding UTF8
 
 if (-not (Test-Path -LiteralPath $WixExe)) {

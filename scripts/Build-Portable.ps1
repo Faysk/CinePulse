@@ -100,6 +100,12 @@ Get-ChildItem -LiteralPath $PackageRoot -File -Recurse | ForEach-Object {
 $ManifestPath = Join-Path $PackageRoot 'cinepulse-files.json'
 $Manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
 
+# Cross the producer/consumer boundary before the archive is allowed to exist.
+# This caught a real Portable bug where the builder emitted a list but the
+# runtime integrity reader only accepted a dictionary.
+& $Python -c "import sys; from pathlib import Path; from cinepulse.integrity import verify; result=verify(Path(sys.argv[1])); print('CINEPULSE_PACKAGE_INTEGRITY_OK checked=' + str(result['checked']) if result.get('ok') else 'CINEPULSE_PACKAGE_INTEGRITY_FAILED ' + repr(result)); raise SystemExit(0 if result.get('ok') else 1)" $PackageRoot
+if ($LASTEXITCODE -ne 0) { throw 'O payload portátil não passou na verificação de integridade do próprio runtime.' }
+
 if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
 # Archive the directory itself, not a wildcard passed to -LiteralPath. The
 # portable/update/MSI contracts require a single top-level CinePulse/ folder.
