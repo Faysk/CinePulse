@@ -118,3 +118,23 @@ def test_temporary_installer_patch_scaffolds_are_absent() -> None:
         "scripts/_hotfix_apply_neural_index.py",
     ):
         assert not (ROOT / relative).exists(), relative
+
+
+def test_verified_download_retries_transient_failures_without_weakening_hash_contract() -> None:
+    text = _text("installer/Start-CinePulse.ps1")
+    assert "[ValidateRange(1, 8)][int]$MaxAttempts = 4" in text
+    assert 'for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++)' in text
+    assert "Start-Sleep -Seconds $DelaySeconds" in text
+    assert "Get-FileHash -Algorithm SHA256 -LiteralPath $Partial" in text
+    assert 'Move-Item -LiteralPath $Partial -Destination $Destination -Force' in text
+    assert 'Get-VerifiedDownload -Name "inicializador portátil uv $ExpectedVersion"' in text
+    assert "Invoke-WebRequest -UseBasicParsing -Uri $BootstrapManifest.uv.url" not in text
+
+
+def test_neural_installer_smoke_retries_uv_download() -> None:
+    text = _text("scripts/Test-NeuralInstaller.ps1")
+    assert "function Invoke-CiDownloadWithRetry" in text
+    assert "[ValidateRange(1, 8)][int]$MaxAttempts = 4" in text
+    assert "Invoke-CiDownloadWithRetry -Uri $Manifest.uv.url -OutFile $UvArchive" in text
+    assert "Start-Sleep -Seconds $DelaySeconds" in text
+    assert "Get-FileHash -Algorithm SHA256 -LiteralPath $UvArchive" in text
