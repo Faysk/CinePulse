@@ -99,6 +99,44 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("enhanced_quality = inspect_matroska_segment(enhanced)", self.studio)
         self.assertIn("enhanced_quality.packet_count != total_frames", self.studio)
 
+    def test_auxiliary_nvenc_paths_stay_on_selected_gpu(self) -> None:
+        self.assertGreaterEqual(
+            self.studio.count('"-gpu", str(max(0, int(self._hardware.gpu_index)))'),
+            2,
+        )
+        self.assertIn(
+            "gpu_index=self._hardware.gpu_index",
+            self.studio,
+        )
+        self.assertIn("gpu_index: int = 0", self.vfx)
+        self.assertIn('str(max(0, int(gpu_index)))', self.vfx)
+
+    def test_comparison_preview_is_best_effort_after_main_output_commit(self) -> None:
+        self.assertIn("Comparação A/B cancelada depois do preview principal já validado", self.studio)
+        self.assertIn("Comparação A/B falhou depois do preview principal já validado", self.studio)
+        comparison_start = self.studio.index("def _create_comparison_preview(")
+        comparison_end = self.studio.index("def _h264_encoder(", comparison_start)
+        comparison_block = self.studio[comparison_start:comparison_end]
+        self.assertIn("H.264 NVENC auxiliar falhou; repetindo com libx264", comparison_block)
+        self.assertIn("self._h264_encoder(1280, 720, True)", comparison_block)
+
+    def test_comparison_audio_is_frame_bound_instead_of_stream_copied(self) -> None:
+        self.assertIn(
+            "comparison_duration = frame_bound_duration(comparison_frames, comparison_fps)",
+            self.studio,
+        )
+        self.assertIn("comparison_has_audio = has_audio(processed_info)", self.studio)
+        self.assertIn(
+            "bound_delivery_audio_filter(comparison_duration)",
+            self.studio,
+        )
+        self.assertIn('"[aout]"', self.studio)
+        self.assertIn('"-c:a", "aac", "-b:a", "320k"', self.studio)
+        comparison_start = self.studio.index("def _create_comparison_preview(")
+        comparison_end = self.studio.index("def _h264_encoder(", comparison_start)
+        comparison_block = self.studio[comparison_start:comparison_end]
+        self.assertNotIn('"-c:a", "copy"', comparison_block)
+
     def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
         self.assertIn("distributed_chunk_target_count(", self.studio)
         self.assertIn("timed_concat_manifest(chunks, chunk_frame_counts, target_fps)", self.studio)

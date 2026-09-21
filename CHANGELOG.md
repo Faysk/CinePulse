@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.12 — 2026-09-21
+
+- fixa explicitamente `-gpu <selected>` nos encoders H.264/HEVC NVENC auxiliares do Studio, evitando que intermediários, transições ou comparação caiam silenciosamente no adaptador 0 em máquinas multi-GPU;
+- o fallback H.264/NVENC direto do VFX recebe `gpu_index` do Studio e usa o mesmo adaptador selecionado para o render;
+- a comparação A/B calcula `comparison_duration = frames/fps` e deixa de fazer `-c:a copy` sem limite de timeline;
+- quando existe áudio no arquivo processado, a comparação usa `atrim + asetpts + apad` até a duração CFR exata e reencoda AAC 320 kbps; sem áudio, mantém saída silenciosa explícita;
+- preserva `-frames:v` como limite do vídeo da comparação e não reintroduz `-t` global;
+- comparação A/B passa a ser best-effort: falha H.264/NVENC auxiliar repete com libx264, e falha/cancelamento do A/B depois do preview principal validado não reclassifica o render principal como erro/cancelado;
+- adiciona contratos para pinning de GPU em caminhos auxiliares e para impedir retorno de stream-copy de áudio na comparação.
+
 ## 1.2.11 — 2026-09-21
 
 - aplica ao Real-ESRGAN o mesmo contrato temporal exato já usado pelo RIFE: cada chunk FFV1 é contado estruturalmente e o concat recebe `duration = frames/fps`;
