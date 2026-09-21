@@ -10,6 +10,8 @@ from typing import Callable
 
 import numpy as np
 
+from .process_control import popen_group_kwargs, terminate_process_tree
+
 
 EFFECT_FPS = 60
 EFFECT_WIDTH = 320
@@ -290,7 +292,7 @@ def render_reactive_intermediate(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=False,
-        creationflags=CREATE_NO_WINDOW,
+        **popen_group_kwargs(),
     )
     process_changed(process)
     recent: deque[str] = deque(maxlen=40)
@@ -310,7 +312,7 @@ def render_reactive_intermediate(
         assert process.stdin is not None
         for frame_number in range(frame_count):
             if cancelled():
-                process.terminate()
+                terminate_process_tree(process, grace_seconds=2.0)
                 raise RenderCancelled
             frame = generator.make(frame_number, energy[frame_number], float(rms[frame_number]), float(onset[frame_number]))
             try:
@@ -332,4 +334,17 @@ def render_reactive_intermediate(
             raise RuntimeError(f"Falha ao renderizar a Aurora Cinematográfica.\n\n{details}")
         progress(1.0)
     finally:
+        if process.poll() is None:
+            terminate_process_tree(process, grace_seconds=2.0)
+        try:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+        except (OSError, ValueError, AttributeError):
+            pass
+        reader.join(timeout=2.0)
+        try:
+            if process.stdout is not None and not process.stdout.closed:
+                process.stdout.close()
+        except (OSError, ValueError, AttributeError):
+            pass
         process_changed(None)
