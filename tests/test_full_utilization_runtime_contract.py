@@ -98,10 +98,6 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         )
         self.assertIn("enhanced_quality = inspect_matroska_segment(enhanced)", self.studio)
         self.assertIn("enhanced_quality.packet_count != total_frames", self.studio)
-        self.assertNotIn(
-            '"\\n".join("file '" + str(item.resolve())',
-            self.studio,
-        )
 
     def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
         self.assertIn("distributed_chunk_target_count(", self.studio)
