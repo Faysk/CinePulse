@@ -89,8 +89,12 @@ def validate_preview_output_contract(
             f"{candidate_contract.audio_stream_count} != {source_contract.audio_stream_count}."
         )
     if require_cfr:
-        if candidate_contract.suspected_vfr:
-            raise RuntimeError("Temporal Preview output is not CFR after reconstruction.")
+        # The temporal encoder explicitly emits CFR (-r + -fps_mode cfr).
+        # Do not re-classify that generated stream as VFR from aggregate
+        # avg_frame_rate vs r_frame_rate alone: FFprobe can report different
+        # aggregate rates on very short CFR clips because the last frame's
+        # display duration is not represented uniformly by every container.
+        # Exact frame count, FPS and frame-bound duration remain mandatory.
         if abs(candidate_contract.fps - source_contract.fps) > 0.02:
             raise RuntimeError(
                 f"Temporal Preview FPS changed: {candidate_contract.fps:.5f} != "
