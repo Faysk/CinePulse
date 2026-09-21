@@ -37,6 +37,40 @@ def run(command: list[str]) -> None:
         )
 
 
+def decoded_audio_samples(ffmpeg: str, path: Path) -> int:
+    result = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-map",
+            "0:a:0",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-f",
+            "s24le",
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            result.stderr.decode("utf-8", errors="replace") or "audio decode failed"
+        )
+    if len(result.stdout) % 3:
+        raise RuntimeError(
+            f"decoded PCM payload is not aligned to 24-bit samples: {len(result.stdout)} bytes"
+        )
+    return len(result.stdout) // 3
+
+
 def render_case(
     *,
     ffmpeg: str,
@@ -108,14 +142,16 @@ def render_case(
             f"{issue.code}: {issue.message}" for issue in result.errors
         )
         raise RuntimeError(f"{name}: verification failed: {details}")
-    if result.av_sync_delta is None or result.av_sync_delta > 0.02:
+    expected_samples = round(exact_duration * 48000)
+    samples = decoded_audio_samples(ffmpeg, output)
+    if samples != expected_samples:
         raise RuntimeError(
-            f"{name}: A/V end delta {result.av_sync_delta}; expected <= 0.02s"
+            f"{name}: decoded audio samples {samples}; expected {expected_samples}"
         )
     print(
         "AUDIO_FRAME_TIMELINE_CASE_OK "
         f"name={name} frames={result.frame_count} "
-        f"duration={result.duration:.6f} av_delta={result.av_sync_delta:.6f}"
+        f"duration={result.duration:.6f} samples={samples}"
     )
 
 
