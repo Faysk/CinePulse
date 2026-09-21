@@ -41,15 +41,24 @@ class WorkerCommand:
     def from_dict(cls, payload: dict) -> "WorkerCommand":
         if int(payload.get("schema") or 0) != PROTOCOL_SCHEMA:
             raise WorkerProtocolError("schema de comando inválido")
+        request_id = str(payload.get("request_id") or "").strip()
+        job_id = str(payload.get("job_id") or "").strip()
+        if not request_id or not job_id:
+            raise WorkerProtocolError("command request_id/job_id ausente")
         command = str(payload.get("command") or "")
         if command not in COMMANDS:
             raise WorkerProtocolError(f"comando desconhecido: {command}")
+        command_payload = payload.get("payload")
+        if command_payload is None:
+            command_payload = {}
+        if not isinstance(command_payload, dict):
+            raise WorkerProtocolError("command payload deve ser objeto")
         return cls(
-            request_id=str(payload.get("request_id") or ""),
-            job_id=str(payload.get("job_id") or ""),
+            request_id=request_id,
+            job_id=job_id,
             command=command,
             created_at=float(payload.get("created_at") or 0.0),
-            payload=dict(payload.get("payload") or {}),
+            payload=dict(command_payload),
         )
 
     def to_dict(self) -> dict:
@@ -218,12 +227,22 @@ class WorkerCommandQueue:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or int(payload.get("schema") or 0) != PROTOCOL_SCHEMA:
             raise WorkerProtocolError("reply inválido")
+        reply_id = str(payload.get("request_id") or "").strip()
+        job_id = str(payload.get("job_id") or "").strip()
+        ok = payload.get("ok")
+        reply_payload = payload.get("payload")
+        if reply_id != request_id or not job_id or not isinstance(ok, bool):
+            raise WorkerProtocolError("reply inválido")
+        if reply_payload is None:
+            reply_payload = {}
+        if not isinstance(reply_payload, dict):
+            raise WorkerProtocolError("reply payload deve ser objeto")
         return WorkerReply(
-            request_id=str(payload.get("request_id") or ""),
-            job_id=str(payload.get("job_id") or ""),
-            ok=bool(payload.get("ok")),
+            request_id=reply_id,
+            job_id=job_id,
+            ok=ok,
             state=str(payload.get("state") or ""),
             message=str(payload.get("message") or ""),
-            payload=dict(payload.get("payload") or {}),
+            payload=dict(reply_payload),
             created_at=float(payload.get("created_at") or 0.0),
         )
