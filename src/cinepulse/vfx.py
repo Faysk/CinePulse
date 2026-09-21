@@ -287,6 +287,7 @@ def render_vfx_intermediate(
     final_audio_filter: str = "",
     final_audio_args: list[str] | None = None,
     final_muxer_args: list[str] | None = None,
+    gpu_index: int = 0,
 ) -> None:
     """Render music-reactive VFX using the full-track envelope.
 
@@ -388,6 +389,8 @@ def render_vfx_intermediate(
         command += [
             "-c:v",
             "h264_nvenc",
+            "-gpu",
+            str(max(0, int(gpu_index))),
             "-preset",
             "p7",
             "-tune",
