@@ -85,9 +85,13 @@ def main() -> None:
     fake_dir=root_dir/'fake'; fake_dir.mkdir()
     executable_suffix = '.cmd' if os.name == 'nt' else ''
     fake_ai=fake_dir/f'realesrgan-ncnn-vulkan{executable_suffix}'; write_fake_realesrgan(fake_ai)
-    fake_models=fake_dir/'models'; fake_models.mkdir(); (fake_models/'realesr-animevideov3-x2.bin').write_bytes(b'x')
+    fake_models=fake_dir/'models'; fake_models.mkdir()
+    (fake_models/'realesr-animevideov3-x2.bin').write_bytes(b'model-bin')
+    (fake_models/'realesr-animevideov3-x2.param').write_bytes(b'model-param')
     fake_rife=fake_dir/f'rife-ncnn-vulkan{executable_suffix}'; write_fake_rife(fake_rife)
-    fake_rife_model=fake_dir/'rife-v4.6'; fake_rife_model.mkdir(); (fake_rife_model/'flownet.param').write_bytes(b'x')
+    fake_rife_model=fake_dir/'rife-v4.6'; fake_rife_model.mkdir()
+    (fake_rife_model/'flownet.bin').write_bytes(b'rife-bin')
+    (fake_rife_model/'flownet.param').write_bytes(b'rife-param')
     scratch=root_dir/'scratch'; scratch.mkdir()
     cache=root_dir/'cache'; cache.mkdir()
 
