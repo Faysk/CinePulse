@@ -19,6 +19,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 from .audio_mastering import bounded_audio_input_args, frame_bound_duration
 from .gpu_failure import looks_like_gpu_runtime_failure
+from .process_control import popen_group_kwargs, terminate_process_tree
 from .music_envelope import (
     DEFAULT_ANALYSIS_FPS,
     analyze_music_structure,
@@ -257,7 +258,7 @@ def _spawn_vfx_process(command: list[str]) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=False,
-        creationflags=CREATE_NO_WINDOW,
+        **popen_group_kwargs(),
     )
 
 
@@ -476,7 +477,7 @@ def render_vfx_intermediate(
             assert process.stdin is not None
             for frame_number in range(frame_count):
                 if cancelled():
-                    process.terminate()
+                    terminate_process_tree(process, log, grace_seconds=2.0)
                     raise RenderCancelled
                 frame = generator.make(
                     frame_number,
@@ -499,7 +500,16 @@ def render_vfx_intermediate(
             if cancelled():
                 raise RenderCancelled
             return return_code, recent
+        except BaseException:
+            terminate_process_tree(process, log, grace_seconds=2.0)
+            raise
         finally:
+            try:
+                if process.stdin is not None and not process.stdin.closed:
+                    process.stdin.close()
+            except (OSError, ValueError):
+                pass
+            reader.join(timeout=2)
             process_changed(None)
 
     attempts = [primary_video_args]
