@@ -4310,6 +4310,8 @@ class VideoOptimizerStudio:
     def _start_queue(self) -> None:
         if self._busy or self._queue_running:
             return
+        if not self._prepare_preserved_render_for_new_run():
+            return
         if not any(item["status"] in {"Aguardando", "Erro", "Interrompido", "Cancelado"} for item in self._queue_items):
             messagebox.showinfo(APP_TITLE, "Adicione pelo menos um projeto à fila.")
             return
@@ -4395,6 +4397,8 @@ class VideoOptimizerStudio:
     def _start(self, preview: bool) -> None:
         if self._busy:
             return
+        if not self._prepare_preserved_render_for_new_run():
+            return
         settings = self._settings()
         if not self._validate(settings, preview):
             return
@@ -4411,6 +4415,92 @@ class VideoOptimizerStudio:
             if output.exists() and not messagebox.askyesno(APP_TITLE, "O arquivo já existe. Deseja substituí-lo?"):
                 return
         self._launch_worker(settings, preview)
+
+    def _preserved_render_payload(self) -> dict | None:
+        payload = self._render_journal.read()
+        if not isinstance(payload, dict):
+            return None
+        partial_value = payload.get("partial")
+        final_value = payload.get("final")
+        if not partial_value or not final_value:
+            return None
+        try:
+            partial = Path(str(partial_value))
+        except (TypeError, ValueError):
+            return None
+        return payload if partial.is_file() else None
+
+    def _prepare_preserved_render_for_new_run(self) -> bool:
+        payload = self._render_journal.read()
+        if not payload:
+            return True
+        try:
+            pid = int(payload.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid != os.getpid() and process_alive(pid):
+            self._set_feedback(
+                "warning",
+                "Outra instância ainda está processando",
+                f"O render do PID {pid} continua ativo; este CinePulse não vai substituir o journal nem a saída parcial.",
+                category="Recuperação",
+            )
+            return False
+
+        partial_value = payload.get("partial")
+        final_value = payload.get("final")
+        if not partial_value or not final_value:
+            self._render_journal.clear()
+            return True
+        partial = Path(str(partial_value))
+        final = Path(str(final_value))
+        if not partial.is_file():
+            self._render_journal.clear()
+            return True
+
+        # Reuse the full recovery validator first. If the user accepts a valid
+        # partial, the journal is cleared and the new render may proceed.
+        self._recover_interrupted_render()
+        remaining = self._preserved_render_payload()
+        if remaining is None:
+            return True
+
+        partial = Path(str(remaining["partial"]))
+        final = Path(str(remaining["final"]))
+        if not messagebox.askyesno(
+            APP_TITLE,
+            "Há uma saída parcial preservada de um render anterior.\n\n"
+            f"{partial}\n\n"
+            "Descartar esse arquivo parcial e iniciar um novo processamento? "
+            "Se escolher Não, o arquivo e o journal serão preservados.",
+        ):
+            self._set_feedback(
+                "warning",
+                "Render anterior preservado",
+                "O novo processamento foi bloqueado para não sobrescrever a única referência de recovery.",
+                category="Recuperação",
+                primary=("Abrir arquivo", lambda value=partial: self._open_external_path(value)),
+            )
+            return False
+        try:
+            AtomicOutput(final, partial, final.with_name(f".{final.name}.previous")).discard()
+            self._render_journal.clear()
+        except Exception as exc:
+            self._set_feedback(
+                "error",
+                "Não foi possível descartar a saída parcial",
+                "O novo render continua bloqueado e o arquivo anterior foi preservado.",
+                category="Recuperação",
+                technical_detail=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        self._set_feedback(
+            "info",
+            "Saída parcial descartada",
+            "O journal anterior foi limpo; um novo processamento pode começar com segurança.",
+            category="Recuperação",
+        )
+        return True
 
     def _launch_worker(self, settings: RenderSettings, preview: bool) -> bool:
         try:
@@ -7628,7 +7718,19 @@ class VideoOptimizerStudio:
                         self._active_queue_id = None
                         self._refresh_queue_tree()
                         self._save_queue()
-                        self._schedule(250, self._run_next_queue_item)
+                        if self._preserved_render_payload() is not None:
+                            self._queue_running = False
+                            self._set_feedback(
+                                "warning",
+                                "Fila pausada para preservar recovery",
+                                "O item com erro deixou uma saída parcial recuperável. "
+                                "A fila não iniciará o próximo projeto até essa saída ser recuperada ou descartada explicitamente.",
+                                category="Recuperação",
+                                primary=("Abrir fila", lambda: self._open_tab(4)),
+                            )
+                            self._refresh_queue_overview()
+                        else:
+                            self._schedule(250, self._run_next_queue_item)
                     else:
                         pass
         except queue.Empty:
