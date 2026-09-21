@@ -20,6 +20,10 @@ A comparação A/B já limitava o vídeo por quantidade exata de frames, mas faz
 
 Agora a comparação calcula a duração real como `comparison_frames / comparison_fps`, aplica trim/pad de áudio nessa janela e codifica a faixa de comparação em AAC 320 kbps. O vídeo continua limitado por `-frames:v` e nenhum `-t` global é reintroduzido.
 
+## Comparação A/B não invalida o render principal
+
+A comparação é pós-processamento opcional. Se o H.264/NVENC auxiliar falhar, o CinePulse remove a saída parcial e repete uma vez com libx264. Se até a comparação CPU falhar, ou se o usuário cancelar enquanto ela é montada, o preview principal já validado permanece como resultado de sucesso em vez de o job ser reclassificado como falha/cancelamento.
+
 ## O que não muda
 
 Não há alteração de modelo, escala, FPS, cor/HDR, política full-utilization ou qualidade do arquivo final. A mudança é de consistência de dispositivo e de duração na saída auxiliar de comparação.
