@@ -246,8 +246,14 @@ class JobLease:
                 return True
         age = max(0.0, time.time() - created_at)
         if host_id and host_id != socket.gethostname():
-            # A PID on another host is not meaningful locally. Give any remote
-            # in-flight mutation a bounded window before crash recovery.
+            # A remote wall clock may be skewed. For cross-host guards, trust
+            # the shared filesystem timestamp instead of created_at from the
+            # other machine; otherwise a crashed host with a clock in the
+            # future can block lease mutation for minutes or hours.
+            try:
+                age = max(0.0, time.time() - guard.stat().st_mtime)
+            except OSError:
+                pass
             return age > _GUARD_STALE_SECONDS
         if not self._alive(pid):
             return True
@@ -330,6 +336,17 @@ class JobLease:
         return current_start == record.process_start
 
     def is_stale(self, record: LeaseRecord) -> bool:
+        if record.host_id != socket.gethostname():
+            # Remote heartbeat_at is written using another host's wall clock,
+            # so it is not safe to compare directly with this process clock.
+            # The shared lease file itself is atomically replaced on every
+            # heartbeat; its mtime is therefore the cross-host freshness signal.
+            try:
+                age = max(0.0, time.time() - self.path.stat().st_mtime)
+            except OSError:
+                age = max(0.0, self.clock() - record.heartbeat_at)
+            return age > self.stale_after
+
         age = max(0.0, self.clock() - record.heartbeat_at)
         if age <= self.stale_after:
             return False

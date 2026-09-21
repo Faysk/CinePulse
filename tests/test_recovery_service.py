@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,6 +69,37 @@ class RecoveryServiceTests(unittest.TestCase):
                 self.assertTrue(candidate.owner_active)
             finally:
                 lease.release()
+
+    def test_expired_remote_lease_is_discovered_for_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.mp4"
+            source.write_bytes(b"media")
+            job_dir = self._job(root, "job-1", "running", source=source)
+            lease_path = job_dir / "lease.json"
+            payload = {
+                "schema": 1,
+                "job_id": "job-1",
+                "pid": 100,
+                "process_start": "remote-start",
+                "nonce": "remote-owner",
+                "host_id": "definitely-not-this-host",
+                "acquired_at": 1.0,
+                "heartbeat_at": 1.0,
+                "progress_counter": 10,
+                "phase": "rife",
+                "unit": "segment-10",
+                "subprocesses": [],
+            }
+            lease_path.write_text(json.dumps(payload), encoding="utf-8")
+            old_mtime = __import__("time").time() - 120
+            os.utime(lease_path, (old_mtime, old_mtime))
+
+            candidate = RecoveryService(root).discover()[0]
+
+            self.assertEqual("needs_audit", candidate.classification)
+            self.assertFalse(candidate.owner_active)
+            self.assertIn("auditar", candidate.actions)
 
     def test_missing_source_is_blocked_without_mutating_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
