@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.16`. Mantém o hardening GPU/CI da 1.2.15 e fecha uma lacuna de recuperação de estado: jobs preservados continuam visíveis mesmo quando `manifest.json` sumiu ou quando manifesto e backup estão corrompidos. Backup-only é restaurado automaticamente; estado irrecuperável aparece bloqueado para inspeção/preservação em vez de desaparecer silenciosamente.
+> Estado Stable: `1.2.17`. Mantém o recovery/CI da 1.2.16 e endurece a recuperação do arquivo final interrompido: o `.partial` só pode ser promovido se cumprir o contrato completo gravado no journal — resolução, FPS, duração CFR, contagem exata de frames, codec e áudio esperado. Journals antigos/incompletos falham fechado e preservam o arquivo para análise; renders configurados com Deep Verify mantêm o mesmo nível antes da promoção.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

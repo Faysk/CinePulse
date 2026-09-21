@@ -187,10 +187,13 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             "final_timeline_duration = frame_bound_duration(final_target_frames, target_fps)",
             self.studio,
         )
-        self.assertIn(
-            '{"duration": final_timeline_duration, "width": target_w, "height": target_h, "fps": target_fps}',
-            self.studio,
-        )
+        self.assertIn('"duration": final_timeline_duration', self.studio)
+        self.assertIn('"width": target_w', self.studio)
+        self.assertIn('"height": target_h', self.studio)
+        self.assertIn('"fps": target_fps', self.studio)
+        self.assertIn('"video_codec": delivery_plan.video_codec', self.studio)
+        self.assertIn('"deep": bool(settings.deep_verify and not preview)', self.studio)
+        self.assertIn("expectation_from_journal(payload.get(\"expected\"))", self.studio)
         self.assertIn('"duration": final_timeline_duration, "expect_audio": expected_audio', self.studio)
         self.assertIn(
             "str(partial_output), final_timeline_duration, target_w, target_h, target_fps",

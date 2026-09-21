@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.17 — 2026-09-21
+
+- recuperação de `.partial` no startup deixa de aceitar apenas `duration > 0` e resolução não-zero; passa a usar o mesmo contrato de verificação da saída final;
+- `render.json` grava resolução, FPS, duração frame-bound, presença de áudio, codecs, canais, sample rate e nível Deep Verify necessários para validar a saída interrompida;
+- `quick_verify` é exigido com `frame_tolerance=0`; partials com menos/mais quadros, FPS/geometria/codec/áudio incorretos ou sync inválido ficam preservados e nunca são oferecidos para promoção;
+- renders originalmente configurados com Deep Verify repetem `deep_verify` antes da promoção do partial recuperado;
+- journals legados/incompletos falham fechado: o arquivo parcial permanece disponível para inspeção/manual recovery, sem virar saída final automaticamente;
+- adiciona testes para contrato de journal, partial truncado e preservação do nível Deep Verify.
+
 ## 1.2.16 — 2026-09-21
 
 - recovery discovery deixa de depender exclusivamente da existência de `manifest.json`: diretórios com apenas `manifest.json.bak` também são encontrados e passam pelo recovery normal do `JobStore`;

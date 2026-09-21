@@ -83,6 +83,43 @@ _CODEC_ALIASES = {
 }
 
 
+def expectation_from_journal(payload: object) -> VerifyExpectation:
+    """Build the exact interrupted-render verification contract from journal data."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("Render journal does not contain an expected media contract.")
+    required = ("width", "height", "fps", "duration", "expect_audio")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError("Render journal expectation is incomplete: " + ", ".join(missing))
+
+    def optional_int(name: str) -> int | None:
+        value = payload.get(name)
+        if value in (None, ""):
+            return None
+        return int(value)
+
+    width = int(payload["width"])
+    height = int(payload["height"])
+    fps = float(payload["fps"])
+    duration = float(payload["duration"])
+    if width <= 0 or height <= 0 or fps <= 0 or duration <= 0:
+        raise ValueError("Render journal expectation contains non-positive media values.")
+
+    expect_audio = bool(payload["expect_audio"])
+    return VerifyExpectation(
+        width=width,
+        height=height,
+        fps=fps,
+        duration=duration,
+        expect_audio=expect_audio,
+        video_codec=str(payload.get("video_codec") or "") or None,
+        audio_codec=(str(payload.get("audio_codec") or "") or None) if expect_audio else None,
+        audio_channels=optional_int("audio_channels") if expect_audio else None,
+        audio_sample_rate=optional_int("audio_sample_rate") if expect_audio else None,
+        frame_tolerance=0,
+    )
+
 def codec_name(label: str | None) -> str | None:
     if not label:
         return None
