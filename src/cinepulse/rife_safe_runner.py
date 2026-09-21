@@ -165,9 +165,38 @@ def _run(command: list[str], *, cwd: Path | None = None) -> None:
 
 def _move_native_frames(native_dir: Path, output_dir: Path, expected: int) -> None:
     frames = validate_png_sequence(native_dir, expected)
+    output_dir.mkdir(parents=False, exist_ok=False)
     for index, frame in enumerate(frames, start=1):
         os.replace(frame, output_dir / f"{index:08d}.png")
     validate_png_sequence(output_dir, expected)
+
+
+def _prepare_atomic_output(outgoing: Path) -> Path:
+    """Return a unique sibling staging directory for atomic RIFE publication."""
+
+    outgoing.parent.mkdir(parents=True, exist_ok=True)
+    if outgoing.exists():
+        if not outgoing.is_dir():
+            raise ValueError(f"saída RIFE existe e não é diretório: {outgoing}")
+        if any(outgoing.iterdir()):
+            raise ValueError(f"diretório de saída RIFE não está vazio: {outgoing}")
+        try:
+            outgoing.rmdir()
+        except FileNotFoundError:
+            pass
+    publish_dir = outgoing.with_name(
+        f".{outgoing.name}.publish-{os.getpid()}-{time.time_ns()}"
+    )
+    shutil.rmtree(publish_dir, ignore_errors=True)
+    return publish_dir
+
+
+def _promote_atomic_output(publish_dir: Path, outgoing: Path, expected: int) -> None:
+    validate_png_sequence(publish_dir, expected)
+    if outgoing.exists():
+        raise FileExistsError(f"saída RIFE apareceu durante a promoção: {outgoing}")
+    os.replace(publish_dir, outgoing)
+    validate_png_sequence(outgoing, expected)
 
 
 def _hardware_tuning_policy(
@@ -453,9 +482,7 @@ def run_safe_rife(
         gpu_index=selected_policy.gpu_index if selected_policy is not None else fallback.gpu_index,
         measured=selected_measured,
     )
-    outgoing.mkdir(parents=True, exist_ok=True)
-    if any(outgoing.iterdir()):
-        raise ValueError(f"diretório de saída RIFE não está vazio: {outgoing}")
+    publish_dir = _prepare_atomic_output(outgoing)
     native_dir = outgoing.with_name(f".{outgoing.name}.native-{os.getpid()}-{time.time_ns()}")
     shutil.rmtree(native_dir, ignore_errors=True)
     native_dir.mkdir(parents=False)
@@ -472,7 +499,8 @@ def run_safe_rife(
         )
         native_frames = validate_png_sequence(native_dir, applied.native_target)
         if requested_target == applied.native_target:
-            _move_native_frames(native_dir, outgoing, requested_target)
+            _move_native_frames(native_dir, publish_dir, requested_target)
+            _promote_atomic_output(publish_dir, outgoing, requested_target)
             return applied
 
         ffmpeg_executable = _find_ffmpeg(rife_executable, ffmpeg)
@@ -498,10 +526,11 @@ def run_safe_rife(
             str(requested_target),
             "-start_number",
             "1",
-            str(outgoing / "%08d.png"),
+            str(publish_dir / "%08d.png"),
         ]
+        publish_dir.mkdir(parents=False, exist_ok=False)
         _run(retime)
-        validate_png_sequence(outgoing, requested_target)
+        _promote_atomic_output(publish_dir, outgoing, requested_target)
         print(
             f"CINEPULSE_RIFE_SAFE RETIME native={applied.native_target} requested={requested_target} mode=uniform-blend",
             flush=True,
@@ -509,6 +538,7 @@ def run_safe_rife(
         return applied
     finally:
         shutil.rmtree(native_dir, ignore_errors=True)
+        shutil.rmtree(publish_dir, ignore_errors=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
