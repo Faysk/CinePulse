@@ -123,19 +123,19 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
 
     def test_audio_window_is_bounded_on_input_without_clipping_video(self) -> None:
         self.assertIn(
-            "*bounded_audio_input_args(settings.audio, project_duration)",
+            "*bounded_audio_input_args(settings.audio, final_audio_duration)",
             self.studio,
         )
         self.assertIn(
-            "*bounded_audio_input_args(settings.video, project_duration)",
+            "*bounded_audio_input_args(settings.video, final_audio_duration)",
             self.studio,
         )
         self.assertIn(
-            "bounded_audio_input_args(final_audio_source, duration)",
+            "bounded_audio_input_args(final_audio_source, output_audio_duration)",
             self.vfx,
         )
         self.assertIn(
-            "*bounded_audio_input_args(str(contract.source), duration)",
+            "*bounded_audio_input_args(str(contract.source), delivery_audio_duration)",
             self.rife_recovery,
         )
         self.assertNotIn(
