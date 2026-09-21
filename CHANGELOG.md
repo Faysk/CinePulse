@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.15 — 2026-09-21
+
+- comparação A/B só troca H.264/NVENC por libx264 quando a exceção contém evidência real de falha GPU/NVENC; erro de disco, input ou filtro não dispara retry enganoso;
+- extração CUDA foreground do pipeline neural deixa de repetir pela CPU para qualquer `RuntimeError`: fallback passa a exigir classificação GPU explícita;
+- prefetch CUDA recebe o mesmo contrato, evitando descartar/reextrair chunks por falhas que não pertencem à GPU;
+- mismatch explícito de contagem de frames CUDA continua acionando CPU, porque a própria saída prova uma falha de integridade da rota acelerada mesmo com exit code zero;
+- Quality Linux desabilita apenas sources em `/etc/apt/sources.list.d/` que apontem para `packages.microsoft.com` antes de instalar FFmpeg/Xvfb/Tk dos repositórios Ubuntu, evitando que um 403 externo derrube Media/CPU integration;
+- adiciona contratos de regressão para classificação GPU e isolamento de APT de terceiro.
+
 ## 1.2.14 — 2026-09-21
 
 - recovery crash-safe passa a usar o mesmo contrato GPU-first/CPU-fallback da renderização normal na codificação final;
