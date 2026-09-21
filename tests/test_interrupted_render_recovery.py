@@ -50,6 +50,31 @@ class InterruptedRenderRecoveryTests(unittest.TestCase):
             self.assertTrue(partial.is_file())
             self.assertIn("VERIFY-FRAMES", studio._set_feedback.call_args.kwargs["technical_detail"])
 
+    def test_deep_contract_uses_deep_verify_before_promotion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            partial = root / ".out.partial-1.mp4"
+            final = root / "out.mp4"
+            partial.write_bytes(b"valid-output")
+            payload = {
+                "schema": 1, "pid": 999999, "partial": str(partial), "final": str(final),
+                "expected": {"width": 640, "height": 360, "fps": 30.0, "duration": 2.0,
+                             "expect_audio": False, "video_codec": "HEVC", "audio_codec": None,
+                             "audio_channels": None, "audio_sample_rate": None, "deep": True},
+            }
+            studio = self._studio(payload)
+            verification = SimpleNamespace(passed=True, frame_count=60, errors=())
+            with (
+                patch("cinepulse.studio.process_alive", return_value=False),
+                patch("cinepulse.studio.FFMPEG", "ffmpeg"),
+                patch("cinepulse.studio.FFPROBE", "ffprobe"),
+                patch("cinepulse.studio.quick_verify") as quick,
+                patch("cinepulse.studio.deep_verify", return_value=verification) as deep,
+                patch("cinepulse.studio.messagebox.askyesno", return_value=False),
+            ):
+                studio._recover_interrupted_render()
+            quick.assert_not_called()
+            deep.assert_called_once()
     def test_exact_partial_may_be_promoted_after_user_confirmation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
