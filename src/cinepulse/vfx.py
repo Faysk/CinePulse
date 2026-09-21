@@ -247,6 +247,19 @@ def build_vfx_filter_graph(
     )
 
 
+def _spawn_vfx_process(command: list[str]) -> subprocess.Popen:
+    """Spawn one FFmpeg VFX attempt without exposing global subprocess state to tests."""
+
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=False,
+        creationflags=CREATE_NO_WINDOW,
+    )
+
+
 def render_vfx_intermediate(
     ffmpeg: str,
     master_video: str,
@@ -444,14 +457,7 @@ def render_vfx_intermediate(
 
     def run_attempt(attempt_command: list[str]) -> tuple[int, deque[str]]:
         log("Comando VFX: " + subprocess.list2cmdline(attempt_command))
-        process = subprocess.Popen(
-            attempt_command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=False,
-            creationflags=CREATE_NO_WINDOW,
-        )
+        process = _spawn_vfx_process(attempt_command)
         process_changed(process)
         recent: deque[str] = deque(maxlen=50)
 
