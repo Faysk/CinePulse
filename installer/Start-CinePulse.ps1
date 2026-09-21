@@ -154,14 +154,9 @@ function Get-PortableUv {
     }
     if (Test-Path -LiteralPath $BootstrapRoot) { Remove-Item -LiteralPath $BootstrapRoot -Recurse -Force }
     New-Item -ItemType Directory -Path $BootstrapRoot -Force | Out-Null
-    $Archive = Join-Path $BootstrapRoot 'uv.zip.part'
-    Write-Host "Baixando inicializador portátil uv $ExpectedVersion..."
-    Invoke-WebRequest -UseBasicParsing -Uri $BootstrapManifest.uv.url -OutFile $Archive
-    $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-    if ($ActualHash -ne $ExpectedSha256) {
-        Remove-Item -LiteralPath $Archive -Force
-        throw 'O download do inicializador portátil não passou na verificação SHA-256.'
-    }
+    $Archive = Join-Path $BootstrapRoot 'uv.zip'
+    Get-VerifiedDownload -Name "inicializador portátil uv $ExpectedVersion" `
+        -Url $BootstrapManifest.uv.url -Sha256 $ExpectedSha256 -Destination $Archive
     $Extracted = Join-Path $BootstrapRoot 'extracted'
     Expand-Archive -LiteralPath $Archive -DestinationPath $Extracted -Force
     $Found = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'uv.exe' | Select-Object -First 1
@@ -188,7 +183,8 @@ function Get-VerifiedDownload {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Url,
         [Parameter(Mandatory)][string]$Sha256,
-        [Parameter(Mandatory)][string]$Destination
+        [Parameter(Mandatory)][string]$Destination,
+        [ValidateRange(1, 8)][int]$MaxAttempts = 4
     )
     $Expected = $Sha256.ToLowerInvariant()
     if (Test-Path -LiteralPath $Destination) {
@@ -198,38 +194,51 @@ function Get-VerifiedDownload {
     }
     New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
     $Partial = "$Destination.part"
-    if (Test-Path -LiteralPath $Partial) { Remove-Item -LiteralPath $Partial -Force }
-    Write-Host "Baixando $Name..."
     Add-Type -AssemblyName System.Net.Http
-    $Client = [Net.Http.HttpClient]::new()
-    $Response = $null
-    $Input = $null
-    $Output = $null
-    try {
-        $Response = $Client.GetAsync($Url, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        [void]$Response.EnsureSuccessStatusCode()
-        $Total = $Response.Content.Headers.ContentLength
-        $Input = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-        $Output = [IO.File]::Open($Partial, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        $Buffer = New-Object byte[] (1024 * 1024)
-        [long]$Received = 0
-        while (($Read = $Input.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
-            $Output.Write($Buffer, 0, $Read)
-            $Received += $Read
-            $Megabytes = $Received / 1MB
-            if ($Total -and $Total -gt 0) {
-                $Percent = [Math]::Min(100, [Math]::Floor($Received * 100 / $Total))
-                Write-Progress -Activity "Baixando $Name" -Status ("{0:N1} de {1:N1} MB" -f $Megabytes, ($Total / 1MB)) -PercentComplete $Percent
-            } else {
-                Write-Progress -Activity "Baixando $Name" -Status ("{0:N1} MB" -f $Megabytes)
+    $Downloaded = $false
+    for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+        if (Test-Path -LiteralPath $Partial) { Remove-Item -LiteralPath $Partial -Force }
+        Write-Host "Baixando $Name... tentativa $Attempt/$MaxAttempts"
+        $Client = [Net.Http.HttpClient]::new()
+        $Response = $null
+        $Input = $null
+        $Output = $null
+        try {
+            $Response = $Client.GetAsync($Url, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            [void]$Response.EnsureSuccessStatusCode()
+            $Total = $Response.Content.Headers.ContentLength
+            $Input = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $Output = [IO.File]::Open($Partial, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $Buffer = New-Object byte[] (1024 * 1024)
+            [long]$Received = 0
+            while (($Read = $Input.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+                $Output.Write($Buffer, 0, $Read)
+                $Received += $Read
+                $Megabytes = $Received / 1MB
+                if ($Total -and $Total -gt 0) {
+                    $Percent = [Math]::Min(100, [Math]::Floor($Received * 100 / $Total))
+                    Write-Progress -Activity "Baixando $Name" -Status ("{0:N1} de {1:N1} MB" -f $Megabytes, ($Total / 1MB)) -PercentComplete $Percent
+                } else {
+                    Write-Progress -Activity "Baixando $Name" -Status ("{0:N1} MB" -f $Megabytes)
+                }
             }
+            $Downloaded = $true
+            break
+        } catch {
+            if ($Attempt -ge $MaxAttempts) { throw }
+            $DelaySeconds = [Math]::Min(30, [Math]::Pow(2, $Attempt))
+            Write-Warning "Falha transitória ao baixar $Name (tentativa $Attempt/$MaxAttempts): $($_.Exception.Message). Novo attempt em $DelaySeconds s."
+            Start-Sleep -Seconds $DelaySeconds
+        } finally {
+            Write-Progress -Activity "Baixando $Name" -Completed
+            if ($Output) { $Output.Dispose() }
+            if ($Input) { $Input.Dispose() }
+            if ($Response) { $Response.Dispose() }
+            $Client.Dispose()
         }
-        Write-Progress -Activity "Baixando $Name" -Completed
-    } finally {
-        if ($Output) { $Output.Dispose() }
-        if ($Input) { $Input.Dispose() }
-        if ($Response) { $Response.Dispose() }
-        $Client.Dispose()
+    }
+    if (-not $Downloaded -or -not (Test-Path -LiteralPath $Partial)) {
+        throw "Download de $Name não produziu um arquivo verificável."
     }
     $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Partial).Hash.ToLowerInvariant()
     if ($Actual -ne $Expected) {
