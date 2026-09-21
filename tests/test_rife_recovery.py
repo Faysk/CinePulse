@@ -180,7 +180,7 @@ class RifeRecoveryTests(unittest.TestCase):
         command_block = source[command_start:command_end]
         self.assertIn("if contract.expect_audio:", command_block)
         self.assertIn('command += ["-map", "0:v:0", "-an"]', command_block)
-        self.assertIn('command += ["-af", audio_filter]', command_block)
+        self.assertIn("bound_delivery_audio_filter(delivery_audio_duration, audio_filter)", command_block)
 
         final_start = source.index("def finalize(")
         final_end = source.index("\ndef _space_check(", final_start)
