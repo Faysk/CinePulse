@@ -50,6 +50,8 @@ class TemporalPreviewExportTests(unittest.TestCase):
             video_codec="libx264", crf=16, preset="slow",
         )
         self.assertNotIn("-shortest", command)
+        self.assertEqual("cfr", command[command.index("-fps_mode") + 1])
+        self.assertEqual("4.00000000", command[command.index("-fps_mode") - 2])
         self.assertEqual("4", command[command.index("-frames:v") + 1])
         audio_index = command.index("source.mp4")
         self.assertEqual(["-t", "1.000000", "-i"], command[audio_index - 3:audio_index])
