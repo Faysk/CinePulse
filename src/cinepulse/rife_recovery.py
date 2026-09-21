@@ -32,6 +32,7 @@ from .audio_mastering import (
 from .color_pipeline import ColorProfile, build_color_pipeline
 from .delivery import PROFILE_AUTO, build_delivery_plan, detect_ffmpeg_encoders
 from .hardware import detect_hardware
+from .gpu_failure import looks_like_gpu_runtime_failure
 from .matroska_quality import inspect_matroska_segment
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .rife_engine import timed_concat_manifest
@@ -1033,6 +1034,7 @@ def _final_command(
     *,
     duration: float,
     audio_filter: str = "",
+    force_cpu: bool = False,
 ) -> tuple[list[str], Any, Any]:
     source_info = _probe(contract.ffprobe, contract.source)
     source_color = ColorProfile.from_probe(source_info)
@@ -1041,10 +1043,11 @@ def _final_command(
         enhancement_mode="realesrgan", rife_active=True,
     )
     encoders = detect_ffmpeg_encoders(str(contract.ffmpeg))
+    effective_use_cpu = bool(contract.use_cpu or force_cpu)
     delivery = build_delivery_plan(
         output=contract.output, profile=contract.delivery_profile, color_plan=color_plan,
         width=contract.target_width, height=contract.target_height, fps=contract.target_fps,
-        preview=False, use_cpu=contract.use_cpu, nvenc_available="hevc_nvenc" in encoders,
+        preview=False, use_cpu=effective_use_cpu, nvenc_available="hevc_nvenc" in encoders,
         available_encoders=encoders,
     )
     if delivery.blocking:
@@ -1065,7 +1068,7 @@ def _final_command(
         command += ["-map", "0:v:0", "-an"]
     command += ["-vf", _final_filter(contract, color_plan)]
     command += delivery.video_args(
-        use_cpu=contract.use_cpu, nvenc_available="hevc_nvenc" in encoders,
+        use_cpu=effective_use_cpu, nvenc_available="hevc_nvenc" in encoders,
         bitrate_mbps=bitrate_mbps, fps=round(contract.target_fps),
         gpu_index=max(0, contract.gpu_index),
     )
@@ -1086,6 +1089,62 @@ def _final_command(
     return command, color_plan, delivery
 
 
+def _run_final_encode_with_fallback(
+    contract: RecoveryContract,
+    master: Path,
+    destination: Path,
+    *,
+    duration: float,
+    audio_filter: str,
+    label: str,
+    log: Callable[[str], None],
+    timeout_seconds: float,
+) -> tuple[Any, Any]:
+    """Run final delivery GPU-first and retry once on CPU after a GPU failure."""
+
+    command, color_plan, delivery = _final_command(
+        contract,
+        master,
+        destination,
+        duration=duration,
+        audio_filter=audio_filter,
+    )
+    primary_uses_nvenc = any(str(value).endswith("_nvenc") for value in command)
+    try:
+        _run_logged(command, label=label, log=log, timeout_seconds=timeout_seconds)
+        return color_plan, delivery
+    except RecoveryError as exc:
+        if (
+            contract.use_cpu
+            or not primary_uses_nvenc
+            or not looks_like_gpu_runtime_failure(exc)
+        ):
+            raise
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError:
+            pass
+        log(
+            f"{label}: NVENC falhou em recovery; repetindo uma vez com encoder CPU. "
+            f"Motivo: {exc}"
+        )
+        fallback_command, fallback_color, fallback_delivery = _final_command(
+            contract,
+            master,
+            destination,
+            duration=duration,
+            audio_filter=audio_filter,
+            force_cpu=True,
+        )
+        _run_logged(
+            fallback_command,
+            label=label + "-cpu",
+            log=log,
+            timeout_seconds=timeout_seconds,
+        )
+        return fallback_color, fallback_delivery
+
+
 def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout_minutes: float) -> Path:
     segments, _completed_target = validate_contract(contract, log, full_scan=False)
     if not segments:
@@ -1094,13 +1153,16 @@ def self_test(contract: RecoveryContract, log: Callable[[str], None], *, timeout
     destination = contract.job_dir / f"recovery-self-test{suffix}"
     self_test_frames = max(1, int(round(0.10 * float(contract.target_fps))))
     self_test_duration = frame_bound_duration(self_test_frames, contract.target_fps)
-    command, _color, delivery = _final_command(
+    _color, delivery = _run_final_encode_with_fallback(
         contract,
         segments[0],
         destination,
         duration=self_test_duration,
+        audio_filter="",
+        label="final-encoder-self-test",
+        log=log,
+        timeout_seconds=timeout_minutes * 60,
     )
-    _run_logged(command, label="final-encoder-self-test", log=log, timeout_seconds=timeout_minutes * 60)
     expected_audio_rate = (
         48000
         if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
@@ -1242,7 +1304,33 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
             completed_source_frames=contract.total_source_frames, completed_target_frames=contract.total_target_frames,
             extra={"partial_output": str(partial)},
         )
-        _run_logged(command, label="final-encode", log=log, timeout_seconds=max(43200, timeout_minutes * 60))
+        _color, applied_delivery = _run_final_encode_with_fallback(
+            contract,
+            master,
+            partial,
+            duration=delivery_duration,
+            audio_filter=audio_filter,
+            label="final-encode",
+            log=log,
+            timeout_seconds=max(43200, timeout_minutes * 60),
+        )
+        delivery = applied_delivery
+        expectation = VerifyExpectation(
+            width=contract.target_width,
+            height=contract.target_height,
+            fps=contract.target_fps,
+            duration=delivery_duration,
+            expect_audio=contract.expect_audio,
+            video_codec=delivery.video_codec,
+            audio_codec=delivery.audio_codec if contract.expect_audio else None,
+            audio_channels=contract.audio_channels if contract.expect_audio else None,
+            audio_sample_rate=(
+                48000
+                if contract.expect_audio and delivery.audio_codec in {"AAC", "Opus"}
+                else contract.audio_sample_rate
+            ) if contract.expect_audio else None,
+            frame_tolerance=0,
+        )
         log("VERIFY_START quick contract + frame count")
         verification = verify_recovery_output(contract, partial, expectation)
     _atomic_json(contract.result_path, {"schema": 1, "job_id": contract.job_id, "verification": verification.to_dict()})

@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.13`. Mantém o full-utilization, a timeline exata e o pinning multi-GPU da 1.2.12, mas deixa os encoders auxiliares tolerantes a falhas reais: master SDR, transição e VFX tentam primeiro NVENC no adaptador selecionado e, se o processo realmente falhar, repetem uma única vez com o encoder CPU equivalente sem reduzir resolução, FPS, cor/HDR ou qualidade contratada.
+> Estado Stable: `1.2.14`. Mantém os fallbacks NVENC→CPU da 1.2.13 e estende o mesmo contrato ao recovery crash-safe: o self-test e a codificação final recuperada tentam NVENC primeiro e, somente após erro realmente classificado como GPU/NVENC, descartam o partial e repetem uma vez com o encoder CPU equivalente. Falhas de disco, filtro, input ou timeout continuam fail-fast.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
