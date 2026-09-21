@@ -31,7 +31,7 @@ class AudioMasteringTests(unittest.TestCase):
     def test_delivery_audio_filter_trims_resets_and_pads_exact_timeline(self) -> None:
         value = bound_delivery_audio_filter(1.25, "volume=0.5")
         self.assertEqual(
-            "atrim=duration=1.250000000000,asetpts=PTS-STARTPTS,volume=0.5,apad=whole_dur=1.250000000000",
+            "atrim=duration=1.250000000000,asetpts=PTS-STARTPTS,volume=0.5,atrim=duration=1.250000000000,apad=whole_dur=1.250000000000",
             value,
         )
 
@@ -39,7 +39,7 @@ class AudioMasteringTests(unittest.TestCase):
         value = build_delivery_audio_filter("Normalizar para YouTube — -14 LUFS", 2.0)
         self.assertTrue(value.startswith("atrim=duration=2.000000000000,asetpts=PTS-STARTPTS,"))
         self.assertIn("loudnorm=I=-14.0:TP=-1.0:LRA=11.0", value)
-        self.assertTrue(value.endswith("apad=whole_dur=2.000000000000"))
+        self.assertTrue(value.endswith("atrim=duration=2.000000000000,apad=whole_dur=2.000000000000"))
 
     def test_parses_ffmpeg_measurement(self) -> None:
         text = 'noise\n{"input_i":"-18.2","input_tp":"-2.1","input_lra":"4.3","input_thresh":"-28.0","target_offset":"0.2"}'
