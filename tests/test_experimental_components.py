@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import stat
 import tempfile
 import unittest
 import zipfile
@@ -82,6 +83,55 @@ class ExperimentalComponentTests(unittest.TestCase):
             marker = Path(temporary) / ".cinepulse-experimental.json"
             marker.write_text("{broken", encoding="utf-8")
             self.assertFalse(experimental_components._marker_matches(marker, "hash"))
+
+
+    def test_archive_rejects_symlink_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "payload.zip"
+            destination = root / "out"
+            info = zipfile.ZipInfo("bundle/link")
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr(info, "../../outside")
+            with self.assertRaisesRegex(RuntimeError, "link simbólico"):
+                experimental_components._safe_extract_archive(archive, destination)
+            self.assertFalse((root / "outside").exists())
+
+    def test_archive_rejects_case_insensitive_duplicate_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "payload.zip"
+            destination = root / "out"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("bundle/Foo.py", b"one")
+                bundle.writestr("bundle/foo.py", b"two")
+            with self.assertRaisesRegex(RuntimeError, "entrada duplicada"):
+                experimental_components._safe_extract_archive(archive, destination)
+
+    def test_archive_rejects_windows_style_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "payload.zip"
+            destination = root / "out"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr(r"bundle\..\..\outside.txt", b"escape")
+            with self.assertRaisesRegex(RuntimeError, "caminho inseguro"):
+                experimental_components._safe_extract_archive(archive, destination)
+            self.assertFalse((root / "outside.txt").exists())
+
+    def test_archive_rejects_expanded_size_over_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "payload.zip"
+            destination = root / "out"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("bundle/file.bin", b"1234")
+            with patch.object(experimental_components, "MAX_ARCHIVE_EXTRACTED_BYTES", 3):
+                with self.assertRaisesRegex(RuntimeError, "expandido excede"):
+                    experimental_components._safe_extract_archive(archive, destination)
+
 
 
 if __name__ == "__main__":
