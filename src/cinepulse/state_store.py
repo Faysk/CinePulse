@@ -125,7 +125,7 @@ def _load_with_backup(path: Path, parser: Callable[[Any], _T]) -> tuple[_T, bool
                 f"Estado principal e backup estão inválidos: primary={primary_error}; backup={backup_error}"
             ) from backup_error
         if path.exists():
-            evidence = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+            evidence = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
             try:
                 os.replace(path, evidence)
             except OSError:
