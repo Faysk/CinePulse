@@ -63,6 +63,10 @@ def bound_delivery_audio_filter(duration: float, inner_filter: str = "") -> str:
     ]
     if inner_filter:
         filters.append(inner_filter)
+    # Re-trim after mastering/compression in case a filter introduces latency
+    # or a tail. Padding then fills only the missing suffix, never extends past
+    # the frame-bound contract.
+    filters.append(f"atrim=duration={seconds:.12f}")
     filters.append(f"apad=whole_dur={seconds:.12f}")
     return ",".join(filters)
 
