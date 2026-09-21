@@ -9,6 +9,7 @@
 - cancelamento continua fail-fast e nunca aciona retry de encoder;
 - adiciona testes funcionais para transição, VFX intermediário e VFX fused, além dos contratos de regressão do pipeline.
 - retry CPU só ocorre quando o erro é classificado como GPU/NVENC; falhas não-GPU continuam fail-fast.
+- a finalização HEVC/NVENC normal também ganha rollback completo para `libx265` em falha GPU real; o fallback não reutiliza NVENC escondido no baseline.
 
 
 ## 1.2.12 — 2026-09-21
