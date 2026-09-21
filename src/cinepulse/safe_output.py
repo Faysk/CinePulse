@@ -126,6 +126,8 @@ class RenderJournal:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return None
+        if not isinstance(payload, dict):
+            return None
         return payload if payload.get("schema") == 1 else None
 
     def clear(self) -> None:
