@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .resource_scheduler import CpuTopology, MachineMode, StageKind, choose_proven_thread_count
+from .path_transaction import serialized_path_mutation
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,7 @@ class CpuTuningStore:
             return None
         return threads
 
+    @serialized_path_mutation
     def record_samples(
         self,
         key: CpuTuningKey,
