@@ -144,5 +144,13 @@ class SafeOutputTests(unittest.TestCase):
             self.assertFalse(journal.path.exists())
 
 
+    def test_non_object_journal_is_treated_as_invalid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.path.write_text("[]", encoding="utf-8")
+            self.assertIsNone(journal.read())
+
+
 if __name__ == "__main__":
     unittest.main()
