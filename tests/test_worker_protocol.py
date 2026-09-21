@@ -109,5 +109,30 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertTrue(list(queue.done.glob("broken.invalid-*.json")))
 
 
+    def test_malformed_command_identity_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            queue = WorkerCommandQueue(Path(temporary), "job-1")
+            path = queue.inbox / "bad.json"
+            path.write_text(
+                '{"schema":1,"request_id":"","job_id":"job-1","command":"cancel","created_at":1,"payload":{}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "request_id"):
+                queue.next()
+            self.assertFalse(path.exists())
+            self.assertTrue(list(queue.done.glob("bad.invalid.json")))
+
+    def test_reply_string_false_is_rejected_instead_of_becoming_true(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            queue = WorkerCommandQueue(Path(temporary), "job-1")
+            request_id = "req-1"
+            (queue.replies / f"{request_id}.json").write_text(
+                '{"schema":1,"request_id":"req-1","job_id":"job-1","ok":"false","state":"running","message":"","payload":{},"created_at":1}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "reply inválido"):
+                queue.read_reply(request_id)
+
+
 if __name__ == "__main__":
     unittest.main()
