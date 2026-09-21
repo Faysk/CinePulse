@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.10 — 2026-09-21
+
+- recovery passa a derivar a duração de entrega diretamente de `total_target_frames / target_fps`;
+- Studio passa a nomear e reutilizar `final_timeline_duration = final_target_frames / target_fps` como fonte única da duração realmente entregue;
+- RenderJournal, RenderHistory, verificação final, relatório de qualidade e comparison preview deixam de registrar/verificar `project_duration` decimal e usam a timeline CFR exata;
+- análise de loudness do recovery usa a mesma janela frame-bound realmente codificada, evitando medir alguns milissegundos a mais ou a menos em cadências fracionárias;
+- `VerifyExpectation` final do recovery passa a usar a duração CFR exata em vez de `contract.duration` decimal;
+- self-test do encoder converte a janela de 0,10 s para um número inteiro de frames e verifica a duração efetivamente representada por esses frames;
+- mensagens de partial reuse deixam de amarrar o contrato de áudio a uma versão antiga específica;
+- adiciona contratos de regressão para impedir nova divergência entre duração declarada e duração representada pelos quadros.
+
 ## 1.2.9 — 2026-09-21
 
 - introduz `frame_bound_duration(frame_count, fps)` como fonte única da duração real de uma linha do tempo CFR;
