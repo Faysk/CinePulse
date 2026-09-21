@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -18,6 +19,36 @@ from typing import Any, Callable, Iterable
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 TELEMETRY_SCHEMA = 1
 DEFAULT_INTERVAL_SECONDS = 2.0
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _finite(value: float | None) -> float | None:
@@ -737,10 +768,7 @@ class HardwareTelemetrySession:
             summary=summary,
         )
         document = asdict(payload)
-        self.destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.destination.with_suffix(self.destination.suffix + ".tmp")
-        temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, self.destination)
+        _atomic_json(self.destination, document)
         try:
             self._disk.close()
         except Exception:

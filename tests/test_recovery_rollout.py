@@ -44,5 +44,26 @@ class RecoveryRolloutTests(unittest.TestCase):
             self.assertEqual(1, payload["ring"])
 
 
+    def test_write_ring_fsyncs_and_leaves_no_atomic_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "flags.json"
+            with patch("cinepulse.recovery_rollout.os.fsync", wraps=os.fsync) as fsync:
+                write_ring(path, 3)
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual([], list(root.glob("flags.json.tmp-*")))
+            self.assertEqual(3, load_recovery_flags(path).ring)
+
+    def test_file_override_rejects_non_boolean_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "flags.json"
+            path.write_text(
+                json.dumps({"ring": 1, "recovery_worker": "false"}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "deve ser booleano"):
+                load_recovery_flags(path)
+
+
 if __name__ == "__main__":
     unittest.main()
