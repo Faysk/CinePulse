@@ -125,6 +125,7 @@ def test_verified_download_retries_transient_failures_without_weakening_hash_con
     assert "[ValidateRange(1, 8)][int]$MaxAttempts = 4" in text
     assert 'for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++)' in text
     assert "Start-Sleep -Seconds $DelaySeconds" in text
+    assert 'tentativa ${Attempt}/${MaxAttempts}' in text
     assert "Get-FileHash -Algorithm SHA256 -LiteralPath $Partial" in text
     assert 'Move-Item -LiteralPath $Partial -Destination $Destination -Force' in text
     assert 'Get-VerifiedDownload -Name "inicializador portátil uv $ExpectedVersion"' in text
@@ -137,4 +138,5 @@ def test_neural_installer_smoke_retries_uv_download() -> None:
     assert "[ValidateRange(1, 8)][int]$MaxAttempts = 4" in text
     assert "Invoke-CiDownloadWithRetry -Uri $Manifest.uv.url -OutFile $UvArchive" in text
     assert "Start-Sleep -Seconds $DelaySeconds" in text
+    assert 'attempt ${Attempt}/${MaxAttempts}:' in text
     assert "Get-FileHash -Algorithm SHA256 -LiteralPath $UvArchive" in text
