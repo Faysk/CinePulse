@@ -1,14 +1,5 @@
 # Changelog
 
-## 1.2.10 — 2026-09-21
-
-- adiciona `tests/integration_audio_timeline.py`, um teste de integração com FFmpeg/FFprobe reais para o contrato frame-bound de áudio;
-- o caso `short-pad` usa áudio de 0,75 s e exige exatamente 49.600 samples a 48 kHz para uma timeline de 31 frames/30 fps;
-- o caso `long-trim` usa áudio de 1,50 s e exige a mesma contagem exata, provando o corte do excedente;
-- vídeo de prova usa FFV1 e áudio PCM 24-bit em Matroska para evitar priming de AAC/Opus e tornar a medição determinística;
-- o teste também exige 31 frames de vídeo e verificação estrutural do arquivo;
-- o novo teste entra no profile `media`, portanto passa a fazer parte de Quality e Release light.
-
 ## 1.2.9 — 2026-09-21
 
 - introduz `frame_bound_duration(frame_count, fps)` como fonte única da duração real de uma linha do tempo CFR;
