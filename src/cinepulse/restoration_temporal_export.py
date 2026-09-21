@@ -30,6 +30,7 @@ import numpy as np
 from .restoration_inpaint import TemporalReconstructionPolicy, reconstruct_region_temporally
 from .restoration_preview import PreviewRestorationPlan
 from .process_control import popen_group_kwargs, terminate_process_tree
+from .audio_mastering import bounded_audio_input_args, frame_bound_duration
 
 
 class TemporalPreviewCancelled(RuntimeError):
@@ -45,16 +46,35 @@ class PreviewVideoGeometry:
     height: int
     fps: float
     nominal_fps: float | None = None
+    frame_count: int | None = None
+    duration: float | None = None
+    has_audio: bool = False
+    audio_stream_count: int | None = None
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0 or self.fps <= 0:
             raise ValueError("invalid Preview video geometry")
         if self.nominal_fps is not None and self.nominal_fps <= 0:
             raise ValueError("invalid nominal Preview frame rate")
+        if self.frame_count is not None and self.frame_count <= 0:
+            raise ValueError("invalid Preview frame count")
+        if self.duration is not None and self.duration <= 0:
+            raise ValueError("invalid Preview duration")
+        if self.audio_stream_count is not None:
+            if self.audio_stream_count < 0:
+                raise ValueError("invalid Preview audio stream count")
+            if self.has_audio != (self.audio_stream_count > 0):
+                raise ValueError("Preview audio presence/count contract is inconsistent")
 
     @property
     def frame_bytes(self) -> int:
         return self.width * self.height * 3
+
+    @property
+    def frame_bound_duration(self) -> float:
+        if self.frame_count is None:
+            raise ValueError("Preview frame count is required for a frame-bound timeline")
+        return frame_bound_duration(self.frame_count, self.fps)
 
     @property
     def suspected_vfr(self) -> bool:
@@ -110,8 +130,30 @@ def _optional_rate(value: object) -> float | None:
         return None
 
 
+def _optional_int(*values: object) -> int | None:
+    for value in values:
+        try:
+            parsed = int(str(value))
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
+def _optional_float(*values: object) -> float | None:
+    for value in values:
+        try:
+            parsed = float(str(value))
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0 and np.isfinite(parsed):
+            return parsed
+    return None
+
+
 def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
-    """Read only the geometry/timing hints needed by the rawvideo path."""
+    """Read the exact frame/audio contract needed by Preview restoration."""
 
     if not ffprobe:
         raise ValueError("ffprobe executable is required for temporal Preview export")
@@ -121,10 +163,14 @@ def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
             ffprobe,
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
+            "-count_frames",
+            "-show_streams",
+            "-show_format",
             "-show_entries",
-            "stream=width,height,avg_frame_rate,r_frame_rate",
+            (
+                "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,"
+                "nb_read_frames,nb_frames,duration:format=duration"
+            ),
             "-of",
             "json",
             str(source),
@@ -134,27 +180,107 @@ def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
         encoding="utf-8",
         errors="replace",
         creationflags=creationflags,
-        timeout=15,
+        timeout=120,
         check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "FFprobe falhou no Preview temporal.")
     payload = json.loads(result.stdout or "{}")
     streams = payload.get("streams") or []
-    if not streams:
+    video = next(
+        (item for item in streams if isinstance(item, dict) and item.get("codec_type") == "video"),
+        None,
+    )
+    if not isinstance(video, dict):
         raise RuntimeError("A fonte não possui stream de vídeo para reconstrução temporal.")
-    stream = streams[0]
-    avg_fps = _optional_rate(stream.get("avg_frame_rate"))
-    nominal_fps = _optional_rate(stream.get("r_frame_rate"))
+    avg_fps = _optional_rate(video.get("avg_frame_rate"))
+    nominal_fps = _optional_rate(video.get("r_frame_rate"))
     fps = avg_fps or nominal_fps
     if fps is None:
         raise RuntimeError("Não foi possível determinar o frame rate do vídeo Preview.")
+    frame_count = _optional_int(video.get("nb_read_frames"), video.get("nb_frames"))
+    if frame_count is None:
+        raise RuntimeError("FFprobe não informou a contagem exata de quadros do Preview.")
+    format_payload = payload.get("format")
+    fmt = format_payload if isinstance(format_payload, dict) else {}
+    duration = _optional_float(video.get("duration"), fmt.get("duration"))
     return PreviewVideoGeometry(
-        width=int(stream.get("width") or 0),
-        height=int(stream.get("height") or 0),
+        width=int(video.get("width") or 0),
+        height=int(video.get("height") or 0),
         fps=fps,
         nominal_fps=nominal_fps,
+        frame_count=frame_count,
+        duration=duration,
+        has_audio=any(
+            isinstance(item, dict) and item.get("codec_type") == "audio"
+            for item in streams
+        ),
+        audio_stream_count=sum(
+            1
+            for item in streams
+            if isinstance(item, dict) and item.get("codec_type") == "audio"
+        ),
     )
+
+
+def build_temporal_encoder_command(
+    ffmpeg: str,
+    source: Path,
+    output: Path,
+    geometry: PreviewVideoGeometry,
+    plan: PreviewRestorationPlan,
+    *,
+    video_codec: str,
+    crf: int,
+    preset: str,
+) -> list[str]:
+    """Build the frame-bound temporal encoder without letting audio shorten video."""
+
+    if geometry.frame_count is None:
+        raise ValueError("temporal encoder requires an exact source frame count")
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s:v",
+        f"{geometry.width}x{geometry.height}",
+        "-r",
+        f"{geometry.fps:.8f}",
+        "-i",
+        "pipe:0",
+    ]
+    if geometry.has_audio:
+        command += bounded_audio_input_args(str(source), geometry.frame_bound_duration)
+    command += ["-map", "0:v:0"]
+    if geometry.has_audio:
+        command += ["-map", "1:a?", "-c:a", "copy"]
+    else:
+        command += ["-an"]
+    if plan.color_filter:
+        command.extend(["-vf", plan.color_filter])
+    command.extend(
+        [
+            "-c:v",
+            video_codec,
+            "-preset",
+            preset,
+            "-crf",
+            str(int(crf)),
+            "-r",
+            f"{geometry.fps:.8f}",
+            "-fps_mode",
+            "cfr",
+            "-frames:v",
+            str(geometry.frame_count),
+            str(output),
+        ]
+    )
+    return command
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
@@ -225,6 +351,7 @@ def stream_temporal_preview(
     preset: str = "slow",
     policy: TemporalReconstructionPolicy = TemporalReconstructionPolicy(),
     max_working_set_bytes: int = DEFAULT_MAX_TEMPORAL_WORKING_SET_BYTES,
+    geometry: PreviewVideoGeometry | None = None,
 ) -> TemporalStreamReport:
     """Run bounded rolling-window temporal reconstruction into a complete file."""
 
@@ -235,7 +362,9 @@ def stream_temporal_preview(
     if int(max_working_set_bytes) <= 0:
         raise ValueError("max_working_set_bytes must be positive")
 
-    geometry = probe_preview_geometry(ffprobe, source)
+    geometry = geometry or probe_preview_geometry(ffprobe, source)
+    if geometry.frame_count is None:
+        raise RuntimeError("Preview temporal requer contagem exata de quadros da fonte.")
     if geometry.suspected_vfr:
         raise RuntimeError(
             "A reconstrução temporal Preview não preserva timestamps VFR com segurança; "
@@ -275,43 +404,15 @@ def stream_temporal_preview(
         "rgb24",
         "pipe:1",
     ]
-    encoder_command = [
+    encoder_command = build_temporal_encoder_command(
         ffmpeg,
-        "-hide_banner",
-        "-nostdin",
-        "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s:v",
-        f"{geometry.width}x{geometry.height}",
-        "-r",
-        f"{geometry.fps:.8f}",
-        "-i",
-        "pipe:0",
-        "-i",
-        str(source),
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a?",
-    ]
-    if plan.color_filter:
-        encoder_command.extend(["-vf", plan.color_filter])
-    encoder_command.extend(
-        [
-            "-c:v",
-            video_codec,
-            "-preset",
-            preset,
-            "-crf",
-            str(int(crf)),
-            "-c:a",
-            "copy",
-            "-shortest",
-            str(output),
-        ]
+        source,
+        output,
+        geometry,
+        plan,
+        video_codec=video_codec,
+        crf=crf,
+        preset=preset,
     )
 
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as decoder_log, tempfile.TemporaryFile(
@@ -413,6 +514,10 @@ def stream_temporal_preview(
                 raise RuntimeError(f"FFmpeg falhou no Preview temporal.\n{tail}".strip())
             if frames_written <= 0 or not output.is_file() or output.stat().st_size <= 0:
                 raise RuntimeError("Preview temporal terminou sem produzir vídeo válido.")
+            if geometry.frame_count is None or frames_written != geometry.frame_count:
+                raise RuntimeError(
+                    f"Preview temporal processou {frames_written}/{geometry.frame_count} quadros."
+                )
             return TemporalStreamReport(
                 frames_written=frames_written,
                 applied_regions=applied_regions,

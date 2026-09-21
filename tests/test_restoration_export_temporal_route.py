@@ -8,7 +8,7 @@ from unittest.mock import patch
 from cinepulse.restoration_export import export_preview_restoration
 from cinepulse.restoration_overlay import OverlayRegion
 from cinepulse.restoration_preview import PreviewRestorationPlan
-from cinepulse.restoration_temporal_export import TemporalStreamReport
+from cinepulse.restoration_temporal_export import PreviewVideoGeometry, TemporalStreamReport
 
 
 OVERLAY_PLAN = PreviewRestorationPlan(
@@ -41,9 +41,27 @@ class TemporalRoutingTests(unittest.TestCase):
                 temporary.write_bytes(b"temporal-video")
                 return TemporalStreamReport(frames_written=12, applied_regions=10, fallback_regions=2)
 
-            with patch("cinepulse.restoration_export.ensure_preview_scratch_capacity", return_value=0), patch(
-                "cinepulse.restoration_export.stream_temporal_preview", side_effect=fake_temporal
-            ) as temporal:
+            contract = PreviewVideoGeometry(
+                width=64,
+                height=36,
+                fps=12.0,
+                nominal_fps=12.0,
+                frame_count=12,
+                duration=1.0,
+                has_audio=True,
+            )
+            with (
+                patch("cinepulse.restoration_export.ensure_preview_scratch_capacity", return_value=0),
+                patch("cinepulse.restoration_export.probe_preview_geometry", return_value=contract),
+                patch(
+                    "cinepulse.restoration_export.validate_preview_output_contract",
+                    return_value=contract,
+                ) as validate,
+                patch(
+                    "cinepulse.restoration_export.stream_temporal_preview",
+                    side_effect=fake_temporal,
+                ) as temporal,
+            ):
                 result = export_preview_restoration(
                     "ffmpeg",
                     source,
@@ -53,6 +71,8 @@ class TemporalRoutingTests(unittest.TestCase):
                 )
 
             temporal.assert_called_once()
+            self.assertIs(temporal.call_args.kwargs["geometry"], contract)
+            validate.assert_called_once()
             self.assertTrue(result.used_temporal_reconstruction)
             self.assertEqual(result.temporal_frames, 12)
             self.assertEqual(result.temporal_regions_applied, 10)

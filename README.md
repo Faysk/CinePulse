@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.18`. Mantém o recovery rigoroso da 1.2.17 e corrige a integridade temporal do Overlay Composer: o mux final deixa de cortar por `-t duration`, usa a duração CFR real `frames/fps` apenas para limitar o input de áudio, preserva o vídeo por `-frames:v` e só promove o resultado quando o FFprobe confirma exatamente a contagem de quadros renderizada.
+> Estado Stable: `1.2.19`. Mantém a integridade frame-bound da 1.2.18 e endurece a Restauração Preview: toda saída é sondada por FFprobe antes da promoção e precisa preservar geometria, contagem exata de quadros, presença de áudio e timeline compatível. A reconstrução temporal deixa de usar `-shortest`, limita somente o input de áudio e exige processar todos os quadros da fonte.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
@@ -36,7 +36,7 @@ CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora ví
 
 No branch experimental, a área **Restauração Preview** permanece isolada de `RenderSettings` e do botão de render Stable. O usuário analisa a fonte, revisa as regiões candidatas antes da remoção e exporta para um arquivo separado por promoção atômica. A análise de overlays é vinculada à identidade do arquivo (caminho resolvido, tamanho e `mtime_ns`); se a fonte for substituída no mesmo caminho, o resultado antigo é invalidado e uma nova análise é exigida.
 
-O export temporal usa janela RGB limitada e fail-closed para fontes com forte indício de VFR, memória temporal acima do limite ou FFprobe indisponível. Cancelamento encerra decoder/encoder em árvore e remove o temporário, sem substituir uma saída anterior válida.
+O export temporal usa janela RGB limitada e fail-closed para fontes com forte indício de VFR, memória temporal acima do limite ou FFprobe indisponível. O áudio nunca pode encurtar o vídeo reconstruído: o vídeo permanece limitado por contagem exata de quadros e o input de áudio é apenas limitado à timeline correspondente. Antes de qualquer promoção atômica, a saída Preview precisa preservar geometria, frames e presença de áudio da fonte. Cancelamento encerra decoder/encoder em árvore e remove o temporário, sem substituir uma saída anterior válida.
 
 ## Início rápido no Windows
 

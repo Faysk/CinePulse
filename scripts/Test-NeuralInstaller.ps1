@@ -14,6 +14,27 @@ $TorchIndex = [string]$Manifest.demucs.torch_index
 $TorchVersion = [string]$Manifest.demucs.torch_version
 $SoundFileVersion = [string]$Manifest.demucs.soundfile_version
 
+function Invoke-CiDownloadWithRetry {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$OutFile,
+        [ValidateRange(1, 8)][int]$MaxAttempts = 4
+    )
+    for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+        try {
+            if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force }
+            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile
+            return
+        } catch {
+            if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue }
+            if ($Attempt -ge $MaxAttempts) { throw }
+            $DelaySeconds = [Math]::Min(30, [Math]::Pow(2, $Attempt))
+            Write-Warning "Neural installer download failed attempt ${Attempt}/${MaxAttempts}: $($_.Exception.Message). Retrying in ${DelaySeconds} s."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 if (-not $TorchIndex.StartsWith('https://download.pytorch.org/whl/', [StringComparison]::OrdinalIgnoreCase)) {
     throw "Unexpected PyTorch index: $TorchIndex"
 }
@@ -56,7 +77,7 @@ try {
     & $Python -m venv $Venv
     if ($LASTEXITCODE -ne 0) { throw 'Unable to create neural resolver smoke venv.' }
 
-    Invoke-WebRequest -UseBasicParsing -Uri $Manifest.uv.url -OutFile $UvArchive
+    Invoke-CiDownloadWithRetry -Uri $Manifest.uv.url -OutFile $UvArchive
     $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $UvArchive).Hash.ToLowerInvariant()
     if ($ActualHash -ne ([string]$Manifest.uv.sha256).ToLowerInvariant()) {
         throw 'Portable uv checksum mismatch in neural resolver smoke.'

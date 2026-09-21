@@ -20,7 +20,12 @@ from uuid import uuid4
 
 from .restoration_execute import build_preview_ffmpeg_command
 from .restoration_preview import PreviewRestorationPlan
-from .restoration_temporal_export import TemporalPreviewCancelled, stream_temporal_preview
+from .restoration_temporal_export import (
+    PreviewVideoGeometry,
+    TemporalPreviewCancelled,
+    probe_preview_geometry,
+    stream_temporal_preview,
+)
 from .process_control import popen_group_kwargs, terminate_process_tree
 
 
@@ -40,6 +45,77 @@ class PreviewExportResult:
     @property
     def used_temporal_reconstruction(self) -> bool:
         return self.temporal_frames > 0
+
+
+def validate_preview_output_contract(
+    ffprobe: str,
+    source_contract: PreviewVideoGeometry,
+    candidate: Path,
+    *,
+    expected_frames: int | None = None,
+    require_cfr: bool = False,
+) -> PreviewVideoGeometry:
+    """Fail closed unless a Preview candidate preserves the source media contract."""
+
+    candidate_contract = probe_preview_geometry(ffprobe, candidate)
+    expected = int(expected_frames or source_contract.frame_count or 0)
+    if expected <= 0:
+        raise RuntimeError("Preview source contract has no exact frame count.")
+    if (candidate_contract.width, candidate_contract.height) != (
+        source_contract.width,
+        source_contract.height,
+    ):
+        raise RuntimeError(
+            "Preview output geometry changed unexpectedly: "
+            f"{candidate_contract.width}x{candidate_contract.height} != "
+            f"{source_contract.width}x{source_contract.height}."
+        )
+    if candidate_contract.frame_count != expected:
+        raise RuntimeError(
+            f"Preview output has {candidate_contract.frame_count}/{expected} video frames."
+        )
+    if candidate_contract.has_audio != source_contract.has_audio:
+        raise RuntimeError(
+            "Preview output audio presence changed unexpectedly: "
+            f"{candidate_contract.has_audio} != {source_contract.has_audio}."
+        )
+    if (
+        source_contract.audio_stream_count is not None
+        and candidate_contract.audio_stream_count is not None
+        and candidate_contract.audio_stream_count != source_contract.audio_stream_count
+    ):
+        raise RuntimeError(
+            "Preview output audio stream count changed unexpectedly: "
+            f"{candidate_contract.audio_stream_count} != {source_contract.audio_stream_count}."
+        )
+    if require_cfr:
+        # The temporal encoder explicitly emits CFR (-r + -fps_mode cfr).
+        # Do not re-classify that generated stream as VFR from aggregate
+        # avg_frame_rate vs r_frame_rate alone: FFprobe can report different
+        # aggregate rates on very short CFR clips because the last frame's
+        # display duration is not represented uniformly by every container.
+        # Exact frame count, FPS and frame-bound duration remain mandatory.
+        if abs(candidate_contract.fps - source_contract.fps) > 0.02:
+            raise RuntimeError(
+                f"Temporal Preview FPS changed: {candidate_contract.fps:.5f} != "
+                f"{source_contract.fps:.5f}."
+            )
+        expected_duration = source_contract.frame_bound_duration
+    else:
+        if not source_contract.suspected_vfr and abs(candidate_contract.fps - source_contract.fps) > 0.02:
+            raise RuntimeError(
+                f"Preview output FPS changed: {candidate_contract.fps:.5f} != "
+                f"{source_contract.fps:.5f}."
+            )
+        expected_duration = source_contract.duration or source_contract.frame_bound_duration
+    if candidate_contract.duration is not None:
+        tolerance = max(0.10, 2.0 / max(source_contract.fps, 1.0))
+        if abs(candidate_contract.duration - expected_duration) > tolerance:
+            raise RuntimeError(
+                f"Preview output duration {candidate_contract.duration:.6f}s does not match "
+                f"the expected {expected_duration:.6f}s timeline."
+            )
+    return candidate_contract
 
 
 def temporary_preview_output(output: Path) -> Path:
@@ -122,6 +198,9 @@ def export_preview_restoration(
         raise ValueError("Preview output cannot overwrite the source file")
     if poll_interval <= 0:
         raise ValueError("poll_interval must be positive")
+    if not ffprobe:
+        raise ValueError("FFprobe é obrigatório para validar a saída Preview antes da promoção.")
+    source_contract = probe_preview_geometry(ffprobe, source)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     ensure_preview_scratch_capacity(source, output.parent)
@@ -130,8 +209,6 @@ def export_preview_restoration(
     started = time.monotonic()
 
     if plan.has_overlay_work:
-        if not ffprobe:
-            raise ValueError("FFprobe é obrigatório para exportar reconstrução temporal de overlays.")
         try:
             report = stream_temporal_preview(
                 ffmpeg,
@@ -143,9 +220,22 @@ def export_preview_restoration(
                 video_codec=video_codec,
                 crf=crf,
                 preset=preset,
+                geometry=source_contract,
             )
             if not temporary.is_file() or temporary.stat().st_size <= 0:
                 raise RuntimeError("Reconstrução temporal terminou sem arquivo Preview válido.")
+            if report.frames_written != source_contract.frame_count:
+                raise RuntimeError(
+                    f"Reconstrução temporal processou {report.frames_written}/"
+                    f"{source_contract.frame_count} quadros."
+                )
+            validate_preview_output_contract(
+                ffprobe,
+                source_contract,
+                temporary,
+                expected_frames=report.frames_written,
+                require_cfr=True,
+            )
             os.replace(temporary, output)
             return PreviewExportResult(
                 output=output,
@@ -203,6 +293,13 @@ def export_preview_restoration(
             raise RuntimeError(f"FFmpeg falhou na exportação Preview.\n{tail}".strip())
         if not temporary.is_file() or temporary.stat().st_size <= 0:
             raise RuntimeError("FFmpeg terminou sem produzir um arquivo Preview válido.")
+        validate_preview_output_contract(
+            ffprobe,
+            source_contract,
+            temporary,
+            expected_frames=source_contract.frame_count,
+            require_cfr=False,
+        )
         os.replace(temporary, output)
         return PreviewExportResult(
             output=output,
