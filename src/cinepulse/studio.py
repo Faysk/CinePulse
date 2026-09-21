@@ -69,6 +69,7 @@ from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
+from .job_lease import JobLease, LeaseBusy
 from .rife_engine import (
     applied_jobs_from_log,
     distributed_chunk_target_count,
@@ -759,6 +760,12 @@ class VideoOptimizerStudio:
         self._nvenc = nvenc_available()
         self._hardware = detect_hardware()
         self._render_journal = RenderJournal(PATHS.locks / "render.json")
+        self._render_lease = JobLease(
+            PATHS.locks / "render-owner.json",
+            "studio-global-render",
+            stale_after=3.0,
+            mutation_timeout=1.0,
+        )
         self._active_render_history: RenderHistory | None = None
         self._custom_presets: dict[str, dict] = self._load_custom_presets()
         self._presets: dict[str, dict] = {**BUILTIN_PRESETS, **self._custom_presets}
@@ -4372,7 +4379,15 @@ class VideoOptimizerStudio:
         self._active_queue_id = next_item["id"]
         self._refresh_queue_tree(select_id=int(next_item["id"]))
         self._save_queue()
-        self._launch_worker(settings, False)
+        if not self._launch_worker(settings, False):
+            next_item["status"] = "Aguardando"
+            next_item["progress"] = 0.0
+            next_item["stage"] = "Aguardando outra instância"
+            self._active_queue_id = None
+            self._queue_running = False
+            self._refresh_queue_tree(select_id=int(next_item["id"]))
+            self._save_queue()
+            self._refresh_queue_overview()
 
     def _active_queue_item(self) -> dict | None:
         return next((item for item in self._queue_items if item["id"] == self._active_queue_id), None)
@@ -4397,7 +4412,46 @@ class VideoOptimizerStudio:
                 return
         self._launch_worker(settings, preview)
 
-    def _launch_worker(self, settings: RenderSettings, preview: bool) -> None:
+    def _launch_worker(self, settings: RenderSettings, preview: bool) -> bool:
+        try:
+            self._render_lease.acquire(phase="preview" if preview else "render")
+        except LeaseBusy as exc:
+            self._set_feedback(
+                "warning",
+                "Outra instância já está processando",
+                "Este CinePulse não iniciou um segundo render sobre o mesmo diretório. "
+                "Finalize o processamento da outra janela e tente novamente.",
+                category="Recuperação",
+                technical_detail=str(exc),
+            )
+            return False
+        except Exception as exc:
+            self._set_feedback(
+                "error",
+                "Não foi possível reservar o render",
+                "O processamento foi bloqueado porque o ownership cross-process não pôde ser comprovado.",
+                category="Recuperação",
+                technical_detail=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+
+        try:
+            self._write_render_lock(preview)
+        except Exception as exc:
+            try:
+                if self._render_lease.nonce is not None:
+                    self._render_lease.release()
+            except Exception:
+                pass
+            self._set_feedback(
+                "error",
+                "Não foi possível registrar o render",
+                "O processamento não começou porque o journal inicial não pôde ser persistido.",
+                category="Recuperação",
+                technical_detail=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+
         self._cancelled = False
         self._busy = True
         self._started_at = time.monotonic()
@@ -4420,8 +4474,32 @@ class VideoOptimizerStudio:
         self.cancel_button.configure(state="normal")
         self.cancel_button.pack(side="left", padx=(8, 0))
         self._refresh_footer_density()
-        self._write_render_lock(preview)
-        threading.Thread(target=self._worker, args=(settings, preview), daemon=True).start()
+        worker = threading.Thread(target=self._worker, args=(settings, preview), daemon=True)
+        try:
+            worker.start()
+        except Exception as exc:
+            self._busy = False
+            self._render_journal.clear()
+            try:
+                if self._render_lease.nonce is not None:
+                    self._render_lease.release()
+            except Exception:
+                pass
+            self.render_button.configure(state="normal")
+            self.preview_button.configure(state="normal")
+            self.add_queue_button.configure(state="normal")
+            self.start_queue_button.configure(state="normal")
+            self.cancel_button.configure(state="disabled")
+            self.cancel_button.pack_forget()
+            self._set_feedback(
+                "error",
+                "Worker não pôde iniciar",
+                "O ownership foi liberado e nenhum render ficou marcado como ativo.",
+                category="Render",
+                technical_detail=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        return True
 
     def _worker(self, settings: RenderSettings, preview: bool) -> None:
         temp_paths: list[Path] = []
@@ -5221,6 +5299,20 @@ class VideoOptimizerStudio:
             for directory in temp_dirs:
                 safe_rmtree(directory)
             safe_rmtree(job_dir)
+            try:
+                if self._render_lease.nonce is not None:
+                    self._render_lease.release()
+            except Exception as exc:
+                self._events.put((
+                    "log",
+                    f"[{time.strftime('%H:%M:%S')}] RENDER LEASE WARNING: {type(exc).__name__}: {exc}",
+                ))
+            finally:
+                for evidence in PATHS.locks.glob("render-owner.json.released-*"):
+                    try:
+                        evidence.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     @staticmethod
     def _audio_filter(mode: str) -> str:
@@ -7556,17 +7648,7 @@ class VideoOptimizerStudio:
         self._refresh_queue_overview()
 
     def _write_render_lock(self, preview: bool) -> None:
-        PATHS.locks.mkdir(parents=True, exist_ok=True)
-        lock = PATHS.locks / "render.json"
-        temporary = lock.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(
-                {"schema": 1, "pid": os.getpid(), "started_at": time.time(), "preview": bool(preview)},
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        os.replace(temporary, lock)
+        self._render_journal.claim(preview)
 
 
     def _cancel(self) -> None:
