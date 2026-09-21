@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .paths import PATHS
 
@@ -38,7 +38,16 @@ def _manifest_entries(payload: dict) -> list[tuple[str, str, int | None]]:
         relative = str(item.get("path") or "").strip().replace("\\", "/")
         expected = str(item.get("sha256") or "").strip().lower()
         size = item.get("size")
-        if not relative or len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
+        parts = PurePosixPath(relative).parts
+        unsafe_path = (
+            not relative
+            or relative.startswith("/")
+            or (parts and ":" in parts[0])
+            or ".." in parts
+        )
+        if unsafe_path:
+            raise ValueError(f"Caminho inseguro no manifesto: {relative}")
+        if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
             raise ValueError("Manifesto de integridade contém entrada inválida.")
         canonical = relative.casefold()
         if canonical in seen:
