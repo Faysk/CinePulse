@@ -4,16 +4,19 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tempfile
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable
 
 from .paths import PATHS
 
 
 MANIFEST = PATHS.root / "installer" / "experimental-components.json"
+MAX_ARCHIVE_ENTRIES = 50_000
+MAX_ARCHIVE_EXTRACTED_BYTES = 2 * 1024**3
 
 
 def _catalog() -> dict:
@@ -115,6 +118,48 @@ def _download(url: str, destination: Path, expected_hash: str, log: Callable[[st
     os.replace(partial, destination)
 
 
+def _safe_extract_archive(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    resolved = destination.resolve()
+    with zipfile.ZipFile(archive) as bundle:
+        infos = bundle.infolist()
+        if len(infos) > MAX_ARCHIVE_ENTRIES:
+            raise RuntimeError(
+                f"O pacote experimental contém {len(infos)} entradas; limite é {MAX_ARCHIVE_ENTRIES}."
+            )
+        seen: set[str] = set()
+        expanded = 0
+        for member in infos:
+            name = str(member.filename or "").replace("\\", "/")
+            parts = PurePosixPath(name).parts
+            unsafe = (
+                not name
+                or name.startswith("/")
+                or ".." in parts
+                or (parts and ":" in parts[0])
+            )
+            if unsafe:
+                raise RuntimeError(f"O pacote experimental contém caminho inseguro: {member.filename}")
+            canonical = "/".join(parts).casefold()
+            if canonical in seen:
+                raise RuntimeError(f"O pacote experimental contém entrada duplicada: {member.filename}")
+            seen.add(canonical)
+            mode = (member.external_attr >> 16) & 0o170000
+            if mode == stat.S_IFLNK:
+                raise RuntimeError(f"O pacote experimental contém link simbólico: {member.filename}")
+            if member.flag_bits & 0x1:
+                raise RuntimeError(f"O pacote experimental contém entrada criptografada: {member.filename}")
+            expanded += max(0, int(member.file_size))
+            if expanded > MAX_ARCHIVE_EXTRACTED_BYTES:
+                raise RuntimeError(
+                    f"O pacote experimental expandido excede {MAX_ARCHIVE_EXTRACTED_BYTES} bytes."
+                )
+            target = destination.joinpath(*parts).resolve()
+            if target != resolved and resolved not in target.parents:
+                raise RuntimeError(f"O pacote experimental contém caminho inseguro: {member.filename}")
+        bundle.extractall(destination)
+
+
 def _install_archive(entry: dict, log: Callable[[str], None]) -> None:
     destination = PATHS.components / "ai" / entry["destination"]
     marker = destination / ".cinepulse-experimental.json"
@@ -127,13 +172,7 @@ def _install_archive(entry: dict, log: Callable[[str], None]) -> None:
         archive = temp / "source.zip"
         _download(entry["url"], archive, entry["sha256"], log)
         unpacked = temp / "unpacked"
-        with zipfile.ZipFile(archive) as bundle:
-            root = unpacked.resolve()
-            for member in bundle.infolist():
-                target = (unpacked / member.filename).resolve()
-                if target != root and root not in target.parents:
-                    raise RuntimeError("O pacote experimental contém um caminho inseguro.")
-            bundle.extractall(unpacked)
+        _safe_extract_archive(archive, unpacked)
         roots = [item for item in unpacked.iterdir() if item.is_dir()]
         if len(roots) != 1:
             raise RuntimeError("Estrutura inesperada no pacote experimental.")
