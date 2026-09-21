@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from .source_identity import file_content_identity
+
 
 FOCUS_STEMS = {
     "Graves": ("bass",),
@@ -46,8 +48,7 @@ def demucs_model_identity(model_repo: Path | None, state_file: Path | None = Non
         for name in tracked:
             path = root / name
             try:
-                stat = path.stat()
-                files[name] = {"size": stat.st_size, "mtime": stat.st_mtime_ns}
+                files[name] = file_content_identity(path)
             except OSError:
                 files[name] = None
         payload["files"] = files
@@ -60,11 +61,8 @@ def stem_cache_key(
     model_repo: Path | None = None,
     state_file: Path | None = None,
 ) -> str:
-    stat = audio.stat()
     payload = {
-        "path": str(audio.resolve()),
-        "size": stat.st_size,
-        "mtime": stat.st_mtime_ns,
+        "source": file_content_identity(audio),
         "model_identity": demucs_model_identity(model_repo, state_file),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]

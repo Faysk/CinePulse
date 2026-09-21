@@ -26,6 +26,7 @@ import numpy as np
 
 from .music_envelope import SAMPLE_RATE, decode_audio
 from .paths import PATHS
+from .source_identity import file_content_identity
 
 
 ANALYZER_VERSION = "preview-composer-audio-v1"
@@ -263,7 +264,6 @@ def analyze_visualizer_samples(
 def _source_key(media_path: str, duration: float, fps: float, bands: int, waveform_rate: float) -> str:
     path = Path(media_path).expanduser()
     metadata: dict[str, object] = {
-        "path": str(path),
         "duration": round(float(duration), 6),
         "fps": round(float(fps), 6),
         "bands": int(bands),
@@ -271,10 +271,9 @@ def _source_key(media_path: str, duration: float, fps: float, bands: int, wavefo
         "version": ANALYZER_VERSION,
     }
     try:
-        stat = path.stat()
-        metadata.update(path=str(path.resolve()), size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+        metadata["source"] = file_content_identity(path)
     except OSError:
-        pass
+        metadata["source"] = {"path": str(path), "unreadable": True}
     raw = json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha256(raw.encode("utf-8")).hexdigest()[:24]
 

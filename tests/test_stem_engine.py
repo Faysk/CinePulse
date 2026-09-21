@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,30 @@ class StemEngineTests(unittest.TestCase):
                 demucs_model_identity(repo, state),
                 demucs_model_identity(None, None),
             )
+
+    def test_model_identity_changes_when_weight_content_changes_with_metadata_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            tracked = (
+                "htdemucs_ft.yaml",
+                "f7e0c4bc-ba3fe64a.th",
+                "d12395a8-e57c48e6.th",
+                "92cfc3b6-ef3bcb9c.th",
+                "04573f0d-f3cf25b2.th",
+            )
+            for name in tracked:
+                (repo / name).write_bytes(b"A" * 4096)
+
+            target = repo / "f7e0c4bc-ba3fe64a.th"
+            first = demucs_model_identity(repo)
+            before = target.stat()
+            target.write_bytes(b"B" * 4096)
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+            second = demucs_model_identity(repo)
+
+            self.assertNotEqual(first, second)
 
     def test_cache_changes_when_verified_weight_fingerprint_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

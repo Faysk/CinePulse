@@ -69,6 +69,7 @@ from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
+from .source_identity import file_content_identity
 from .job_lease import JobLease, LeaseBusy
 from .rife_engine import (
     applied_jobs_from_log,
@@ -5844,34 +5845,22 @@ class VideoOptimizerStudio:
         source_h: int,
     ) -> str:
         source = Path(video)
-        stat = source.stat()
         model_bin = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.bin"
         model_param = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.param"
         component_fingerprint = bootstrap_component_fingerprint(
             "real_esrgan",
             component_root=REAL_ESRGAN.parent,
+            critical_files=(REAL_ESRGAN, model_bin, model_param),
         )
 
-        def file_identity(path: Path) -> dict[str, int]:
-            try:
-                value = path.stat()
-            except OSError:
-                return {"size": 0, "mtime": 0}
-            return {"size": int(value.st_size), "mtime": int(value.st_mtime_ns)}
-
         identity = {
-            "path": str(source.resolve()),
-            "size": stat.st_size,
-            "mtime": stat.st_mtime_ns,
+            "source": file_content_identity(source),
             "start": round(start_time, 5),
             "duration": round(duration, 5),
             "fps": round(source_fps, 5),
             "width": source_w,
             "height": source_h,
             "component": component_fingerprint or "unverified-component",
-            "executable": file_identity(REAL_ESRGAN),
-            "model_bin": file_identity(model_bin),
-            "model_param": file_identity(model_param),
             "scale": 2,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]

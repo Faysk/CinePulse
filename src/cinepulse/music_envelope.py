@@ -13,6 +13,7 @@ from typing import Callable
 import numpy as np
 
 from .paths import PATHS
+from .source_identity import file_content_identity
 
 SAMPLE_RATE = 48_000
 DEFAULT_ANALYSIS_FPS = 120.0
@@ -288,23 +289,15 @@ def resample_features(
 
 def _source_key(media_path: str, duration: float, fps: float) -> str:
     path = Path(media_path).expanduser()
+    metadata: dict[str, object] = {
+        "duration": round(float(duration), 6),
+        "fps": round(float(fps), 6),
+        "version": ANALYZER_VERSION,
+    }
     try:
-        stat = path.stat()
-        metadata = {
-            "path": str(path.resolve()),
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-            "duration": round(float(duration), 6),
-            "fps": round(float(fps), 6),
-            "version": ANALYZER_VERSION,
-        }
+        metadata["source"] = file_content_identity(path)
     except OSError:
-        metadata = {
-            "path": str(path),
-            "duration": round(float(duration), 6),
-            "fps": round(float(fps), 6),
-            "version": ANALYZER_VERSION,
-        }
+        metadata["source"] = {"path": str(path), "unreadable": True}
     raw = json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha256(raw.encode("utf-8")).hexdigest()[:24]
 
