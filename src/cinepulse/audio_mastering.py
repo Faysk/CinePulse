@@ -51,12 +51,8 @@ def frame_bound_duration(frame_count: int, fps: float) -> float:
     return frames / cadence
 
 
-def build_delivery_audio_filter(
-    mode: str,
-    duration: float,
-    measured: dict[str, float] | None = None,
-) -> str:
-    """Master audio, then guarantee it spans the exact frame-bound timeline."""
+def bound_delivery_audio_filter(duration: float, inner_filter: str = "") -> str:
+    """Trim/pad audio to the exact CFR timeline without clipping video."""
 
     seconds = float(duration)
     if not math.isfinite(seconds) or seconds <= 0:
@@ -65,11 +61,23 @@ def build_delivery_audio_filter(
         f"atrim=duration={seconds:.12f}",
         "asetpts=PTS-STARTPTS",
     ]
-    mastering = build_audio_filter(mode, measured)
-    if mastering:
-        filters.append(mastering)
+    if inner_filter:
+        filters.append(inner_filter)
     filters.append(f"apad=whole_dur={seconds:.12f}")
     return ",".join(filters)
+
+
+def build_delivery_audio_filter(
+    mode: str,
+    duration: float,
+    measured: dict[str, float] | None = None,
+) -> str:
+    """Master audio and align it to the exact frame-bound timeline."""
+
+    return bound_delivery_audio_filter(
+        duration,
+        build_audio_filter(mode, measured),
+    )
 
 def analyze_loudness(ffmpeg: str, source: str, duration: float, mode: str) -> dict[str, float]:
     if mode not in TARGETS:
