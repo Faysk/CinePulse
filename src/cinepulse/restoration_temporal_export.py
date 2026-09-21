@@ -534,3 +534,16 @@ def stream_temporal_preview(
                     terminate_process_tree(process, grace_seconds=1.0)
             if cancel_watcher is not None and cancel_watcher is not threading.current_thread():
                 cancel_watcher.join(timeout=2.0)
+            # Popen does not close PIPE file objects merely because the child
+            # has exited. Leaving these references open leaks OS handles and on
+            # Windows can keep resources alive until an arbitrary GC cycle.
+            for stream in (
+                getattr(decoder, "stdout", None) if decoder is not None else None,
+                getattr(encoder, "stdin", None) if encoder is not None else None,
+            ):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except OSError:
+                    pass
