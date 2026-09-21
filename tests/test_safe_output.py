@@ -96,6 +96,17 @@ class SafeOutputTests(unittest.TestCase):
         with patch("cinepulse.safe_output.os.kill", side_effect=ProcessLookupError("gone")):
             self.assertFalse(process_alive(1234))
 
+    def test_journal_write_is_fsynced_and_leaves_no_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            atomic = AtomicOutput.for_path(root / "final.mp4", pid=42)
+            journal = RenderJournal(root / "render.json")
+            with patch("cinepulse.safe_output.os.fsync", wraps=__import__("os").fsync) as fsync:
+                journal.write(atomic, preview=False, expected={"fps": 60})
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual([], list(root.glob("render.json.tmp-*")))
+            self.assertEqual(60, journal.read()["expected"]["fps"])
+
     def test_journal_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

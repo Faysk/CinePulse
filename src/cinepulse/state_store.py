@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import uuid
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -13,6 +14,14 @@ from typing import Any, Callable, TypeVar
 QUEUE_SCHEMA = 2
 PRESETS_SCHEMA = 1
 _T = TypeVar("_T")
+_LOCKS_GUARD = threading.Lock()
+_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _path_lock(path: Path) -> threading.RLock:
+    key = os.path.normcase(str(path.resolve(strict=False)))
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(key, threading.RLock())
 
 
 class StateSchemaTooNew(ValueError):
@@ -28,30 +37,49 @@ def _backup(path: Path) -> None:
         return
     backup = _backup_path(path)
     try:
-        shutil.copy2(path, backup)
+        _atomic_bytes(backup, path.read_bytes())
     except OSError:
         pass
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".restore.tmp")
+    temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
     try:
-        with temporary.open("wb") as handle:
+        with temporary.open("xb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def _atomic_write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    _backup(path)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    # Backup + promotion form one local transaction. Unique temp files prevent
+    # temp collisions; the path lock also prevents Windows from racing two
+    # os.replace operations against the same primary/backup destination.
+    with _path_lock(path):
+        _backup(path)
+        _atomic_bytes(path, content)
 
 
 def _queue_from_payload(payload: Any) -> tuple[list[dict], bool]:
@@ -110,7 +138,7 @@ def _load_with_backup(path: Path, parser: Callable[[Any], _T]) -> tuple[_T, bool
                 f"Estado principal e backup estão inválidos: primary={primary_error}; backup={backup_error}"
             ) from backup_error
         if path.exists():
-            evidence = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+            evidence = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
             try:
                 os.replace(path, evidence)
             except OSError:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,7 +66,7 @@ class RenderJournal:
 
     def write(self, atomic: AtomicOutput, preview: bool, expected: dict | None = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
+        temporary = self.path.with_name(f"{self.path.name}.tmp-{uuid.uuid4().hex}")
         payload = {
             "schema": 1,
             "pid": os.getpid(),
@@ -75,8 +76,27 @@ class RenderJournal:
             "partial": str(atomic.partial),
             "expected": expected or {},
         }
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temporary, self.path)
+        content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            if os.name != "nt":
+                try:
+                    descriptor = os.open(self.path.parent, os.O_RDONLY)
+                except OSError:
+                    descriptor = None
+                if descriptor is not None:
+                    try:
+                        os.fsync(descriptor)
+                    except OSError:
+                        pass
+                    finally:
+                        os.close(descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def read(self) -> dict | None:
         try:

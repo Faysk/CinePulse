@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from cinepulse.job_store import JobStore, ManifestConflict, ManifestStoreError
@@ -36,6 +37,23 @@ class JobStoreTests(unittest.TestCase):
             self.assertTrue(list(root.glob("manifest.json.corrupt-*")))
             persisted = json.loads(store.path.read_text(encoding="utf-8"))
             self.assertEqual(1, persisted["revision"])
+
+    def test_repeated_manifest_recovery_preserves_distinct_corrupt_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = JobStore(root / "manifest.json")
+            first = store.create(RenderJobManifest.new("job-1", now=1.0))
+            store.save(first.transition("preflight", now=2.0), expected_revision=0)
+
+            with mock.patch("cinepulse.job_store.time.time_ns", side_effect=[2001, 2002]):
+                store.path.write_text("{broken-one", encoding="utf-8")
+                store.load(recover_backup=True)
+                store.path.write_text("{broken-two", encoding="utf-8")
+                store.load(recover_backup=True)
+
+            evidence = sorted(root.glob("manifest.json.corrupt-*"))
+            self.assertEqual(2, len(evidence))
+            self.assertEqual({"{broken-one", "{broken-two"}, {item.read_text(encoding="utf-8") for item in evidence})
 
     def test_both_primary_and_backup_invalid_are_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
