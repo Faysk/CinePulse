@@ -578,6 +578,29 @@ class ScrollableTab(ttk.Frame):
             return
 
 
+def _finalize_piped_process(
+    process: subprocess.Popen | None,
+    reader_thread: threading.Thread | None,
+    log: Callable[[str], None] | None = None,
+) -> None:
+    """Reap one grouped child and close its captured stdout deterministically."""
+    if process is None:
+        return
+    if process.poll() is None:
+        terminate_process_tree(process, log, grace_seconds=2.0)
+    if reader_thread is not None and reader_thread is not threading.current_thread():
+        reader_thread.join(timeout=2.0)
+    stream = getattr(process, "stdout", None)
+    if stream is not None:
+        try:
+            if not stream.closed:
+                stream.close()
+        except (OSError, ValueError, AttributeError):
+            pass
+    if reader_thread is not None and reader_thread is not threading.current_thread():
+        reader_thread.join(timeout=0.5)
+
+
 class VideoOptimizerStudio:
     def __init__(self, root: Tk) -> None:
         self.root = root
@@ -2673,14 +2696,17 @@ class VideoOptimizerStudio:
                     command.extend(["-InstallOnly", "-ComponentsCsv", ",".join(components)])
                     process = subprocess.Popen(
                         command, cwd=str(APP_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW,
+                        text=True, encoding="utf-8", errors="replace", **popen_group_kwargs(),
                     )
-                    assert process.stdout is not None
-                    for line in process.stdout:
-                        report_activity(line)
-                    code = process.wait()
-                    if code:
-                        raise RuntimeError("\n".join(recent) or f"O instalador terminou com o código {code}.")
+                    try:
+                        assert process.stdout is not None
+                        for line in process.stdout:
+                            report_activity(line)
+                        code = process.wait()
+                        if code:
+                            raise RuntimeError("\n".join(recent) or f"O instalador terminou com o código {code}.")
+                    finally:
+                        _finalize_piped_process(process, None, self._log)
                 if experimental_keys:
                     experimental_components.install(experimental_keys, report_activity)
                 self._events.put(("ai_install_done", [item["name"] for item in selected]))
@@ -6499,18 +6525,21 @@ class VideoOptimizerStudio:
                 if clean:
                     recent.append(clean); self._log(clean)
         thread = threading.Thread(target=reader, daemon=True); thread.start()
-        while process.poll() is None:
+        try:
+            while process.poll() is None:
+                if self._cancelled:
+                    terminate_process_tree(process, self._log); break
+                done = len(list(output_dir.glob("frame*.png")))
+                self._push_progress(base + weight * min(1, done / max(1, frames)))
+                time.sleep(0.25)
+            code = process.wait(); thread.join(timeout=2)
             if self._cancelled:
-                terminate_process_tree(process, self._log); break
-            done = len(list(output_dir.glob("frame*.png")))
-            self._push_progress(base + weight * min(1, done / max(1, frames)))
-            time.sleep(0.25)
-        code = process.wait(); thread.join(timeout=2)
-        if self._cancelled:
-            raise InterruptedError
-        if code:
-            raise RuntimeError("A melhoria por IA falhou.\n\n" + "\n".join(recent))
-        self._push_progress(base + weight)
+                raise InterruptedError
+            if code:
+                raise RuntimeError("A melhoria por IA falhou.\n\n" + "\n".join(recent))
+            self._push_progress(base + weight)
+        finally:
+            _finalize_piped_process(process, thread, self._log)
 
     def _prepare_reactive_audio(self, audio: str, focus: str, use_cpu: bool, cpu_threads: int) -> str:
         selected = stems_for_focus(focus)
@@ -6610,6 +6639,7 @@ class VideoOptimizerStudio:
                         "preservando o vencedor concorrente."
                     )
             finally:
+                _finalize_piped_process(process, reader_thread, self._log)
                 safe_rmtree(demucs_staging)
 
         stems = [locate(name) for name in selected]
@@ -6883,30 +6913,33 @@ class VideoOptimizerStudio:
 
                 reader_thread = threading.Thread(target=reader, daemon=True)
                 reader_thread.start()
-                while process.poll() is None:
-                    if self._cancelled:
-                        terminate_process_tree(process, self._log)
-                        break
-                    completed = len(list(outgoing.glob("*.png")))
-                    self._push_progress(
-                        stage_base + weight * fraction_chunk * (0.18 + 0.58 * min(1.0, completed / max(1, desired)))
-                    )
-                    time.sleep(0.25)
-                code = process.wait()
-                reader_thread.join(timeout=2)
-                if self._cancelled:
-                    raise InterruptedError
-                if code:
-                    raise RuntimeError("RIFE falhou.\n" + "\n".join(recent))
-                if not use_cpu:
-                    applied_jobs = applied_jobs_from_log(recent)
-                    if applied_jobs and applied_jobs != rife_jobs_override:
-                        previous_jobs = rife_jobs_override or "agressiva padrão"
-                        rife_jobs_override = applied_jobs
-                        self._log(
-                            "FULL RIFE: política aplicada neste lote será reutilizada nos próximos "
-                            f"({previous_jobs} -> {rife_jobs_override}); nenhuma medição de VRAM envolvida."
+                try:
+                    while process.poll() is None:
+                        if self._cancelled:
+                            terminate_process_tree(process, self._log)
+                            break
+                        completed = len(list(outgoing.glob("*.png")))
+                        self._push_progress(
+                            stage_base + weight * fraction_chunk * (0.18 + 0.58 * min(1.0, completed / max(1, desired)))
                         )
+                        time.sleep(0.25)
+                    code = process.wait()
+                    reader_thread.join(timeout=2)
+                    if self._cancelled:
+                        raise InterruptedError
+                    if code:
+                        raise RuntimeError("RIFE falhou.\n" + "\n".join(recent))
+                    if not use_cpu:
+                        applied_jobs = applied_jobs_from_log(recent)
+                        if applied_jobs and applied_jobs != rife_jobs_override:
+                            previous_jobs = rife_jobs_override or "agressiva padrão"
+                            rife_jobs_override = applied_jobs
+                            self._log(
+                                "FULL RIFE: política aplicada neste lote será reutilizada nos próximos "
+                                f"({previous_jobs} -> {rife_jobs_override}); nenhuma medição de VRAM envolvida."
+                            )
+                finally:
+                    _finalize_piped_process(process, reader_thread, self._log)
                 neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
                 if len(frames) != desired:
