@@ -250,6 +250,39 @@ class ComposerExportFfmpegIntegrationTests(unittest.TestCase):
         )
         self.assertEqual("4", probe.stdout.strip())
 
+    def test_fractional_fps_still_export_preserves_all_frames(self) -> None:
+        output = self.root / "fractional-result.mkv"
+        request = ComposerExportRequest(
+            self.logo,
+            output,
+            ComposerBaseProfile(
+                64, 36, 30000 / 1001, 1.0,
+                "rgba", "bt709", "bt709", "bt709", "pc",
+                still_image=True,
+            ),
+            OverlayComposerState([
+                ComposerItem("logo", media=OverlayLayer(str(self.logo), "png", x=0.5, y=0.5))
+            ]),
+            self.ffmpeg,
+            self.ffprobe,
+            {"master": self.source},
+            output_audio=self.source,
+        )
+        result = export_composer_reference(request)
+        self.assertEqual(30, result.frames)
+        probe = subprocess.run(
+            [
+                self.ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+                "-show_entries", "stream=nb_read_frames", "-of", "default=nw=1:nk=1",
+                str(output),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual("30", probe.stdout.strip())
+
     def test_audio_reactive_visualizer_is_not_flat_in_final_export(self) -> None:
         source = self.root / "music-source.mkv"
         output = self.root / "music-result.mkv"
