@@ -4662,21 +4662,44 @@ class VideoOptimizerStudio:
                     color_plan=color_plan,
                     color_already_converted=color_already_converted,
                 )
-                command = [
+                command_prefix = [
                     FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
                 ]
                 if working_start > 0:
-                    command += ["-ss", f"{working_start:.6f}"]
+                    command_prefix += ["-ss", f"{working_start:.6f}"]
                 master_target_frames = max(1, int(round(video_duration * work_fps)))
-                command += [
+                command_prefix += [
                     "-i", working_video,
                     "-map", "0:v:0", "-an", "-vf", master_filter,
-                ] + self._intermediate_encoder(work_w, work_h, settings.use_cpu, color_plan) + [
+                ]
+                master_encoder_args = self._intermediate_encoder(
+                    work_w, work_h, settings.use_cpu, color_plan
+                )
+                command_suffix = [
                     "-frames:v", str(master_target_frames),
                     "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)),
                     "-progress", "pipe:1", "-nostats", str(master),
                 ]
-                self._run_ffmpeg(command, video_duration, progress_base, 10)
+                command = command_prefix + master_encoder_args + command_suffix
+                try:
+                    self._run_ffmpeg(command, video_duration, progress_base, 10)
+                except RuntimeError as exc:
+                    if settings.use_cpu or "h264_nvenc" not in master_encoder_args:
+                        raise
+                    try:
+                        master.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    self._log(
+                        "Master SDR: H.264 NVENC auxiliar falhou; repetindo com libx264. "
+                        f"Motivo: {exc}"
+                    )
+                    command = (
+                        command_prefix
+                        + self._intermediate_encoder(work_w, work_h, True, color_plan)
+                        + command_suffix
+                    )
+                    self._run_ffmpeg(command, video_duration, progress_base, 10)
                 self._release_temp_path(working_video, temp_paths)
                 progress_base += 10
                 visual_source = str(master)
@@ -4725,6 +4748,7 @@ class VideoOptimizerStudio:
 
                     final_audio_filter = ""
                     final_video_args = None
+                    final_video_fallback_args = None
                     final_audio_args = None
                     final_muxer_args = None
                     final_audio_source = None
@@ -4743,6 +4767,12 @@ class VideoOptimizerStudio:
                             bitrate_mbps=estimated_bitrate, fps=target_fps,
                             gpu_index=self._hardware.gpu_index,
                         )
+                        if any(str(value).endswith("_nvenc") for value in final_video_args):
+                            final_video_fallback_args = delivery_plan.video_args(
+                                use_cpu=True, nvenc_available=False,
+                                bitrate_mbps=estimated_bitrate, fps=target_fps,
+                                gpu_index=self._hardware.gpu_index,
+                            )
                         final_audio_source = settings.audio
                         final_audio_args = delivery_plan.audio_args()
                         final_muxer_args = delivery_plan.muxer_args()
@@ -4773,6 +4803,7 @@ class VideoOptimizerStudio:
                             output_range=color_plan.working.range,
                             lossless_intermediate=color_plan.needs_lossless_intermediate and not fuse_vfx_delivery,
                             final_video_args=final_video_args,
+                            fallback_video_args=final_video_fallback_args,
                             final_audio_source=final_audio_source,
                             final_audio_filter=final_audio_filter,
                             final_audio_args=final_audio_args,
@@ -5294,14 +5325,35 @@ class VideoOptimizerStudio:
             f"{color_plan.setparams_filter()}[v]"
         )
         expected = max(0.1, duration - blend)
-        command = [
+        command_prefix = [
             FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", master,
             "-filter_complex", graph, "-map", "[v]", "-an",
-        ] + self._intermediate_encoder(width, height, use_cpu, color_plan) + [
+        ]
+        encoder_args = self._intermediate_encoder(width, height, use_cpu, color_plan)
+        command_suffix = [
             "-threads", str(cpu_threads), "-progress", "pipe:1", "-nostats", str(output)
         ]
+        command = command_prefix + encoder_args + command_suffix
         self._set_stage("Criando transição", f"Mesclando o final e o início com ‘{label}’ por {blend:.2f} s.")
-        self._run_ffmpeg(command, expected, base, weight)
+        try:
+            self._run_ffmpeg(command, expected, base, weight)
+        except RuntimeError as exc:
+            if use_cpu or "h264_nvenc" not in encoder_args:
+                raise
+            try:
+                output.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._log(
+                "Transição: H.264 NVENC auxiliar falhou; repetindo com libx264. "
+                f"Motivo: {exc}"
+            )
+            command = (
+                command_prefix
+                + self._intermediate_encoder(width, height, True, color_plan)
+                + command_suffix
+            )
+            self._run_ffmpeg(command, expected, base, weight)
         return str(output)
 
     def _find_best_loop(self, video: str, duration: float) -> tuple[float, float, float]:
