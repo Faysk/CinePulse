@@ -90,5 +90,26 @@ class IntegrityTests(unittest.TestCase):
                 outside.unlink(missing_ok=True)
 
 
+    def test_portable_list_manifest_rejects_absolute_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "hello.txt"
+            source.write_text("ok", encoding="utf-8")
+            absolute = source.resolve().as_posix()
+            (root / MANIFEST_NAME).write_text(
+                json.dumps({
+                    "schema": 1,
+                    "files": [{
+                        "path": absolute,
+                        "sha256": sha256(source),
+                        "size": source.stat().st_size,
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Caminho inseguro"):
+                verify(root)
+
+
 if __name__ == "__main__":
     unittest.main()
