@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$Version = '1.2.14',
+    [string]$Version = '1.2.15',
     [switch]$SkipBuilds,
     [switch]$RunGpu,
     [switch]$RunMsiLifecycle
