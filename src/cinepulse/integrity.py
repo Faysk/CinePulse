@@ -35,7 +35,7 @@ def _manifest_entries(payload: dict) -> list[tuple[str, str, int | None]]:
     for item in files:
         if not isinstance(item, dict):
             raise ValueError("Manifesto de integridade contém entrada inválida.")
-        relative = str(item.get("path") or "").strip().replace("\\", "/").lstrip("/")
+        relative = str(item.get("path") or "").strip().replace("\\", "/")
         expected = str(item.get("sha256") or "").strip().lower()
         size = item.get("size")
         if not relative or len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
