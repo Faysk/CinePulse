@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import tempfile
 import subprocess
 import unittest
 from pathlib import Path
@@ -17,7 +19,24 @@ from cinepulse.restoration_temporal_export import (
     build_temporal_encoder_command,
     probe_preview_geometry,
     reconstruct_window_target,
+    stream_temporal_preview,
 )
+
+
+class _PipeProcess:
+    def __init__(self, *, stdout=None, stdin=None, output: Path | None = None):
+        self.stdout = stdout
+        self.stdin = stdin
+        self.pid = None
+        self._output = output
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        if self._output is not None:
+            self._output.write_bytes(b"encoded-preview")
+        return 0
 
 
 class TemporalPreviewExportTests(unittest.TestCase):
@@ -139,6 +158,81 @@ class TemporalPreviewExportTests(unittest.TestCase):
         geometry = PreviewVideoGeometry(width=12288, height=6480, fps=120.0)
         policy = TemporalReconstructionPolicy(radius=4)
         self.assertGreater(geometry.estimated_temporal_working_set(policy), 2 * 1024**3)
+
+    def _run_pipe_lifecycle_case(self, *, fail_reconstruction: bool) -> tuple[io.BytesIO, io.BytesIO]:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.mp4"
+            output = root / "preview.mp4"
+            source.write_bytes(b"source")
+            geometry = PreviewVideoGeometry(
+                width=2,
+                height=2,
+                fps=1.0,
+                nominal_fps=1.0,
+                frame_count=1,
+                duration=1.0,
+                has_audio=False,
+                audio_stream_count=0,
+            )
+            region = OverlayRegion(0.0, 0.0, 0.5, 0.5, kind="text", confidence=0.9)
+            plan = PreviewRestorationPlan(
+                evidence=(),
+                regions=(region,),
+                overlay_filter="temporal",
+                color_filter="",
+            )
+            decoder_stream = io.BytesIO(bytes(range(geometry.frame_bytes)))
+            encoder_stream = io.BytesIO()
+            processes = []
+
+            def factory(command, **kwargs):
+                if "pipe:1" in command:
+                    process = _PipeProcess(stdout=decoder_stream)
+                else:
+                    process = _PipeProcess(stdin=encoder_stream, output=Path(command[-1]))
+                processes.append(process)
+                return process
+
+            if fail_reconstruction:
+                reconstruction = patch(
+                    "cinepulse.restoration_temporal_export.reconstruct_window_target",
+                    side_effect=RuntimeError("injected reconstruction failure"),
+                )
+            else:
+                reconstruction = patch(
+                    "cinepulse.restoration_temporal_export.reconstruct_window_target",
+                    side_effect=lambda frames, **_kwargs: (frames[0].copy(), 0, 1),
+                )
+
+            with (
+                patch("cinepulse.restoration_temporal_export.subprocess.Popen", side_effect=factory),
+                reconstruction,
+            ):
+                if fail_reconstruction:
+                    with self.assertRaisesRegex(RuntimeError, "injected reconstruction failure"):
+                        stream_temporal_preview(
+                            "ffmpeg", "ffprobe", source, output, plan, geometry=geometry
+                        )
+                else:
+                    report = stream_temporal_preview(
+                        "ffmpeg", "ffprobe", source, output, plan, geometry=geometry
+                    )
+                    self.assertEqual(1, report.frames_written)
+                    self.assertTrue(output.is_file())
+
+            self.assertEqual(2, len(processes))
+            return decoder_stream, encoder_stream
+
+    def test_temporal_stream_closes_pipes_after_success(self):
+        decoder_stream, encoder_stream = self._run_pipe_lifecycle_case(fail_reconstruction=False)
+        self.assertTrue(decoder_stream.closed)
+        self.assertTrue(encoder_stream.closed)
+
+    def test_temporal_stream_closes_pipes_after_failure(self):
+        decoder_stream, encoder_stream = self._run_pipe_lifecycle_case(fail_reconstruction=True)
+        self.assertTrue(decoder_stream.closed)
+        self.assertTrue(encoder_stream.closed)
 
     def test_window_reconstruction_does_not_copy_persistent_overlay(self):
         frames = []
