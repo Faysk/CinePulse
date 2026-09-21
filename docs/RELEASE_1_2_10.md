@@ -8,6 +8,10 @@ O vídeo final já é definido por uma quantidade inteira de quadros. A duraçã
 
 A 1.2.10 usa a duração frame-bound em todo o caminho de entrega do recovery.
 
+## Studio e histórico
+
+O Studio agora calcula `final_timeline_duration` a partir de `final_target_frames / target_fps` e reutiliza esse valor no journal de render, no contrato persistido de verificação, na verificação final, no relatório de qualidade e no comparison preview. Isso evita que um mesmo arquivo tenha uma duração lógica para o planner e outra duração implícita para o verificador.
+
 ## Loudness
 
 A primeira passagem de loudness agora mede exatamente a janela que será entregue. Isso evita calcular medições com alguns milissegundos fora da timeline CFR real e depois aplicar essas medições a uma janela ligeiramente diferente.
