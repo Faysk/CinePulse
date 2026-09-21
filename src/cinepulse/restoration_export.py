@@ -79,6 +79,15 @@ def validate_preview_output_contract(
             "Preview output audio presence changed unexpectedly: "
             f"{candidate_contract.has_audio} != {source_contract.has_audio}."
         )
+    if (
+        source_contract.audio_stream_count is not None
+        and candidate_contract.audio_stream_count is not None
+        and candidate_contract.audio_stream_count != source_contract.audio_stream_count
+    ):
+        raise RuntimeError(
+            "Preview output audio stream count changed unexpectedly: "
+            f"{candidate_contract.audio_stream_count} != {source_contract.audio_stream_count}."
+        )
     if require_cfr:
         if candidate_contract.suspected_vfr:
             raise RuntimeError("Temporal Preview output is not CFR after reconstruction.")
