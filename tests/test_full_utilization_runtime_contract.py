@@ -111,6 +111,14 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("gpu_index: int = 0", self.vfx)
         self.assertIn('str(max(0, int(gpu_index)))', self.vfx)
 
+    def test_comparison_preview_is_best_effort_after_main_output_commit(self) -> None:
+        self.assertIn("Comparação A/B falhou depois do preview principal já validado", self.studio)
+        comparison_start = self.studio.index("def _create_comparison_preview(")
+        comparison_end = self.studio.index("def _h264_encoder(", comparison_start)
+        comparison_block = self.studio[comparison_start:comparison_end]
+        self.assertIn("H.264 NVENC auxiliar falhou; repetindo com libx264", comparison_block)
+        self.assertIn("self._h264_encoder(1280, 720, True)", comparison_block)
+
     def test_comparison_audio_is_frame_bound_instead_of_stream_copied(self) -> None:
         self.assertIn(
             "comparison_duration = frame_bound_duration(comparison_frames, comparison_fps)",
