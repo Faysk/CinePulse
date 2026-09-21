@@ -5385,9 +5385,15 @@ class VideoOptimizerStudio:
                 cached_info = probe_media(str(cache_path))
                 cached_w, cached_h = first_video_size(cached_info)
                 cached_duration = media_duration(cached_info)
+                cached_video = next(
+                    (stream for stream in cached_info.get("streams", []) if stream.get("codec_type") == "video"),
+                    {},
+                )
+                cached_codec = str(cached_video.get("codec_name") or "").lower()
                 cached_quality = inspect_matroska_segment(cache_path)
                 if (
                     (cached_w, cached_h) == (source_w * 2, source_h * 2)
+                    and cached_codec == "ffv1"
                     and cached_quality.packet_count == total_frames
                     and abs(cached_duration - expected_timeline_duration) <= max(0.20, 2.0 / max(1.0, source_fps))
                 ):
