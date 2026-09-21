@@ -8,6 +8,8 @@
 - VFX fused recebe do Studio os argumentos CPU equivalentes da própria `DeliveryPlan`; se a entrega NVENC falhar, o segundo attempt troca apenas o encoder e preserva áudio, muxer, frame count e filtros;
 - cancelamento continua fail-fast e nunca aciona retry de encoder;
 - adiciona testes funcionais para transição, VFX intermediário e VFX fused, além dos contratos de regressão do pipeline.
+- retry CPU só ocorre quando o erro é classificado como GPU/NVENC; falhas não-GPU continuam fail-fast.
+
 
 ## 1.2.12 — 2026-09-21
 
