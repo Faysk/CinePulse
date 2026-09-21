@@ -4684,7 +4684,11 @@ class VideoOptimizerStudio:
                 try:
                     self._run_ffmpeg(command, video_duration, progress_base, 10)
                 except RuntimeError as exc:
-                    if settings.use_cpu or "h264_nvenc" not in master_encoder_args:
+                    if (
+                        settings.use_cpu
+                        or "h264_nvenc" not in master_encoder_args
+                        or not looks_like_gpu_runtime_failure(exc)
+                    ):
                         raise
                     try:
                         master.unlink(missing_ok=True)
@@ -5338,7 +5342,11 @@ class VideoOptimizerStudio:
         try:
             self._run_ffmpeg(command, expected, base, weight)
         except RuntimeError as exc:
-            if use_cpu or "h264_nvenc" not in encoder_args:
+            if (
+                use_cpu
+                or "h264_nvenc" not in encoder_args
+                or not looks_like_gpu_runtime_failure(exc)
+            ):
                 raise
             try:
                 output.unlink(missing_ok=True)
