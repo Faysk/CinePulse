@@ -227,7 +227,7 @@ function Get-VerifiedDownload {
         } catch {
             if ($Attempt -ge $MaxAttempts) { throw }
             $DelaySeconds = [Math]::Min(30, [Math]::Pow(2, $Attempt))
-            Write-Warning "Falha transitória ao baixar $Name (tentativa $Attempt/$MaxAttempts): $($_.Exception.Message). Novo attempt em $DelaySeconds s."
+            Write-Warning "Falha transitória ao baixar $Name (tentativa ${Attempt}/${MaxAttempts}): $($_.Exception.Message). Novo attempt em ${DelaySeconds} s."
             Start-Sleep -Seconds $DelaySeconds
         } finally {
             Write-Progress -Activity "Baixando $Name" -Completed
