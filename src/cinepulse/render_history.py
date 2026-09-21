@@ -21,11 +21,34 @@ from .hardware_advisor import analyze_hardware_summary
 HISTORY_SCHEMA = 1
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    os.replace(temporary, path)
+    temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
+    content = (json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n").encode("utf-8")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _jsonable(value: Any) -> Any:
