@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -14,6 +16,7 @@ from cinepulse.restoration_export import (
     validate_preview_output_contract,
 )
 from cinepulse.restoration_temporal_export import PreviewVideoGeometry
+from cinepulse.restoration_overlay import OverlayRegion
 from cinepulse.restoration_preview import PreviewRestorationPlan
 
 
@@ -242,6 +245,60 @@ class RestorationExportTests(unittest.TestCase):
             source.write_bytes(b"source")
             with self.assertRaises(ValueError):
                 export_preview_restoration("ffmpeg", source, source, EMPTY_PLAN)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg/FFprobe required")
+class RestorationExportFfmpegIntegrationTests(unittest.TestCase):
+    def test_short_audio_does_not_truncate_temporal_video(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+            ffprobe = shutil.which("ffprobe") or "ffprobe"
+            source = root / "source.mkv"
+            output = root / "restored.mkv"
+            subprocess.run(
+                [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=64x36:rate=4:duration=1",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=0.5",
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "ffv1", "-c:a", "pcm_s16le",
+                    str(source),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            plan = PreviewRestorationPlan(
+                evidence=(),
+                regions=(OverlayRegion(x=0.2, y=0.2, width=0.2, height=0.2),),
+                overlay_filter="",
+                color_filter="",
+            )
+            result = export_preview_restoration(
+                ffmpeg,
+                source,
+                output,
+                plan,
+                ffprobe=ffprobe,
+                poll_interval=0.001,
+            )
+            self.assertTrue(result.used_temporal_reconstruction)
+            self.assertEqual(4, result.temporal_frames)
+            probe = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-count_frames", "-show_entries",
+                    "stream=codec_type,nb_read_frames", "-of", "json", str(output),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            import json
+            payload = json.loads(probe.stdout)
+            video = next(item for item in payload["streams"] if item["codec_type"] == "video")
+            self.assertEqual("4", video["nb_read_frames"])
 
 
 if __name__ == "__main__":
