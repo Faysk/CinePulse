@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import shutil
 import stat
@@ -11,6 +13,24 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from cinepulse import experimental_components
+
+
+class _DownloadResponse:
+    def __init__(self, payload: bytes, *, status: int = 200, content_length: int | None = None) -> None:
+        self._stream = io.BytesIO(payload)
+        self.status = status
+        self.headers = {}
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
 
 
 class ExperimentalComponentTests(unittest.TestCase):
@@ -25,7 +45,15 @@ class ExperimentalComponentTests(unittest.TestCase):
         return archive
 
     def _download_from(self, archive: Path):
-        def download(_url: str, destination: Path, _expected_hash: str, _log) -> None:
+        def download(
+            _url: str,
+            destination: Path,
+            _expected_hash: str,
+            _log,
+            *,
+            expected_bytes: int | None = None,
+        ) -> None:
+            del expected_bytes
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(archive, destination)
         return download
@@ -140,6 +168,118 @@ class ExperimentalComponentTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertFalse(experimental_components._marker_matches(marker, "archive-hash"))
+
+    def test_download_rejects_declared_response_larger_than_manifest_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "model.bin"
+            payload = b"12345"
+            expected_hash = hashlib.sha256(b"1234").hexdigest()
+            response = _DownloadResponse(payload, content_length=len(payload))
+
+            with patch.object(experimental_components.urllib.request, "urlopen", return_value=response):
+                with self.assertRaisesRegex(RuntimeError, "excede o tamanho"):
+                    experimental_components._download(
+                        "https://example.invalid/model.bin",
+                        destination,
+                        expected_hash,
+                        lambda _message: None,
+                        expected_bytes=4,
+                    )
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name("model.bin.part").exists())
+
+    def test_download_rejects_chunked_stream_that_crosses_manifest_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "model.bin"
+            response = _DownloadResponse(b"12345")
+            expected_hash = hashlib.sha256(b"1234").hexdigest()
+
+            with patch.object(experimental_components.urllib.request, "urlopen", return_value=response):
+                with self.assertRaisesRegex(RuntimeError, "excedeu o tamanho"):
+                    experimental_components._download(
+                        "https://example.invalid/model.bin",
+                        destination,
+                        expected_hash,
+                        lambda _message: None,
+                        expected_bytes=4,
+                    )
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name("model.bin.part").exists())
+
+    def test_download_rejects_short_payload_even_before_hash_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "model.bin"
+            payload = b"1234"
+            response = _DownloadResponse(payload, content_length=len(payload))
+            expected_hash = hashlib.sha256(payload).hexdigest()
+
+            with patch.object(experimental_components.urllib.request, "urlopen", return_value=response):
+                with self.assertRaisesRegex(RuntimeError, "Download incompleto"):
+                    experimental_components._download(
+                        "https://example.invalid/model.bin",
+                        destination,
+                        expected_hash,
+                        lambda _message: None,
+                        expected_bytes=5,
+                    )
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name("model.bin.part").exists())
+
+    def test_oversized_partial_is_discarded_before_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "model.bin"
+            partial = destination.with_name("model.bin.part")
+            partial.write_bytes(b"stale-oversized")
+            payload = b"fresh"
+            expected_hash = hashlib.sha256(payload).hexdigest()
+            response = _DownloadResponse(payload, content_length=len(payload))
+            requests = []
+
+            def urlopen(request, timeout=0):
+                del timeout
+                requests.append(request)
+                return response
+
+            with patch.object(experimental_components.urllib.request, "urlopen", side_effect=urlopen):
+                experimental_components._download(
+                    "https://example.invalid/model.bin",
+                    destination,
+                    expected_hash,
+                    lambda _message: None,
+                    expected_bytes=len(payload),
+                )
+
+            self.assertEqual(payload, destination.read_bytes())
+            self.assertFalse(partial.exists())
+            self.assertEqual(1, len(requests))
+            self.assertIsNone(requests[0].get_header("Range"))
+
+    def test_invalid_existing_asset_is_removed_before_full_redownload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "model.bin"
+            destination.write_bytes(b"xxxxx")
+            payload = b"fresh"
+            expected_hash = hashlib.sha256(payload).hexdigest()
+            response = _DownloadResponse(payload, content_length=len(payload))
+
+            with patch.object(experimental_components.urllib.request, "urlopen", return_value=response):
+                experimental_components._download(
+                    "https://example.invalid/model.bin",
+                    destination,
+                    expected_hash,
+                    lambda _message: None,
+                    expected_bytes=len(payload),
+                )
+
+            self.assertEqual(payload, destination.read_bytes())
 
     def test_archive_rejects_symlink_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
