@@ -6,6 +6,7 @@
 - o probe de Preview lê contagem exata de quadros, geometria, FPS, duração e presença de áudio da fonte e do candidato;
 - color-only preserva timestamps com `-fps_mode passthrough` e só substitui a saída se frame count/geometria/áudio/timeline permanecerem compatíveis;
 - reconstrução temporal deixa de usar `-shortest`, impedindo que uma faixa de áudio curta corte os últimos quadros do vídeo;
+- encoder temporal declara CFR explicitamente (`-r` + `-fps_mode cfr`); a fonte VFR continua bloqueada, enquanto o candidato gerado é validado por frame count/FPS/duração exatos sem falso positivo de `avg_frame_rate` em clipes curtos;
 - temporal limita somente a entrada de áudio à duração `frames/fps`, usa `-frames:v` e exige `frames_written == source.frame_count`;
 - candidato temporal é validado novamente por FFprobe antes do `os.replace()`; mismatch preserva qualquer saída anterior e remove o temporário;
 - adiciona integração real com vídeo de 1 s/4 frames e áudio de 0,5 s, exigindo os 4 quadros completos na saída.
