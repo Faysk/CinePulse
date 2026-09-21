@@ -112,6 +112,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn('str(max(0, int(gpu_index)))', self.vfx)
 
     def test_comparison_preview_is_best_effort_after_main_output_commit(self) -> None:
+        self.assertIn("Comparação A/B cancelada depois do preview principal já validado", self.studio)
         self.assertIn("Comparação A/B falhou depois do preview principal já validado", self.studio)
         comparison_start = self.studio.index("def _create_comparison_preview(")
         comparison_end = self.studio.index("def _h264_encoder(", comparison_start)
