@@ -9,6 +9,9 @@
 - temporal limita somente a entrada de áudio à duração `frames/fps`, usa `-frames:v` e exige `frames_written == source.frame_count`;
 - candidato temporal é validado novamente por FFprobe antes do `os.replace()`; mismatch preserva qualquer saída anterior e remove o temporário;
 - adiciona integração real com vídeo de 1 s/4 frames e áudio de 0,5 s, exigindo os 4 quadros completos na saída.
+- temporal preserva todas as faixas de áudio (`-map 1:a?`) e a validação passa a rejeitar promoção quando a quantidade de streams de áudio muda;
+- adiciona integração real com fonte temporal de duas faixas de áudio, exigindo as duas na saída;
+- downloads hash-locked do bootstrap passam a repetir falhas transitórias com backoff; o smoke neural recebe o mesmo retry para evitar derrubar RC/Publish por 5xx temporário, sem relaxar SHA-256;
 
 ## 1.2.18 — 2026-09-21
 
