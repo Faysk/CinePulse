@@ -68,11 +68,12 @@ class ClassicProcessLifecycleTests(unittest.TestCase):
             captured.update(kwargs)
             return process
 
-        with tempfile.TemporaryDirectory() as temporary, (
-            patch("cinepulse.loop_engine.subprocess.Popen", side_effect=factory),
-            patch("cinepulse.loop_engine.popen_group_kwargs", return_value={"start_new_session": True}),
-        ):
-            app._run_ai_process(["realesrgan"], Path(temporary), 1, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                patch("cinepulse.loop_engine.subprocess.Popen", side_effect=factory),
+                patch("cinepulse.loop_engine.popen_group_kwargs", return_value={"start_new_session": True}),
+            ):
+                app._run_ai_process(["realesrgan"], Path(temporary), 1, 0.0, 1.0)
 
         self.assertTrue(process.stdout.closed)
         self.assertTrue(captured["start_new_session"])
