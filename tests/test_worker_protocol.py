@@ -134,5 +134,17 @@ class WorkerProtocolTests(unittest.TestCase):
                 queue.read_reply(request_id)
 
 
+    def test_foreign_job_reply_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            queue = WorkerCommandQueue(Path(temporary), "job-1")
+            request_id = "req-foreign"
+            (queue.replies / f"{request_id}.json").write_text(
+                '{"schema":1,"request_id":"req-foreign","job_id":"job-2","ok":true,"state":"running","message":"","payload":{},"created_at":1}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "reply inválido"):
+                queue.read_reply(request_id)
+
+
 if __name__ == "__main__":
     unittest.main()
