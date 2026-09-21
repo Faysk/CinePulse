@@ -5,6 +5,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from cinepulse.studio import RenderSettings, VideoOptimizerStudio
+from cinepulse.state_store import PRESETS_SCHEMA, QUEUE_SCHEMA
 from cinepulse.ui.queue_lab import item_progress
 
 
@@ -57,9 +58,15 @@ class QueuePersistenceTests(TestCase):
         studio = object.__new__(VideoOptimizerStudio)
         studio._queue_items = []
         studio._queue_serial = 0
+        studio._queue_state_read_only = False
+        studio._queue_state_error = ""
+        studio._presets_state_read_only = False
+        studio._presets_state_error = ""
+        studio._state_schema_warning_signature = None
         studio.status = _StatusSink()
         studio._refresh_queue_tree = lambda *args, **kwargs: None
         studio._log = lambda *args, **kwargs: None
+        studio._show_log = lambda: None
         return studio
 
     def test_roundtrip_persists_stage_and_recovers_active_item_safely(self):
@@ -93,6 +100,55 @@ class QueuePersistenceTests(TestCase):
             self.assertEqual(restored["stage"], "Recuperado após encerramento")
             self.assertIn("reiniciado com segurança", restored["error"])
             self.assertIn("Fila restaurada", reader.status.value)
+
+    def test_future_queue_schema_is_read_only_and_never_overwritten_by_studio(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            queue_file = config / "queue.json"
+            original = json.dumps(
+                {"schema": QUEUE_SCHEMA + 10, "kind": "cinepulse.queue.vNext", "items": [{"id": 99}]},
+                ensure_ascii=False,
+            )
+            queue_file.write_text(original, encoding="utf-8")
+
+            studio = self.bare_studio()
+            with patch("cinepulse.studio.CONFIG_DIR", config), patch("cinepulse.studio.QUEUE_FILE", queue_file):
+                studio._load_queue()
+                self.assertTrue(studio._queue_state_read_only)
+                studio._queue_items = [{
+                    "id": 1,
+                    "settings": self.settings(),
+                    "status": "Aguardando",
+                    "error": "",
+                    "report": "",
+                    "history": "",
+                    "progress": 0.0,
+                    "stage": "Sessão local",
+                }]
+                self.assertFalse(studio._save_queue())
+
+            self.assertEqual(original, queue_file.read_text(encoding="utf-8"))
+            self.assertIn("somente-leitura", studio.status.value)
+
+    def test_future_presets_schema_is_read_only_and_never_overwritten_by_studio(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            presets_file = config / "presets.json"
+            original = json.dumps(
+                {"schema": PRESETS_SCHEMA + 10, "kind": "cinepulse.presets.vNext", "items": {"Future": {"fps": 240}}},
+                ensure_ascii=False,
+            )
+            presets_file.write_text(original, encoding="utf-8")
+
+            studio = self.bare_studio()
+            with patch("cinepulse.studio.CONFIG_DIR", config), patch("cinepulse.studio.PRESETS_FILE", presets_file):
+                self.assertEqual({}, studio._load_custom_presets())
+                self.assertTrue(studio._presets_state_read_only)
+                studio._custom_presets = {"Old": {"fps": 60}}
+                self.assertFalse(studio._save_custom_presets())
+
+            self.assertEqual(original, presets_file.read_text(encoding="utf-8"))
+            self.assertIn("somente-leitura", studio.status.value)
 
     def test_old_queue_without_phase5_metadata_remains_compatible(self):
         with TemporaryDirectory() as temporary:
