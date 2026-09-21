@@ -168,6 +168,32 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("if result.frame_count is None:", self.studio)
         self.assertIn("FFprobe não informou a contagem exata de quadros", self.studio)
 
+    def test_audio_window_matches_exact_frame_bound_delivery(self) -> None:
+        self.assertIn(
+            "final_audio_duration = frame_bound_duration(final_target_frames, target_fps)",
+            self.studio,
+        )
+        self.assertIn(
+            "bounded_audio_input_args(settings.audio, final_audio_duration)",
+            self.studio,
+        )
+        self.assertIn(
+            "build_delivery_audio_filter(settings.audio_mode, final_audio_duration, measurements)",
+            self.studio,
+        )
+        self.assertIn(
+            "output_audio_duration = frame_bound_duration(output_frame_count, output_fps)",
+            self.vfx,
+        )
+        self.assertIn(
+            "bounded_audio_input_args(final_audio_source, output_audio_duration)",
+            self.vfx,
+        )
+        self.assertIn(
+            "bound_delivery_audio_filter(delivery_audio_duration, audio_filter)",
+            self.rife_recovery,
+        )
+
     def test_rife_reuses_successful_fallback_across_later_chunks(self) -> None:
         self.assertIn('rife_jobs_override = ""', self.studio)
         self.assertIn("jobs_override=rife_jobs_override", self.studio)
