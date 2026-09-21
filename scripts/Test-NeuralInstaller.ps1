@@ -29,7 +29,7 @@ function Invoke-CiDownloadWithRetry {
             if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue }
             if ($Attempt -ge $MaxAttempts) { throw }
             $DelaySeconds = [Math]::Min(30, [Math]::Pow(2, $Attempt))
-            Write-Warning "Neural installer download failed attempt $Attempt/$MaxAttempts: $($_.Exception.Message). Retrying in $DelaySeconds s."
+            Write-Warning "Neural installer download failed attempt ${Attempt}/${MaxAttempts}: $($_.Exception.Message). Retrying in ${DelaySeconds} s."
             Start-Sleep -Seconds $DelaySeconds
         }
     }
