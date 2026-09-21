@@ -44,7 +44,8 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
 
     def test_foreground_failure_retries_cpu_only_after_classified_gpu_failure(self) -> None:
         self.assertIn("policy is None or not looks_like_gpu_runtime_failure(exc)", self.block)
-        self.assertIn("safe_rmtree(destination)", self.block)
+        self.assertIn("reset_directory_for_retry(destination)", self.block)
+        self.assertNotIn("safe_rmtree(destination)", self.block)
         self.assertIn("policy=None", self.block)
         self.assertIn("retry = extraction_command", self.block)
 
