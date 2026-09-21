@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .path_transaction import serialized_path_mutation
+
 
 MIN_TUNING_SPEEDUP = 1.03
 
@@ -173,6 +175,7 @@ class RifeTuningStore:
             return None
         return policy
 
+    @serialized_path_mutation
     def invalidate(self, key: RifeTuningKey) -> bool:
         payload = self._load()
         records = payload.get("records", {})
@@ -183,6 +186,7 @@ class RifeTuningStore:
         self._atomic_write(payload)
         return True
 
+    @serialized_path_mutation
     def record_samples(self, key: RifeTuningKey, samples: Iterable[RifeSample], *, fallback: RifePolicy) -> RifePolicy | None:
         values = tuple(samples)
         if not values or values[0].policy != fallback or not values[0].accepted:

@@ -24,6 +24,7 @@ import time
 from typing import Iterable, Literal
 
 from .gpu_media import CREATE_NO_WINDOW
+from .path_transaction import serialized_path_mutation
 
 
 COMPOSITOR_SCHEMA = 7
@@ -309,6 +310,7 @@ class GpuCompositorStore:
             return True
         return (time.time() - updated) >= max(0.0, float(cooldown_seconds))
 
+    @serialized_path_mutation
     def record_benchmark_failure(self, key: GpuCompositorKey, reason: BaseException | str) -> None:
         """Cooldown one failed local benchmark without creating GPU evidence."""
         payload = self._load()
@@ -325,6 +327,7 @@ class GpuCompositorStore:
         payload["version"] = self.VERSION
         self._atomic_write(payload)
 
+    @serialized_path_mutation
     def record_rejection(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> None:
         payload = self._load()
         records = payload.setdefault("records", {})
@@ -341,6 +344,7 @@ class GpuCompositorStore:
         payload["version"] = self.VERSION
         self._atomic_write(payload)
 
+    @serialized_path_mutation
     def record(self, key: GpuCompositorKey, evidence: GpuCompositorEvidence) -> bool:
         if not evidence.accepted:
             return False
@@ -360,6 +364,7 @@ class GpuCompositorStore:
         self._atomic_write(payload)
         return True
 
+    @serialized_path_mutation
     def invalidate(self, key: GpuCompositorKey) -> bool:
         payload = self._load()
         records = payload.get("records", {})

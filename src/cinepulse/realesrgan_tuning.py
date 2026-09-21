@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .performance_policy import realesrgan_pipeline_threads
+from .path_transaction import serialized_path_mutation
 
 
 MIN_TUNING_SPEEDUP = 1.03
@@ -236,6 +237,7 @@ class RealEsrganTuningStore:
             return None
         return value
 
+    @serialized_path_mutation
     def record_samples(
         self,
         key: RealEsrganTuningKey,
@@ -302,6 +304,7 @@ class RealEsrganTuningStore:
         self._atomic_write(payload)
         return winner
 
+    @serialized_path_mutation
     def invalidate(self, key: RealEsrganTuningKey, *, reason: str = "runtime failure") -> bool:
         """Remove one exact proven record after it fails during a real render.
 
