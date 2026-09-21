@@ -48,8 +48,7 @@ def demucs_model_identity(model_repo: Path | None, state_file: Path | None = Non
         for name in tracked:
             path = root / name
             try:
-                stat = path.stat()
-                files[name] = {"size": stat.st_size, "mtime": stat.st_mtime_ns}
+                files[name] = file_content_identity(path)
             except OSError:
                 files[name] = None
         payload["files"] = files
