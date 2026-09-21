@@ -130,6 +130,8 @@ def build_preview_ffmpeg_command(
             preset,
             "-crf",
             str(int(crf)),
+            "-fps_mode",
+            "passthrough",
             "-c:a",
             "copy",
             str(output),
