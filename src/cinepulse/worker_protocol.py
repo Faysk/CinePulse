@@ -85,7 +85,22 @@ class WorkerCommandQueue:
             path.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
-    def _atomic(path: Path, payload: dict) -> None:
+    def _fsync_directory(path: Path) -> None:
+        if os.name == "nt":
+            return
+        try:
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        finally:
+            os.close(descriptor)
+
+    @classmethod
+    def _atomic(cls, path: Path, payload: dict) -> None:
         temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
         try:
             with temporary.open("x", encoding="utf-8", newline="\n") as handle:
@@ -94,6 +109,7 @@ class WorkerCommandQueue:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
+            cls._fsync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -104,6 +120,68 @@ class WorkerCommandQueue:
         path = self.inbox / name
         self._atomic(path, command.to_dict())
         return path
+
+    def recover_processing(self) -> dict[str, int]:
+        """Reconcile commands claimed by a previous worker after lease takeover.
+
+        The worker calls this only after acquiring the exclusive job lease. A
+        command with an already-persisted reply was acknowledged before the old
+        worker died and only needs its processing file finalized. Commands with
+        no reply are returned to the inbox for idempotent reprocessing.
+        """
+        counts = {"requeued": 0, "finalized": 0, "invalid": 0}
+        for claimed in sorted(self.processing.glob("*.json")):
+            try:
+                payload = json.loads(claimed.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    raise WorkerProtocolError("command file não contém objeto")
+                command = WorkerCommand.from_dict(payload)
+                if command.job_id != self.job_id or not command.request_id:
+                    raise WorkerProtocolError("command recuperado não pertence à fila")
+            except Exception:
+                rejected = self.done / f"{claimed.stem}.invalid-{time.time_ns()}.json"
+                os.replace(claimed, rejected)
+                self._fsync_directory(self.processing)
+                self._fsync_directory(self.done)
+                counts["invalid"] += 1
+                continue
+
+            reply_path = self.replies / f"{command.request_id}.json"
+            if reply_path.is_file():
+                done_path = self.done / claimed.name
+                if done_path.exists():
+                    done_path = self.done / f"{claimed.stem}.recovered-{time.time_ns()}.json"
+                os.replace(claimed, done_path)
+                self._fsync_directory(self.processing)
+                self._fsync_directory(self.done)
+                counts["finalized"] += 1
+                continue
+
+            inbox_path = self.inbox / claimed.name
+            if inbox_path.exists():
+                try:
+                    existing = json.loads(inbox_path.read_text(encoding="utf-8"))
+                    existing_command = WorkerCommand.from_dict(existing)
+                except Exception as exc:
+                    raise WorkerProtocolError(
+                        f"colisão de comando durante recovery: {claimed.name}"
+                    ) from exc
+                if existing_command.request_id != command.request_id:
+                    raise WorkerProtocolError(f"colisão de comando durante recovery: {claimed.name}")
+                # An equivalent inbox copy already guarantees retry. Preserve
+                # only one executable command and archive the stale claim.
+                done_path = self.done / f"{claimed.stem}.duplicate-{time.time_ns()}.json"
+                os.replace(claimed, done_path)
+                self._fsync_directory(self.processing)
+                self._fsync_directory(self.done)
+                counts["finalized"] += 1
+                continue
+
+            os.replace(claimed, inbox_path)
+            self._fsync_directory(self.processing)
+            self._fsync_directory(self.inbox)
+            counts["requeued"] += 1
+        return counts
 
     def next(self) -> tuple[WorkerCommand, Path] | None:
         for source in sorted(self.inbox.glob("*.json")):
