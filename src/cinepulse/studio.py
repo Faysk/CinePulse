@@ -4481,6 +4481,7 @@ class VideoOptimizerStudio:
                     "audio_codec": delivery_plan.audio_codec if expected_audio else None,
                     "audio_channels": expected_audio_channels,
                     "audio_sample_rate": expected_audio_sample_rate,
+                    "deep": bool(settings.deep_verify and not preview),
                 },
             )
 
@@ -7110,7 +7111,10 @@ class VideoOptimizerStudio:
             if not FFPROBE:
                 raise RuntimeError("FFprobe não está disponível para validar a saída interrompida.")
             expectation = expectation_from_journal(payload.get("expected"))
-            verification = quick_verify(str(FFPROBE), partial, expectation)
+            if bool((payload.get("expected") or {}).get("deep")):
+                verification = deep_verify(str(FFMPEG), str(FFPROBE), partial, expectation)
+            else:
+                verification = quick_verify(str(FFPROBE), partial, expectation)
             if verification.frame_count is None:
                 raise RuntimeError("FFprobe não informou a contagem exata de quadros do arquivo parcial.")
             if not verification.passed:
