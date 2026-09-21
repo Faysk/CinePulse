@@ -29,6 +29,53 @@ from cinepulse.rife_recovery import (
 
 
 class RifeRecoveryTests(unittest.TestCase):
+    def test_verified_output_promotion_keeps_old_final_when_replace_fails(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            final = root / "movie.mp4"
+            partial = root / ".movie.recovery-partial.mp4"
+            final.write_bytes(b"old-output")
+            partial.write_bytes(b"new-output")
+            real_replace = __import__("os").replace
+
+            def fail_publish(source, destination):
+                if Path(source) == partial and Path(destination) == final:
+                    raise OSError("injected publish failure")
+                return real_replace(source, destination)
+
+            with mock.patch("cinepulse.rife_recovery.os.replace", side_effect=fail_publish):
+                with self.assertRaisesRegex(OSError, "injected publish failure"):
+                    rife_recovery._promote_verified_output(partial, final)
+
+            self.assertEqual(b"old-output", final.read_bytes())
+            self.assertEqual(b"new-output", partial.read_bytes())
+
+    def test_verified_output_promotion_replaces_final_in_one_handoff(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            final = root / "movie.mp4"
+            partial = root / ".movie.recovery-partial.mp4"
+            final.write_bytes(b"old-output")
+            partial.write_bytes(b"new-output")
+
+            promoted = rife_recovery._promote_verified_output(partial, final)
+
+            self.assertEqual(final, promoted)
+            self.assertEqual(b"new-output", final.read_bytes())
+            self.assertFalse(partial.exists())
+            self.assertFalse(final.with_name(f".{final.name}.previous").exists())
+
+    def test_atomic_json_uses_unique_fsynced_temp_and_cleans_it(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "state.json"
+            with mock.patch("cinepulse.rife_recovery.os.fsync", wraps=__import__("os").fsync) as fsync:
+                rife_recovery._atomic_json(target, {"schema": 1, "value": "ok"})
+
+            self.assertEqual("ok", json.loads(target.read_text(encoding="utf-8"))["value"])
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual([], list(root.glob("state.json.tmp-*")))
+
     def test_final_nvenc_failure_retries_once_with_cpu_delivery(self) -> None:
         contract = SimpleNamespace(use_cpu=False)
         primary_delivery = SimpleNamespace(video_codec="HEVC")
