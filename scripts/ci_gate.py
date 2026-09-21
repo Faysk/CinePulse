@@ -43,6 +43,7 @@ CPU_STEPS = (
 
 MEDIA_STEPS = (
     GateStep("smoke-vfx", (sys.executable, "tests/integration_smoke.py", "--mode", "vfx"), True, True),
+    GateStep("audio-frame-timeline", (sys.executable, "tests/integration_audio_timeline.py"), False, True),
     GateStep("hdr", (sys.executable, "tests/integration_hdr.py"), True, True),
     GateStep("sdr10-color", (sys.executable, "tests/integration_color.py"), True, True),
 )
