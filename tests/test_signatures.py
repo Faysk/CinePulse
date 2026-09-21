@@ -21,8 +21,13 @@ class SignatureTests(unittest.TestCase):
             message = root / "manifest.json"; message.write_text("{}", encoding="utf-8")
             signature = root / "manifest.minisig"; signature.write_text("sig", encoding="utf-8")
             verify_file(message, signature, "RWTEST", executable="minisign.exe")
-        command = run.call_args.args[0]
-        self.assertEqual(command[0], "minisign.exe")
+        minisign_calls = [
+            call.args[0]
+            for call in run.call_args_list
+            if call.args and call.args[0] and call.args[0][0] == "minisign.exe"
+        ]
+        self.assertEqual(1, len(minisign_calls), run.call_args_list)
+        command = minisign_calls[0]
         self.assertIn("-Vm", command)
         self.assertIn("-P", command)
         self.assertIn("RWTEST", command)
