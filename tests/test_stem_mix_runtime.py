@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import struct
 import tempfile
 from pathlib import Path
@@ -8,7 +9,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from cinepulse.studio import VideoOptimizerStudio, _valid_cached_wav
+from cinepulse.studio import (
+    VideoOptimizerStudio,
+    _promote_demucs_stem_cache,
+    _valid_cached_wav,
+)
 
 
 def _fake_wav(payload: bytes = b"\x00" * 64) -> bytes:
@@ -44,6 +49,57 @@ def test_cached_wav_validator_rejects_large_garbage_and_truncation() -> None:
         assert _valid_cached_wav(valid)
         assert not _valid_cached_wav(garbage)
         assert not _valid_cached_wav(truncated)
+
+
+def _write_valid_stems(directory: Path, payload: bytes = b"\x00" * 64) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    wav = _fake_wav(payload)
+    for name in ("bass", "drums", "vocals", "other"):
+        (directory / f"{name}.wav").write_bytes(wav)
+
+
+def test_demucs_promotion_preserves_concurrent_complete_winner() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        target = root / "cache" / "htdemucs_ft" / "song"
+        staged = root / "staging" / "htdemucs_ft" / "song"
+        _write_valid_stems(target, b"A" * 64)
+        _write_valid_stems(staged, b"B" * 64)
+        winner = (target / "bass.wav").read_bytes()
+
+        promoted = _promote_demucs_stem_cache(staged, target)
+
+        assert promoted is False
+        assert (target / "bass.wav").read_bytes() == winner
+        assert staged.is_dir()
+
+
+def test_demucs_promotion_restores_previous_cache_when_rename_fails() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        target = root / "cache" / "htdemucs_ft" / "song"
+        target.mkdir(parents=True)
+        marker = target / "old-cache.marker"
+        marker.write_text("old", encoding="utf-8")
+        staged = root / "staging" / "htdemucs_ft" / "song"
+        _write_valid_stems(staged)
+
+        real_replace = os.replace
+        calls = {"count": 0}
+
+        def flaky_replace(source, destination):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise OSError("simulated promotion failure")
+            return real_replace(source, destination)
+
+        with patch("cinepulse.studio.os.replace", side_effect=flaky_replace):
+            with unittest.TestCase().assertRaisesRegex(OSError, "simulated promotion failure"):
+                _promote_demucs_stem_cache(staged, target)
+
+        assert calls["count"] == 3
+        assert marker.read_text(encoding="utf-8") == "old"
+        assert not list(target.parent.glob(".demucs-replaced-*"))
 
 
 class FakeBackgroundCommand:
