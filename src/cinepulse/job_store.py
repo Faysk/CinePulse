@@ -121,8 +121,14 @@ class JobStore:
                     )
                     try:
                         os.replace(self.path, evidence)
-                    except OSError:
-                        pass
+                    except OSError as move_error:
+                        try:
+                            _atomic_bytes(evidence, self.path.read_bytes())
+                        except OSError as copy_error:
+                            raise ManifestStoreError(
+                                "manifesto corrompido não pôde ser preservado antes da restauração: "
+                                f"move={move_error}; copy={copy_error}"
+                            ) from copy_error
                 _atomic_bytes(self.path, _json_bytes(backup))
                 return backup
 
