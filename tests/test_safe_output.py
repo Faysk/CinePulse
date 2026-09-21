@@ -148,6 +148,26 @@ class SafeOutputTests(unittest.TestCase):
         with patch("cinepulse.safe_output.os.kill", side_effect=ProcessLookupError("gone")):
             self.assertFalse(process_alive(1234))
 
+    def test_corrupt_journal_is_preserved_as_unique_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.path.write_text("{truncated", encoding="utf-8")
+            with patch("cinepulse.safe_output.time.time_ns", return_value=123456):
+                self.assertIsNone(journal.read())
+            evidence = root / "render.json.corrupt-123456"
+            self.assertTrue(evidence.is_file())
+            self.assertEqual("{truncated", evidence.read_text(encoding="utf-8"))
+            self.assertFalse(journal.path.exists())
+
+    def test_valid_json_with_wrong_shape_is_ignored_without_destroying_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.path.write_text("[]", encoding="utf-8")
+            self.assertIsNone(journal.read())
+            self.assertTrue(journal.path.is_file())
+
     def test_journal_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
