@@ -34,6 +34,48 @@ def _sha256(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _marker_matches(marker: Path, expected_hash: str) -> bool:
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("schema") == 1
+        and str(payload.get("sha256") or "").strip().lower() == expected_hash.strip().lower()
+    )
+
 
 def _download(url: str, destination: Path, expected_hash: str, log: Callable[[str], None]) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +118,7 @@ def _download(url: str, destination: Path, expected_hash: str, log: Callable[[st
 def _install_archive(entry: dict, log: Callable[[str], None]) -> None:
     destination = PATHS.components / "ai" / entry["destination"]
     marker = destination / ".cinepulse-experimental.json"
-    if marker.is_file():
+    if _marker_matches(marker, entry["sha256"]):
         return
     staging = PATHS.components / ".staging"
     staging.mkdir(parents=True, exist_ok=True)
@@ -103,10 +145,17 @@ def _install_archive(entry: dict, log: Callable[[str], None]) -> None:
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(roots[0], destination)
-            marker.write_text(json.dumps({"schema": 1, "sha256": entry["sha256"]}), encoding="utf-8")
+            _atomic_json(marker, {"schema": 1, "sha256": entry["sha256"]})
         except Exception:
-            if previous.exists() and not destination.exists():
-                os.replace(previous, destination)
+            try:
+                if destination.exists():
+                    shutil.rmtree(destination)
+                if previous.exists():
+                    os.replace(previous, destination)
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    f"Falha ao instalar componente experimental e restaurar a versão anterior: {rollback_error}"
+                ) from rollback_error
             raise
         if previous.exists():
             shutil.rmtree(previous)
@@ -122,8 +171,10 @@ def install(keys: Iterable[str], log: Callable[[str], None]) -> None:
             if not (PATHS.components / "ai" / asset["path"]).is_file():
                 required_bytes += int(asset.get("bytes") or 0)
         archive = entry.get("archive")
-        if archive and not (PATHS.components / "ai" / archive["destination"] / ".cinepulse-experimental.json").is_file():
-            required_bytes += int(archive.get("bytes") or 0)
+        if archive:
+            archive_marker = PATHS.components / "ai" / archive["destination"] / ".cinepulse-experimental.json"
+            if not _marker_matches(archive_marker, archive["sha256"]):
+                required_bytes += int(archive.get("bytes") or 0)
     free = shutil.disk_usage(PATHS.components).free
     reserve = 5 * 1024**3
     if free < required_bytes + reserve:
