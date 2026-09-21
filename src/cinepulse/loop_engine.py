@@ -16,6 +16,7 @@ from tkinter import ttk
 from . import aurora
 from .ai_suite import real_esrgan_available
 from .paths import PATHS, component_path
+from .process_control import popen_group_kwargs, terminate_process_tree
 
 
 APP_TITLE = "CinePulse — modo clássico"
@@ -698,7 +699,7 @@ class LoopMusicApp:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=CREATE_NO_WINDOW,
+            **popen_group_kwargs(),
         )
 
         def drain_output() -> None:
@@ -711,18 +712,26 @@ class LoopMusicApp:
         reader = threading.Thread(target=drain_output, daemon=True)
         reader.start()
         last_done = -1
-        while self._process.poll() is None:
-            if self._cancelled:
-                self._process.terminate()
-                break
-            done = len(list(output_dir.glob("frame*.png")))
-            if done != last_done:
-                fraction = min(1.0, done / max(1, frame_count))
-                self._events.put(("progress", base + weight * fraction))
-                last_done = done
-            threading.Event().wait(0.25)
-        return_code = self._process.wait()
-        reader.join(timeout=2)
+        try:
+            while self._process.poll() is None:
+                if self._cancelled:
+                    terminate_process_tree(self._process, grace_seconds=2.0)
+                    break
+                done = len(list(output_dir.glob("frame*.png")))
+                if done != last_done:
+                    fraction = min(1.0, done / max(1, frame_count))
+                    self._events.put(("progress", base + weight * fraction))
+                    last_done = done
+                threading.Event().wait(0.25)
+            return_code = self._process.wait()
+            reader.join(timeout=2)
+        finally:
+            reader.join(timeout=2)
+            try:
+                if self._process.stdout is not None and not self._process.stdout.closed:
+                    self._process.stdout.close()
+            except (OSError, ValueError, AttributeError):
+                pass
         if self._cancelled:
             raise InterruptedError
         if return_code != 0:
@@ -979,24 +988,30 @@ class LoopMusicApp:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=CREATE_NO_WINDOW,
+            **popen_group_kwargs(),
         )
         assert self._process.stdout is not None
-        for raw_line in self._process.stdout:
-            line = raw_line.strip()
-            if line:
-                recent.append(line)
-            if line.startswith("out_time="):
-                value = line.split("=", 1)[1]
-                try:
-                    hours, minutes, seconds = value.split(":")
-                    elapsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-                    fraction = min(1.0, elapsed / duration)
-                    self._events.put(("progress", base + weight * fraction))
-                except (ValueError, ZeroDivisionError):
-                    pass
-
-        return_code = self._process.wait()
+        try:
+            for raw_line in self._process.stdout:
+                line = raw_line.strip()
+                if line:
+                    recent.append(line)
+                if line.startswith("out_time="):
+                    value = line.split("=", 1)[1]
+                    try:
+                        hours, minutes, seconds = value.split(":")
+                        elapsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                        fraction = min(1.0, elapsed / duration)
+                        self._events.put(("progress", base + weight * fraction))
+                    except (ValueError, ZeroDivisionError):
+                        pass
+            return_code = self._process.wait()
+        finally:
+            try:
+                if self._process.stdout is not None and not self._process.stdout.closed:
+                    self._process.stdout.close()
+            except (OSError, ValueError, AttributeError):
+                pass
         if self._cancelled:
             raise InterruptedError
         if return_code != 0:
@@ -1010,7 +1025,7 @@ class LoopMusicApp:
         self.status.set("Cancelando…")
         process = self._process
         if process and process.poll() is None:
-            process.terminate()
+            terminate_process_tree(process, grace_seconds=2.0)
 
     def _poll_events(self) -> None:
         try:

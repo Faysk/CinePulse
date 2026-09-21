@@ -20,11 +20,20 @@ class _FakeStdin:
         self.closed = True
 
 
+class _FakeStdout(list):
+    def __init__(self, lines=()) -> None:
+        super().__init__(lines)
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _FakeProcess:
     def __init__(self, return_code: int, lines: list[bytes] | None = None) -> None:
         self.return_code = return_code
         self.stdin = _FakeStdin()
-        self.stdout = list(lines or [])
+        self.stdout = _FakeStdout(lines or [])
 
     def wait(self) -> int:
         return self.return_code
@@ -238,6 +247,7 @@ class VfxTimingTests(unittest.TestCase):
 
         self.assertGreaterEqual(terminate.call_count, 1)
         self.assertTrue(process.stdin.closed)
+        self.assertTrue(process.stdout.closed)
 
     def test_direct_vfx_non_gpu_failure_does_not_retry_cpu(self) -> None:
         commands: list[list[str]] = []
