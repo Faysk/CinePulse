@@ -83,6 +83,20 @@ class HardwareMegaPackFinalContractTests(unittest.TestCase):
         self.assertIn("power_w", h8)
         self.assertIn("disk_write_mbps", h8)
 
+    def test_frame_retries_require_verified_directory_reset(self) -> None:
+        studio = self.text("src/cinepulse/studio.py")
+        storage = self.text("src/cinepulse/storage_engine.py")
+        self.assertIn("def reset_directory_for_retry(", storage)
+        self.assertGreaterEqual(studio.count("reset_directory_for_retry("), 4)
+        self.assertNotIn(
+            "safe_rmtree(destination)\n                destination.mkdir(parents=True, exist_ok=True)",
+            studio,
+        )
+        self.assertNotIn(
+            "safe_rmtree(outgoing)\n                    outgoing.mkdir(parents=True, exist_ok=True)",
+            studio,
+        )
+
     def test_realesrgan_full_utilization_has_no_live_vram_admission(self) -> None:
         studio = self.text("src/cinepulse/studio.py")
         policy = self.text("src/cinepulse/performance_policy.py")

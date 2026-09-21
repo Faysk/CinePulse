@@ -159,6 +159,7 @@ from .storage_engine import (
     neural_chunk_workset_gb,
     probe_scratch,
     resolve_scratch_dir,
+    reset_directory_for_retry,
     safe_rmtree,
     touch_cache_entry,
 )
@@ -5749,8 +5750,7 @@ class VideoOptimizerStudio:
                 if policy is None or not looks_like_gpu_runtime_failure(exc):
                     raise
                 invalidate_gpu_extract(exc)
-                safe_rmtree(destination)
-                destination.mkdir(parents=True, exist_ok=True)
+                reset_directory_for_retry(destination)
                 retry = extraction_command(
                     frame_offset, frame_count, destination, progress=progress, policy=None
                 )
@@ -5812,8 +5812,7 @@ class VideoOptimizerStudio:
                         ):
                             raise
                         invalidate_gpu_extract(exc)
-                        safe_rmtree(incoming)
-                        incoming.mkdir(parents=True, exist_ok=True)
+                        reset_directory_for_retry(incoming)
                         run_extraction(
                             processed,
                             count,
@@ -5856,8 +5855,7 @@ class VideoOptimizerStudio:
                     invalidate_gpu_extract(
                         f"CUDA/CUVID frame-count integrity mismatch: {frames}/{count}"
                     )
-                    safe_rmtree(incoming)
-                    incoming.mkdir(parents=True, exist_ok=True)
+                    reset_directory_for_retry(incoming)
                     run_extraction(
                         processed,
                         count,
@@ -5923,8 +5921,7 @@ class VideoOptimizerStudio:
                 policy = active_policy
                 while True:
                     attempted.add(policy)
-                    safe_rmtree(outgoing)
-                    outgoing.mkdir(parents=True, exist_ok=True)
+                    reset_directory_for_retry(outgoing)
                     command = [
                         str(REAL_ESRGAN), "-i", str(incoming), "-o", str(outgoing), "-m", str(REAL_ESRGAN_MODELS),
                         "-n", "realesr-animevideov3", "-s", "2", "-f", "png",

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from cinepulse.render_plan import FrameSpec, PlanInput, build_render_plan
@@ -14,6 +16,7 @@ from cinepulse.storage_engine import (
     estimate_storage,
     resolve_scratch_dir,
     probe_scratch,
+    reset_directory_for_retry,
     touch_cache_entry,
     neural_chunk_workset_gb,
     _compressed_gb,
@@ -302,6 +305,53 @@ class StorageEngineTests(unittest.TestCase):
             os.utime(path, (1, 1))
             touch_cache_entry(path)
             self.assertGreater(path.stat().st_mtime, 1)
+
+    def test_retry_directory_reset_removes_stale_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames"
+            path.mkdir()
+            (path / "stale.png").write_bytes(b"stale")
+            reset_directory_for_retry(path, timeout_seconds=0.1, retry_seconds=0.001)
+            self.assertTrue(path.is_dir())
+            self.assertEqual([], list(path.iterdir()))
+
+    def test_retry_directory_reset_waits_for_transient_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames"
+            path.mkdir()
+            (path / "stale.png").write_bytes(b"stale")
+            real_rmtree = shutil.rmtree
+            attempts = {"count": 0}
+
+            def flaky_rmtree(target):
+                attempts["count"] += 1
+                if attempts["count"] < 3:
+                    raise PermissionError("simulated Windows lock")
+                real_rmtree(target)
+
+            with mock.patch("cinepulse.storage_engine.shutil.rmtree", side_effect=flaky_rmtree):
+                reset_directory_for_retry(path, timeout_seconds=0.2, retry_seconds=0.001)
+
+            self.assertGreaterEqual(attempts["count"], 3)
+            self.assertTrue(path.is_dir())
+            self.assertEqual([], list(path.iterdir()))
+
+    def test_retry_directory_reset_fails_instead_of_reusing_dirty_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames"
+            path.mkdir()
+            (path / "stale.png").write_bytes(b"stale")
+            with mock.patch(
+                "cinepulse.storage_engine.shutil.rmtree",
+                side_effect=PermissionError("persistent lock"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "diretório limpo para retry"):
+                    reset_directory_for_retry(
+                        path,
+                        timeout_seconds=0.0,
+                        retry_seconds=0.001,
+                    )
+            self.assertTrue((path / "stale.png").exists())
 
     def test_scratch_probe_reports_volume_and_space(self):
         with tempfile.TemporaryDirectory() as tmp:
