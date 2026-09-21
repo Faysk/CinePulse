@@ -88,6 +88,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             self.studio,
         )
         self.assertIn("cached_quality = inspect_matroska_segment(cache_path)", self.studio)
+        self.assertIn('cached_codec == "ffv1"', self.studio)
         self.assertIn("cached_quality.packet_count == total_frames", self.studio)
         self.assertIn("chunk_frame_counts: list[int] = []", self.studio)
         self.assertIn("sum(chunk_frame_counts) != total_frames", self.studio)
