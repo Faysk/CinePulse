@@ -105,6 +105,8 @@ class JobLeaseTests(unittest.TestCase):
             payload["host_id"] = "remote-host"
             payload["subprocesses"] = [777]
             path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+            old_mtime = time.time() - 120
+            os.utime(path, (old_mtime, old_mtime))
             clock.value += 100
 
             challenger = JobLease(
