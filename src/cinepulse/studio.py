@@ -4438,11 +4438,7 @@ class VideoOptimizerStudio:
         try:
             self._write_render_lock(preview)
         except Exception as exc:
-            try:
-                if self._render_lease.nonce is not None:
-                    self._render_lease.release()
-            except Exception:
-                pass
+            self._release_render_ownership()
             self._set_feedback(
                 "error",
                 "Não foi possível registrar o render",
@@ -4480,11 +4476,7 @@ class VideoOptimizerStudio:
         except Exception as exc:
             self._busy = False
             self._render_journal.clear()
-            try:
-                if self._render_lease.nonce is not None:
-                    self._render_lease.release()
-            except Exception:
-                pass
+            self._release_render_ownership()
             self.render_button.configure(state="normal")
             self.preview_button.configure(state="normal")
             self.add_queue_button.configure(state="normal")
@@ -5299,20 +5291,27 @@ class VideoOptimizerStudio:
             for directory in temp_dirs:
                 safe_rmtree(directory)
             safe_rmtree(job_dir)
-            try:
-                if self._render_lease.nonce is not None:
-                    self._render_lease.release()
-            except Exception as exc:
+            lease_error = self._release_render_ownership()
+            if lease_error:
                 self._events.put((
                     "log",
-                    f"[{time.strftime('%H:%M:%S')}] RENDER LEASE WARNING: {type(exc).__name__}: {exc}",
+                    f"[{time.strftime('%H:%M:%S')}] RENDER LEASE WARNING: {lease_error}",
                 ))
-            finally:
-                for evidence in PATHS.locks.glob("render-owner.json.released-*"):
-                    try:
-                        evidence.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+
+    def _release_render_ownership(self) -> str:
+        error = ""
+        try:
+            if self._render_lease.nonce is not None:
+                self._render_lease.release()
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            for evidence in PATHS.locks.glob("render-owner.json.released-*"):
+                try:
+                    evidence.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return error
 
     @staticmethod
     def _audio_filter(mode: str) -> str:
