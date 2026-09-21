@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -47,6 +48,31 @@ class RecoveryBootstrapTests(unittest.TestCase):
             self.assertEqual(1, result.discovered)
             self.assertTrue(Path(result.snapshot).is_file())
             self.assertEqual(before, after)
+
+
+    def test_ring3_backup_only_discovery_does_not_restore_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            logs = data / "logs"
+            config = data / "config"
+            config.mkdir()
+            write_ring(config / "recovery-flags.json", 3)
+            self._paused_job(logs)
+            job_dir = logs / "renders" / "job-1"
+            primary = job_dir / "manifest.json"
+            backup = job_dir / "manifest.json.bak"
+            shutil.copy2(primary, backup)
+            backup_before = backup.read_bytes()
+            primary.unlink()
+
+            result = run_recovery_bootstrap(data, logs, config)
+
+            self.assertEqual("dry-run", result.mode)
+            self.assertEqual(1, result.discovered)
+            self.assertFalse(primary.exists())
+            self.assertEqual(backup_before, backup.read_bytes())
+            self.assertEqual([], list(job_dir.glob("manifest.json.corrupt-*")))
+
 
 
 if __name__ == "__main__":
