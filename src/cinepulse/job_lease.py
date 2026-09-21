@@ -336,16 +336,20 @@ class JobLease:
         return current_start == record.process_start
 
     def is_stale(self, record: LeaseRecord) -> bool:
+        if record.host_id != socket.gethostname():
+            # Remote heartbeat_at is written using another host's wall clock,
+            # so it is not safe to compare directly with this process clock.
+            # The shared lease file itself is atomically replaced on every
+            # heartbeat; its mtime is therefore the cross-host freshness signal.
+            try:
+                age = max(0.0, time.time() - self.path.stat().st_mtime)
+            except OSError:
+                age = max(0.0, self.clock() - record.heartbeat_at)
+            return age > self.stale_after
+
         age = max(0.0, self.clock() - record.heartbeat_at)
         if age <= self.stale_after:
             return False
-        if record.host_id != socket.gethostname():
-            # PIDs and process-start tokens are host-local. Once a remote
-            # owner's heartbeat has exceeded the lease timeout, do not inspect
-            # its owner/subprocess PIDs against this machine: an unrelated
-            # local process may have the same numeric PID and would otherwise
-            # keep a dead remote lease alive indefinitely.
-            return True
         if self._same_process(record):
             return False
         if any(self._alive(pid) for pid in record.subprocesses):
