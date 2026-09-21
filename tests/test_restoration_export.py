@@ -69,6 +69,7 @@ class RestorationExportTests(unittest.TestCase):
             frame_count=4,
             duration=1.0,
             has_audio=True,
+            audio_stream_count=1,
         )
 
     def test_temp_output_preserves_container_suffix(self):
@@ -225,6 +226,37 @@ class RestorationExportTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "video frames"):
                 validate_preview_output_contract(
                     "ffprobe", source, Path("candidate.mp4"), expected_frames=4
+                )
+
+    def test_output_contract_rejects_lost_audio_streams(self):
+        source = PreviewVideoGeometry(
+            width=64,
+            height=36,
+            fps=4.0,
+            nominal_fps=4.0,
+            frame_count=4,
+            duration=1.0,
+            has_audio=True,
+            audio_stream_count=2,
+        )
+        candidate = PreviewVideoGeometry(
+            width=64,
+            height=36,
+            fps=4.0,
+            nominal_fps=4.0,
+            frame_count=4,
+            duration=1.0,
+            has_audio=True,
+            audio_stream_count=1,
+        )
+        with patch("cinepulse.restoration_export.probe_preview_geometry", return_value=candidate):
+            with self.assertRaisesRegex(RuntimeError, "audio stream count"):
+                validate_preview_output_contract(
+                    "ffprobe",
+                    source,
+                    Path("candidate.mkv"),
+                    expected_frames=4,
+                    require_cfr=True,
                 )
 
     def test_output_contract_accepts_exact_temporal_candidate(self):
