@@ -86,6 +86,54 @@ class PipelineRuntimeTests(unittest.TestCase):
             task.wait(timeout=10)
         self.assertTrue(task.done)
 
+    def test_background_command_exception_after_spawn_reaps_child(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.pid = 4242
+                self.running = True
+                self.returncode = None
+
+            def poll(self):
+                return None if self.running else self.returncode
+
+            def wait(self, timeout=None):
+                del timeout
+                if self.running:
+                    raise AssertionError("wait called before process was terminated")
+                return int(self.returncode or 0)
+
+        process = FakeProcess()
+        checks = 0
+
+        def broken_cancel_check() -> bool:
+            nonlocal checks
+            checks += 1
+            raise RuntimeError("cancel callback exploded")
+
+        def terminate(target, _log=None, *, grace_seconds=0):
+            self.assertIs(target, process)
+            self.assertEqual(1.0, grace_seconds)
+            process.running = False
+            process.returncode = -9
+
+        task = BackgroundCommand(
+            ["fake-command"],
+            cancel_requested=broken_cancel_check,
+            poll_seconds=0.02,
+        )
+        with (
+            patch("cinepulse.pipeline_runtime.subprocess.Popen", return_value=process),
+            patch("cinepulse.pipeline_runtime.terminate_process_tree", side_effect=terminate) as kill,
+        ):
+            task.start()
+            with self.assertRaisesRegex(RuntimeError, "cancel callback exploded"):
+                task.wait(timeout=5)
+
+        self.assertGreaterEqual(checks, 1)
+        kill.assert_called_once()
+        self.assertFalse(process.running)
+        self.assertTrue(task.done)
+
     def test_background_command_cancel_terminates_independent_process_group(self) -> None:
         task = BackgroundCommand(
             [sys.executable, "-c", "import time; time.sleep(30)"],
