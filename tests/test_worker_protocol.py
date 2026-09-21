@@ -50,5 +50,64 @@ class WorkerProtocolTests(unittest.TestCase):
                 queue.submit(WorkerCommand.create("job-2", "status"))
 
 
+    def test_claimed_command_is_requeued_after_worker_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = WorkerCommandQueue(root, "job-1")
+            command = WorkerCommand.create("job-1", "cancel")
+            queue.submit(command)
+            claimed = queue.next()
+            self.assertIsNotNone(claimed)
+            loaded, claimed_path = claimed
+            self.assertEqual(command.request_id, loaded.request_id)
+            self.assertTrue(claimed_path.is_file())
+            self.assertFalse(list(queue.inbox.glob("*.json")))
+
+            restarted = WorkerCommandQueue(root, "job-1")
+            recovered = restarted.recover_processing()
+            self.assertEqual(1, recovered["requeued"])
+            loaded_again, _path = restarted.next()
+            self.assertEqual(command.request_id, loaded_again.request_id)
+
+    def test_reply_written_before_crash_finalizes_without_reexecuting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = WorkerCommandQueue(root, "job-1")
+            command = WorkerCommand.create("job-1", "pause")
+            queue.submit(command)
+            loaded, claimed_path = queue.next()
+            reply = WorkerReply(
+                request_id=loaded.request_id,
+                job_id="job-1",
+                ok=True,
+                state="paused",
+                message="ok",
+                payload={},
+                created_at=123.0,
+            )
+            # Simulate crash after the durable reply is written but before the
+            # processing file is moved to done.
+            queue._atomic(queue.replies / f"{reply.request_id}.json", reply.to_dict())
+            self.assertTrue(claimed_path.is_file())
+
+            restarted = WorkerCommandQueue(root, "job-1")
+            recovered = restarted.recover_processing()
+            self.assertEqual(1, recovered["finalized"])
+            self.assertIsNone(restarted.next())
+            self.assertTrue(restarted.read_reply(reply.request_id).ok)
+            self.assertFalse(list(restarted.processing.glob("*.json")))
+
+    def test_invalid_processing_command_is_quarantined(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = WorkerCommandQueue(root, "job-1")
+            broken = queue.processing / "broken.json"
+            broken.write_text("{not-json", encoding="utf-8")
+            recovered = queue.recover_processing()
+            self.assertEqual(1, recovered["invalid"])
+            self.assertFalse(broken.exists())
+            self.assertTrue(list(queue.done.glob("broken.invalid-*.json")))
+
+
 if __name__ == "__main__":
     unittest.main()
