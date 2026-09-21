@@ -148,7 +148,7 @@ from .preflight import (
     quality_warnings as preflight_quality_warnings,
     validate_output_path,
 )
-from .verification import VerifyExpectation, deep_verify, quick_verify
+from .verification import VerifyExpectation, deep_verify, expectation_from_journal, quick_verify
 from .render_history import RenderHistory
 from .state_store import load_presets_state, load_queue_state, save_presets_state, save_queue_state
 from .storage_engine import (
@@ -4387,12 +4387,6 @@ class VideoOptimizerStudio:
                 raise RuntimeError("O arquivo de saída precisa ser diferente do vídeo de entrada.")
             atomic_output = AtomicOutput.for_path(output_path)
             partial_output = atomic_output.prepare()
-            self._render_journal.write(
-                atomic_output,
-                preview,
-                {"duration": final_timeline_duration, "width": target_w, "height": target_h, "fps": target_fps},
-            )
-
             self._log(f"Fonte: {source_w}x{source_h}, {source_fps:.3f} fps, {video_duration:.3f} s")
             self._log(f"Destino: {target_w}x{target_h}, {target_fps} fps, {final_timeline_duration:.6f} s ({final_target_frames} quadros)")
 
@@ -4473,6 +4467,22 @@ class VideoOptimizerStudio:
                     expected_audio_sample_rate = int(audio_stream.get("sample_rate")) if audio_stream.get("sample_rate") else None
                 except (TypeError, ValueError):
                     expected_audio_sample_rate = None
+
+            self._render_journal.write(
+                atomic_output,
+                preview,
+                {
+                    "duration": final_timeline_duration,
+                    "width": target_w,
+                    "height": target_h,
+                    "fps": target_fps,
+                    "expect_audio": expected_audio,
+                    "video_codec": delivery_plan.video_codec,
+                    "audio_codec": delivery_plan.audio_codec if expected_audio else None,
+                    "audio_channels": expected_audio_channels,
+                    "audio_sample_rate": expected_audio_sample_rate,
+                },
+            )
 
             estimated_bitrate = self._estimated_bitrate_mbps(target_w, target_h, target_fps)
             estimated_output_gb = estimated_bitrate * project_duration / 8 / 1024 * 1.08
@@ -7094,11 +7104,24 @@ class VideoOptimizerStudio:
         if not partial.is_file():
             self._render_journal.clear()
             return
+        verification = None
+        recovery_error = ""
         try:
-            info = probe_media(str(partial))
-            valid = media_duration(info) > 0 and first_video_size(info) != (0, 0)
-        except Exception:
+            if not FFPROBE:
+                raise RuntimeError("FFprobe não está disponível para validar a saída interrompida.")
+            expectation = expectation_from_journal(payload.get("expected"))
+            verification = quick_verify(str(FFPROBE), partial, expectation)
+            if verification.frame_count is None:
+                raise RuntimeError("FFprobe não informou a contagem exata de quadros do arquivo parcial.")
+            if not verification.passed:
+                details = " | ".join(
+                    f"{issue.code}: {issue.message}" for issue in verification.errors
+                )
+                raise RuntimeError(details or "O arquivo parcial não cumpre o contrato original.")
+            valid = True
+        except Exception as exc:
             valid = False
+            recovery_error = f"{type(exc).__name__}: {exc}"
         if valid and messagebox.askyesno(
             APP_TITLE,
             "Uma renderização anterior terminou, mas não foi promovida para o arquivo final.\n\n"
@@ -7123,8 +7146,14 @@ class VideoOptimizerStudio:
                 return
         self._set_feedback(
             "warning", "Saída interrompida preservada",
-            f"{partial.name} permanece guardado para análise; o CinePulse não o promoveu sem validação.",
-            category="Recuperação", primary=("Abrir arquivo", lambda value=partial: self._open_external_path(value)),
+            (
+                f"{partial.name} permanece guardado para análise; o CinePulse não o promoveu "
+                "porque o contrato completo da renderização não pôde ser validado."
+            ),
+            category="Recuperação",
+            primary=("Abrir arquivo", lambda value=partial: self._open_external_path(value)),
+            secondary=("Ver log", self._show_log) if recovery_error else None,
+            technical_detail=recovery_error,
         )
 
     def _append_log_ui(self, line: str) -> None:
