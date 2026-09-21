@@ -4888,11 +4888,12 @@ class VideoOptimizerStudio:
                     command += ["-map", "0:v:0", "-an"]
                 command += ["-vf", final_filter]
                 bitrate_mbps = estimated_bitrate
-                command += delivery_plan.video_args(
+                baseline_video_args = delivery_plan.video_args(
                     use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                     bitrate_mbps=bitrate_mbps, fps=target_fps,
                     gpu_index=self._hardware.gpu_index,
                 )
+                command += baseline_video_args
                 command += color_plan.metadata_args(output=True)
                 if settings.mode == MODE_MUSIC or (settings.preserve_audio and source_has_audio):
                     measurements = None
@@ -4915,9 +4916,27 @@ class VideoOptimizerStudio:
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
 
-                # H5: start from the complete Stable CPU/zscale command. The
-                # resident path is permissioned only by exact physical evidence.
+                # H5: baseline keeps the normal CPU/zscale filter path. If the
+                # selected final encoder is NVENC, also prepare a fully CPU
+                # equivalent so a real GPU failure cannot strand the render.
                 baseline_command = list(command)
+                cpu_fallback_command: list[str] | None = None
+                if (
+                    not settings.use_cpu
+                    and any(str(value).endswith("_nvenc") for value in baseline_video_args)
+                ):
+                    cpu_video_args = delivery_plan.video_args(
+                        use_cpu=True, nvenc_available=False,
+                        bitrate_mbps=bitrate_mbps, fps=target_fps,
+                        gpu_index=self._hardware.gpu_index,
+                    )
+                    start = next(
+                        index
+                        for index in range(len(baseline_command) - len(baseline_video_args) + 1)
+                        if baseline_command[index:index + len(baseline_video_args)] == baseline_video_args
+                    )
+                    cpu_fallback_command = list(baseline_command)
+                    cpu_fallback_command[start:start + len(baseline_video_args)] = cpu_video_args
                 resident_route = None
                 resident_store = ResidentEncodeStore(PATHS.cache / "hardware" / "resident-encode.json")
                 try:
@@ -4966,11 +4985,6 @@ class VideoOptimizerStudio:
                         resident_filter = resident_route.video_filter(target_w, target_h)
                         if resident_filter:
                             candidate[vf_index:vf_index] = ["-vf", resident_filter]
-                        baseline_video_args = delivery_plan.video_args(
-                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
-                            bitrate_mbps=bitrate_mbps, fps=target_fps,
-                            gpu_index=self._hardware.gpu_index,
-                        )
                         replacement_args = resident_route.contract.ffmpeg_args()
                         start = next(
                             index for index in range(len(candidate) - len(baseline_video_args) + 1)
@@ -4990,21 +5004,33 @@ class VideoOptimizerStudio:
                 try:
                     self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
                 except RuntimeError as exc:
-                    if resident_route is None or not resident_route.approved or resident_route.key is None:
+                    if not looks_like_gpu_runtime_failure(exc):
                         raise
-                    gpu_specific = looks_like_gpu_runtime_failure(exc)
-                    if gpu_specific:
+                    if (
+                        resident_route is not None
+                        and resident_route.approved
+                        and resident_route.key is not None
+                    ):
                         resident_store.invalidate(resident_route.key)
-                        evidence_text = "evidência exata invalidada"
+                        route_text = "fast-path resident invalidado"
                     else:
-                        evidence_text = "evidência preservada; falha não classificada como GPU"
-                    try: partial_output.unlink(missing_ok=True)
-                    except OSError: pass
+                        route_text = "baseline NVENC"
+                    if cpu_fallback_command is None:
+                        raise
+                    try:
+                        partial_output.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                     self._log(
-                        "H5 resident delivery: fast path aprovado falhou em produção; "
-                        f"{evidence_text}. Finalização repetida pelo baseline CPU/zscale. Motivo: {exc}"
+                        f"Finalização: {route_text} falhou por GPU; repetindo com pipeline/encoder CPU. "
+                        f"Motivo: {exc}"
                     )
-                    self._run_ffmpeg(baseline_command, project_duration, progress_base, 100 - progress_base)
+                    self._run_ffmpeg(
+                        cpu_fallback_command,
+                        project_duration,
+                        progress_base,
+                        100 - progress_base,
+                    )
                 self._release_temp_path(visual_source, temp_paths)
             else:
                 self._set_stage("Finalizando", "VFX e entrega já foram codificados no mesmo passe; iniciando verificação final.")
