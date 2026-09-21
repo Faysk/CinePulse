@@ -360,6 +360,151 @@ class RifeSafeRunnerTests(unittest.TestCase):
 
             self.assertEqual(2, applied.gpu_index)
 
+    def test_direct_native_publish_is_atomic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            for index in range(2):
+                (incoming / f"{index:08d}.png").write_bytes(_fake_png())
+            outgoing = root / "out"
+            applied = RifeExecutionPolicy(
+                uhd=False,
+                jobs="3:3:3",
+                native_target=4,
+                requested_target=4,
+                gpu_index=0,
+                measured=False,
+            )
+
+            def fake_rollback(**kwargs):
+                native_dir = kwargs["native_dir"]
+                for index in range(4):
+                    (native_dir / f"{index:08d}.png").write_bytes(_fake_png())
+                return applied
+
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    return_value=HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0),
+                ),
+                patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
+            ):
+                result = run_safe_rife(
+                    rife_executable=root / "rife.exe",
+                    model=root / "rife-v4.6",
+                    incoming=incoming,
+                    outgoing=outgoing,
+                    requested_target=4,
+                    device="gpu",
+                )
+
+            self.assertEqual(applied, result)
+            self.assertEqual(4, len(list(outgoing.glob("*.png"))))
+            self.assertEqual([], list(root.glob(".out.publish-*")))
+            self.assertEqual([], list(root.glob(".out.native-*")))
+
+    def test_native_publish_failure_never_leaves_partial_official_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            for index in range(2):
+                (incoming / f"{index:08d}.png").write_bytes(_fake_png())
+            outgoing = root / "out"
+            applied = RifeExecutionPolicy(
+                uhd=False,
+                jobs="3:3:3",
+                native_target=4,
+                requested_target=4,
+                gpu_index=0,
+                measured=False,
+            )
+
+            def fake_rollback(**kwargs):
+                native_dir = kwargs["native_dir"]
+                for index in range(4):
+                    (native_dir / f"{index:08d}.png").write_bytes(_fake_png())
+                return applied
+
+            def fail_publish(_native_dir, publish_dir, _expected):
+                publish_dir.mkdir(parents=False, exist_ok=False)
+                (publish_dir / "00000001.png").write_bytes(_fake_png())
+                raise OSError("simulated publish failure")
+
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    return_value=HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0),
+                ),
+                patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
+                patch("cinepulse.rife_safe_runner._move_native_frames", side_effect=fail_publish),
+            ):
+                with self.assertRaisesRegex(OSError, "simulated publish failure"):
+                    run_safe_rife(
+                        rife_executable=root / "rife.exe",
+                        model=root / "rife-v4.6",
+                        incoming=incoming,
+                        outgoing=outgoing,
+                        requested_target=4,
+                        device="gpu",
+                    )
+
+            self.assertFalse(outgoing.exists())
+            self.assertEqual([], list(root.glob(".out.publish-*")))
+            self.assertEqual([], list(root.glob(".out.native-*")))
+
+    def test_retime_failure_never_leaves_partial_official_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            incoming = root / "in"
+            incoming.mkdir()
+            for index in range(2):
+                (incoming / f"{index:08d}.png").write_bytes(_fake_png())
+            outgoing = root / "out"
+            applied = RifeExecutionPolicy(
+                uhd=False,
+                jobs="3:3:3",
+                native_target=4,
+                requested_target=3,
+                gpu_index=0,
+                measured=False,
+            )
+
+            def fake_rollback(**kwargs):
+                native_dir = kwargs["native_dir"]
+                for index in range(4):
+                    (native_dir / f"{index:08d}.png").write_bytes(_fake_png())
+                return applied
+
+            def fail_retime(command, *, cwd=None):
+                target = Path(command[-1]).parent
+                (target / "00000001.png").write_bytes(_fake_png())
+                raise RuntimeError("simulated retime failure")
+
+            with (
+                patch(
+                    "cinepulse.rife_safe_runner.detect_hardware",
+                    return_value=HardwareProfile("CPU Test", 28, "RTX Test", 8192, "999.1", 0),
+                ),
+                patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
+                patch("cinepulse.rife_safe_runner._find_ffmpeg", return_value="ffmpeg"),
+                patch("cinepulse.rife_safe_runner._run", side_effect=fail_retime),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "simulated retime failure"):
+                    run_safe_rife(
+                        rife_executable=root / "rife.exe",
+                        model=root / "rife-v4.6",
+                        incoming=incoming,
+                        outgoing=outgoing,
+                        requested_target=3,
+                        device="gpu",
+                    )
+
+            self.assertFalse(outgoing.exists())
+            self.assertEqual([], list(root.glob(".out.publish-*")))
+            self.assertEqual([], list(root.glob(".out.native-*")))
+
     def test_cpu_policy_uses_cpu_safe_jobs(self) -> None:
         policy = execution_policy(8, 7680, 4320, 16, "cpu")
         self.assertEqual("1:2:2", policy.jobs)
