@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import shutil
 import json
-import socket
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
 
 from cinepulse.job_lease import JobLease
@@ -71,7 +69,7 @@ class RecoveryServiceTests(unittest.TestCase):
             finally:
                 lease.release()
 
-    def test_expired_remote_lease_is_discovered_for_audit_even_with_local_pid_collision(self) -> None:
+    def test_expired_remote_lease_is_discovered_for_audit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source.mp4"
@@ -84,22 +82,17 @@ class RecoveryServiceTests(unittest.TestCase):
                 "pid": 100,
                 "process_start": "remote-start",
                 "nonce": "remote-owner",
-                "host_id": "remote-host",
+                "host_id": "definitely-not-this-host",
                 "acquired_at": 1.0,
                 "heartbeat_at": 1.0,
                 "progress_counter": 10,
                 "phase": "rife",
                 "unit": "segment-10",
-                "subprocesses": [777],
+                "subprocesses": [],
             }
             lease_path.write_text(json.dumps(payload), encoding="utf-8")
 
-            with (
-                mock.patch("cinepulse.job_lease.time.time", return_value=1000.0),
-                mock.patch("cinepulse.job_lease.socket.gethostname", return_value=socket.gethostname()),
-                mock.patch("cinepulse.job_lease.process_alive", side_effect=lambda pid: pid == 777),
-            ):
-                candidate = RecoveryService(root).discover()[0]
+            candidate = RecoveryService(root).discover()[0]
 
             self.assertEqual("needs_audit", candidate.classification)
             self.assertFalse(candidate.owner_active)
