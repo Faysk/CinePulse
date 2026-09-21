@@ -4994,9 +4994,19 @@ class VideoOptimizerStudio:
                 history.finish("success", output=output_path, report=report_path)
             display_path = output_path
             if preview and settings.comparison_preview:
-                display_path = self._create_comparison_preview(
-                    output_path, settings, final_timeline_duration, loop_start, stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
-                )
+                try:
+                    display_path = self._create_comparison_preview(
+                        output_path, settings, final_timeline_duration, loop_start,
+                        stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
+                    )
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    display_path = output_path
+                    self._log(
+                        "Comparação A/B falhou depois do preview principal já validado; "
+                        f"mantendo o preview principal. Motivo: {exc}"
+                    )
             self._events.put(("done", str(display_path), preview, display_path.stat().st_size, report_path, history.path if history else ""))
         except InterruptedError:
             if atomic_output:
@@ -5180,14 +5190,31 @@ class VideoOptimizerStudio:
             audio_args = ["-map", "[aout]", "-c:a", "aac", "-b:a", "320k"]
         else:
             audio_args = ["-an"]
-        command += [
+        command_prefix = command + [
             "-filter_complex", graph, "-map", "[out]",
-        ] + audio_args + self._h264_encoder(1280, 720, settings.use_cpu) + [
+        ] + audio_args
+        command_suffix = [
             "-frames:v", str(comparison_frames),
             "-threads", str(cpu_threads),
             "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(comparison),
         ]
-        self._run_ffmpeg(command, duration, 100, 0)
+        encoder_args = self._h264_encoder(1280, 720, settings.use_cpu)
+        command = command_prefix + encoder_args + command_suffix
+        try:
+            self._run_ffmpeg(command, comparison_duration, 100, 0)
+        except RuntimeError as exc:
+            if settings.use_cpu or "h264_nvenc" not in encoder_args:
+                raise
+            try:
+                comparison.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._log(
+                "Comparação A/B: H.264 NVENC auxiliar falhou; repetindo com libx264 sem alterar o preview principal. "
+                f"Motivo: {exc}"
+            )
+            command = command_prefix + self._h264_encoder(1280, 720, True) + command_suffix
+            self._run_ffmpeg(command, comparison_duration, 100, 0)
         return comparison
 
     def _h264_encoder(self, width: int, height: int, use_cpu: bool) -> list[str]:
