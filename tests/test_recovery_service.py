@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,48 @@ class RecoveryServiceTests(unittest.TestCase):
             self.assertEqual("blocked", candidate.classification)
             self.assertIn("reconectar_fonte", candidate.actions)
             self.assertEqual(before, after)
+
+    def test_backup_only_job_is_discovered_and_primary_is_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.mp4"
+            source.write_bytes(b"media")
+            job_dir = self._job(root, "job-1", "paused", source=source)
+            primary = job_dir / "manifest.json"
+            backup = job_dir / "manifest.json.bak"
+            shutil.copy2(primary, backup)
+            primary.unlink()
+
+            candidates = RecoveryService(root).discover()
+
+            self.assertEqual(1, len(candidates))
+            self.assertEqual("recoverable", candidates[0].classification)
+            self.assertTrue(primary.is_file())
+            self.assertEqual(primary.read_bytes(), backup.read_bytes())
+
+    def test_unreadable_manifest_and_backup_remain_visible_as_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job_dir = root / "job-corrupt"
+            job_dir.mkdir()
+            (job_dir / "manifest.json").write_text("{broken", encoding="utf-8")
+            (job_dir / "manifest.json.bak").write_text("also broken", encoding="utf-8")
+
+            candidates = RecoveryService(root).discover()
+
+            self.assertEqual(1, len(candidates))
+            candidate = candidates[0]
+            self.assertEqual("job-corrupt", candidate.job_id)
+            self.assertEqual("unreadable", candidate.state)
+            self.assertEqual("blocked", candidate.classification)
+            self.assertEqual(("inspecionar", "preservar"), candidate.actions)
+            self.assertIn("não pôde ser lido", candidate.reason)
+            self.assertEqual(str(job_dir), candidate.history_dir)
+            self.assertFalse(candidate.source_present)
+            self.assertEqual(
+                "Não é seguro continuar ainda",
+                card_model(candidate).title,
+            )
 
     def test_complete_job_is_not_reintroduced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
