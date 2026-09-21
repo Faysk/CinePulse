@@ -68,6 +68,8 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             command = build_command(RifePaths(executable, model), root / "in", root / "out", 60, use_cpu=True)
             self.assertEqual("-m", command[1])
             self.assertEqual(SAFE_RUNNER_MODULE, command[2])
@@ -82,6 +84,8 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             fingerprint = "rife:v1:" + "a" * 64
             command = build_command(
                 RifePaths(executable, model),
@@ -103,6 +107,8 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             command = build_command(
                 RifePaths(executable, model),
                 root / "in",
@@ -120,6 +126,8 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             command = build_command(
                 RifePaths(executable, model),
                 root / "in",
@@ -153,6 +161,8 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             command = build_command(
                 RifePaths(executable, model),
                 root / "in",
@@ -170,6 +180,8 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             command = build_command(
                 RifePaths(executable, model),
                 root / "in",
@@ -187,9 +199,43 @@ class RifeEngineTests(unittest.TestCase):
             executable.write_bytes(b"exe")
             model = root / "model"
             model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
             command = build_command(RifePaths(executable, model), root / "in", root / "out", 60, use_cpu=False)
             self.assertEqual("gpu", command[command.index("--device") + 1])
             self.assertNotIn("-g", command)
+
+
+    def test_model_directory_without_required_files_is_not_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            self.assertFalse(RifePaths(executable, model).available)
+
+    def test_empty_required_model_file_is_not_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            (model / "flownet.bin").write_bytes(b"")
+            (model / "flownet.param").write_bytes(b"param")
+            self.assertFalse(RifePaths(executable, model).available)
+
+    def test_complete_non_empty_component_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "rife.exe"
+            executable.write_bytes(b"exe")
+            model = root / "model"
+            model.mkdir()
+            (model / "flownet.bin").write_bytes(b"bin")
+            (model / "flownet.param").write_bytes(b"param")
+            self.assertTrue(RifePaths(executable, model).available)
 
 
 if __name__ == "__main__":
