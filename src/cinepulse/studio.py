@@ -164,7 +164,7 @@ from .storage_engine import (
 )
 
 
-def __valid_cached_wav(path: Path) -> bool:
+def _valid_cached_wav(path: Path) -> bool:
     """Validate the minimal RIFF/RF64 WAVE structure used by Demucs cache."""
 
     try:
