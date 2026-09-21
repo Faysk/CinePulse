@@ -214,10 +214,14 @@ class WorkerCommandQueue:
         return None
 
     def acknowledge(self, command_path: Path, reply: WorkerReply) -> Path:
+        if reply.job_id != self.job_id or not reply.request_id:
+            raise WorkerProtocolError("reply não pertence à fila")
         reply_path = self.replies / f"{reply.request_id}.json"
         self._atomic(reply_path, reply.to_dict())
         done_path = self.done / command_path.name
         os.replace(command_path, done_path)
+        self._fsync_directory(self.processing)
+        self._fsync_directory(self.done)
         return reply_path
 
     def read_reply(self, request_id: str) -> WorkerReply | None:
@@ -231,7 +235,7 @@ class WorkerCommandQueue:
         job_id = str(payload.get("job_id") or "").strip()
         ok = payload.get("ok")
         reply_payload = payload.get("payload")
-        if reply_id != request_id or not job_id or not isinstance(ok, bool):
+        if reply_id != request_id or job_id != self.job_id or not isinstance(ok, bool):
             raise WorkerProtocolError("reply inválido")
         if reply_payload is None:
             reply_payload = {}
