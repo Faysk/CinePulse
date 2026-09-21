@@ -68,16 +68,54 @@ def _atomic_json(path: Path, payload: dict) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _tree_fingerprint(root: Path) -> str:
+    """Hash the installed archive tree, excluding CinePulse's own marker."""
+    root = Path(root)
+    if not root.is_dir():
+        return ""
+    digest = hashlib.sha256()
+    try:
+        entries = sorted(
+            (path for path in root.rglob("*") if path.name != ".cinepulse-experimental.json"),
+            key=lambda path: path.relative_to(root).as_posix().casefold(),
+        )
+        file_count = 0
+        for path in entries:
+            if path.is_symlink():
+                return ""
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root).as_posix()
+            stat_result = path.stat()
+            digest.update(relative.encode("utf-8", "surrogatepass"))
+            digest.update(b"\0")
+            digest.update(str(stat_result.st_size).encode("ascii"))
+            digest.update(b"\0")
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            digest.update(b"\0")
+            file_count += 1
+    except OSError:
+        return ""
+    if file_count <= 0:
+        return ""
+    return f"tree-v1:{file_count}:{digest.hexdigest()}"
+
+
 def _marker_matches(marker: Path, expected_hash: str) -> bool:
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return False
-    return (
-        isinstance(payload, dict)
-        and payload.get("schema") == 1
-        and str(payload.get("sha256") or "").strip().lower() == expected_hash.strip().lower()
-    )
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != 2
+        or str(payload.get("sha256") or "").strip().lower() != expected_hash.strip().lower()
+    ):
+        return False
+    expected_tree = str(payload.get("tree_fingerprint") or "").strip()
+    return bool(expected_tree and expected_tree == _tree_fingerprint(marker.parent))
 
 
 def _download(url: str, destination: Path, expected_hash: str, log: Callable[[str], None]) -> None:
@@ -183,8 +221,18 @@ def _install_archive(entry: dict, log: Callable[[str], None]) -> None:
             os.replace(destination, previous)
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
+            tree_fingerprint = _tree_fingerprint(roots[0])
+            if not tree_fingerprint:
+                raise RuntimeError("O pacote experimental não contém uma árvore de arquivos válida.")
             os.replace(roots[0], destination)
-            _atomic_json(marker, {"schema": 1, "sha256": entry["sha256"]})
+            _atomic_json(
+                marker,
+                {
+                    "schema": 2,
+                    "sha256": entry["sha256"],
+                    "tree_fingerprint": tree_fingerprint,
+                },
+            )
         except Exception:
             try:
                 if destination.exists():
