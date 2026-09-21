@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.19 — 2026-09-21
+
+- Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
+- o probe de Preview lê contagem exata de quadros, geometria, FPS, duração e presença de áudio da fonte e do candidato;
+- color-only preserva timestamps com `-fps_mode passthrough` e só substitui a saída se frame count/geometria/áudio/timeline permanecerem compatíveis;
+- reconstrução temporal deixa de usar `-shortest`, impedindo que uma faixa de áudio curta corte os últimos quadros do vídeo;
+- temporal limita somente a entrada de áudio à duração `frames/fps`, usa `-frames:v` e exige `frames_written == source.frame_count`;
+- candidato temporal é validado novamente por FFprobe antes do `os.replace()`; mismatch preserva qualquer saída anterior e remove o temporário;
+- adiciona integração real com vídeo de 1 s/4 frames e áudio de 0,5 s, exigindo os 4 quadros completos na saída.
+
 ## 1.2.18 — 2026-09-21
 
 - Overlay Composer deixa de usar `-t profile.duration` como corte global no mux final;
