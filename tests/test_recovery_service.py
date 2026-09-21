@@ -103,8 +103,12 @@ class RecoveryServiceTests(unittest.TestCase):
             root = Path(temporary)
             job_dir = root / "job-corrupt"
             job_dir.mkdir()
-            (job_dir / "manifest.json").write_text("{broken", encoding="utf-8")
-            (job_dir / "manifest.json.bak").write_text("also broken", encoding="utf-8")
+            primary = job_dir / "manifest.json"
+            backup = job_dir / "manifest.json.bak"
+            primary.write_text("{broken", encoding="utf-8")
+            backup.write_text("also broken", encoding="utf-8")
+            before_primary = primary.read_bytes()
+            before_backup = backup.read_bytes()
 
             candidates = RecoveryService(root).discover()
 
@@ -117,6 +121,8 @@ class RecoveryServiceTests(unittest.TestCase):
             self.assertIn("não pôde ser lido", candidate.reason)
             self.assertEqual(str(job_dir), candidate.history_dir)
             self.assertFalse(candidate.source_present)
+            self.assertEqual(before_primary, primary.read_bytes())
+            self.assertEqual(before_backup, backup.read_bytes())
             self.assertEqual(
                 "Não é seguro continuar ainda",
                 card_model(candidate).title,
