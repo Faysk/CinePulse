@@ -93,6 +93,7 @@ from .audio_mastering import (
     bounded_audio_input_args,
     build_audio_filter,
     build_delivery_audio_filter,
+    bound_delivery_audio_filter,
     frame_bound_duration,
 )
 from . import __version__
@@ -4776,6 +4777,7 @@ class VideoOptimizerStudio:
                             final_audio_filter=final_audio_filter,
                             final_audio_args=final_audio_args,
                             final_muxer_args=final_muxer_args,
+                            gpu_index=self._hardware.gpu_index,
                         )
                     except vfx.RenderCancelled as exc:
                         raise InterruptedError from exc
@@ -5155,8 +5157,11 @@ class VideoOptimizerStudio:
     ) -> Path:
         comparison = processed.with_name(processed.stem + "_COMPARACAO.mp4")
         self._set_stage("Comparando", "Montando original e resultado lado a lado para conferência visual.")
-        comparison_fps = max(1.0, first_video_fps(probe_media(str(processed))))
+        processed_info = probe_media(str(processed))
+        comparison_fps = max(1.0, first_video_fps(processed_info))
         comparison_frames = max(1, int(round(duration * comparison_fps)))
+        comparison_duration = frame_bound_duration(comparison_frames, comparison_fps)
+        comparison_has_audio = has_audio(processed_info)
         command = [FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error"]
         if settings.mode == MODE_MUSIC:
             command += ["-stream_loop", "-1"]
@@ -5170,10 +5175,15 @@ class VideoOptimizerStudio:
             "pad=640:720:(ow-iw)/2:(oh-ih)/2:color=black[right];"
             f"[left][right]hstack=inputs=2:shortest=0,fps={comparison_fps:.8f},format=yuv420p[out]"
         )
+        if comparison_has_audio:
+            graph += f";[1:a]{bound_delivery_audio_filter(comparison_duration)}[aout]"
+            audio_args = ["-map", "[aout]", "-c:a", "aac", "-b:a", "320k"]
+        else:
+            audio_args = ["-an"]
         command += [
-            "-filter_complex", graph, "-map", "[out]", "-map", "1:a:0?",
-        ] + self._h264_encoder(1280, 720, settings.use_cpu) + [
-            "-c:a", "copy", "-frames:v", str(comparison_frames),
+            "-filter_complex", graph, "-map", "[out]",
+        ] + audio_args + self._h264_encoder(1280, 720, settings.use_cpu) + [
+            "-frames:v", str(comparison_frames),
             "-threads", str(cpu_threads),
             "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(comparison),
         ]
@@ -5183,7 +5193,8 @@ class VideoOptimizerStudio:
     def _h264_encoder(self, width: int, height: int, use_cpu: bool) -> list[str]:
         if not use_cpu and self._nvenc and max(width, height) <= 8192:
             return [
-                "-c:v", "h264_nvenc", "-preset", "p7", "-tune", "hq", "-rc", "vbr",
+                "-c:v", "h264_nvenc", "-gpu", str(max(0, int(self._hardware.gpu_index))),
+                "-preset", "p7", "-tune", "hq", "-rc", "vbr",
                 "-cq", "10", "-b:v", "80M", "-maxrate", "180M", "-bufsize", "360M",
                 "-pix_fmt", "yuv420p",
             ]
@@ -5216,7 +5227,8 @@ class VideoOptimizerStudio:
         ten_bit = color_plan.output.bit_depth > 8
         if not use_cpu and self._nvenc and max(width, height) <= 8192:
             args = [
-                "-c:v", "hevc_nvenc", "-preset", "p7", "-tune", "hq",
+                "-c:v", "hevc_nvenc", "-gpu", str(max(0, int(self._hardware.gpu_index))),
+                "-preset", "p7", "-tune", "hq",
                 "-profile:v", "main10" if ten_bit else "main",
                 "-rc", "vbr", "-cq", "14", "-b:v", f"{target}M", "-maxrate", f"{target * 2}M",
                 "-bufsize", f"{target * 4}M", "-spatial-aq", "1", "-temporal-aq", "1",
