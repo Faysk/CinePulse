@@ -50,13 +50,19 @@ class BootstrapHardeningTests(unittest.TestCase):
         self.assertIn("preserve-me.txt", text)
         self.assertIn("CINEPULSE_UPDATE_APPLY_SMOKE_OK", text)
 
-    def test_uv_cache_binds_version_and_artifact_sha(self) -> None:
+    def test_uv_cache_binds_version_archive_and_executable_content(self) -> None:
         text = START.read_text(encoding="utf-8-sig")
         self.assertIn("uv-state.json", text)
         self.assertIn("$ExpectedVersion = [string]$BootstrapManifest.uv.version", text)
         self.assertIn("$ExpectedSha256 = ([string]$BootstrapManifest.uv.sha256).ToLowerInvariant()", text)
-        self.assertIn("([string]$State.sha256).ToLowerInvariant() -eq $ExpectedSha256", text)
-        self.assertIn("sha256 = $ExpectedSha256", text)
+        self.assertIn("$ActualUvSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $UvExe).Hash.ToLowerInvariant()", text)
+        self.assertIn("$State.schema -eq 2", text)
+        self.assertIn("([string]$State.archive_sha256).ToLowerInvariant() -eq $ExpectedSha256", text)
+        self.assertIn("([string]$State.exe_sha256).ToLowerInvariant() -eq $ActualUvSha256", text)
+        self.assertIn("[long]$State.exe_size -eq $ActualUv.Length", text)
+        self.assertIn("archive_sha256 = $ExpectedSha256", text)
+        self.assertIn("exe_sha256 = $UvExeSha256", text)
+        self.assertIn("exe_size = $UvInfo.Length", text)
         self.assertNotIn("uv-version.txt", text)
 
     def test_ffmpeg_cache_is_manifest_identity_aware(self) -> None:
@@ -64,15 +70,22 @@ class BootstrapHardeningTests(unittest.TestCase):
         self.assertIn("Install-VerifiedArchive -Key 'ffmpeg'", text)
         self.assertNotIn("if ((Test-Path -LiteralPath $FfmpegExe) -and (Test-Path -LiteralPath $FfprobeExe)) { return }", text)
 
-    def test_components_require_version_hash_and_atomic_promotion(self) -> None:
+    def test_components_require_version_hash_content_identity_and_atomic_promotion(self) -> None:
         text = START.read_text(encoding="utf-8-sig")
         self.assertIn("$StateKey = ([string]$State.key).Trim().ToLowerInvariant()", text)
         self.assertIn("$ExpectedKey = $Key.Trim().ToLowerInvariant()", text)
         self.assertIn("$StateHash = ([string]$State.sha256).ToLowerInvariant()", text)
         self.assertIn("$ManifestHash = ([string]$Manifest.sha256).ToLowerInvariant()", text)
+        self.assertIn("$State.schema -eq 3", text)
+        self.assertIn("$RequiredState = @($State.required_files)", text)
+        self.assertIn("$ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $RequiredPath).Hash.ToLowerInvariant()", text)
+        self.assertIn("[long]$Entry.size -ne $Info.Length", text)
+        self.assertIn("([string]$Entry.sha256).ToLowerInvariant() -ne $ActualHash", text)
         self.assertIn("$StateKey -eq $ExpectedKey", text)
         self.assertIn("$State.version -eq $Manifest.version", text)
         self.assertIn("$StateHash -eq $ManifestHash", text)
+        self.assertIn("required_files = $RequiredIdentity", text)
+        self.assertIn("$MarkerTemp = \"$Marker.part-$PID-$([guid]::NewGuid().ToString('N'))\"", text)
         self.assertIn("CINEPULSE_CI_COMPONENT_FAIL_AFTER_PROMOTE", text)
         self.assertIn("if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }", text)
         self.assertIn("if (Test-Path -LiteralPath $Previous) { Move-Item -LiteralPath $Previous -Destination $Destination }", text)
