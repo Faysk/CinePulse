@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -180,7 +181,9 @@ def test_session_writes_atomic_render_evidence(tmp_path: Path) -> None:
     session.start()
     session.mark_stage("Real-ESRGAN", "teste")
     session._samples.append(session._take_sample())
-    payload = session.stop(status="success")
+    with patch("cinepulse.hardware_telemetry.os.fsync", wraps=os.fsync) as fsync:
+        payload = session.stop(status="success")
+    assert fsync.call_count >= 1
     assert destination.is_file()
     stored = json.loads(destination.read_text(encoding="utf-8"))
     assert stored["schema"] == 1
@@ -188,6 +191,7 @@ def test_session_writes_atomic_render_evidence(tmp_path: Path) -> None:
     assert stored["summary"]["active_gpu_index"] == 0
     assert payload["samples"]
     assert not destination.with_suffix(".json.tmp").exists()
+    assert list(tmp_path.glob("hardware-telemetry.json.tmp-*")) == []
 
 
 def test_benchmark_compare_reports_speedup(tmp_path: Path) -> None:
