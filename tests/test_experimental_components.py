@@ -261,6 +261,33 @@ class ExperimentalComponentTests(unittest.TestCase):
             self.assertEqual(1, len(requests))
             self.assertIsNone(requests[0].get_header("Range"))
 
+    def test_ignored_range_rechecks_space_for_full_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "model.bin"
+            partial = destination.with_name("model.bin.part")
+            partial.write_bytes(b"12")
+            payload = b"fresh"
+            expected_hash = hashlib.sha256(payload).hexdigest()
+            response = _DownloadResponse(payload, status=200, content_length=len(payload))
+            limited = SimpleNamespace(total=100, used=97, free=3)
+
+            with (
+                patch.object(experimental_components.urllib.request, "urlopen", return_value=response),
+                patch.object(experimental_components.shutil, "disk_usage", return_value=limited),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "reiniciar o download completo"):
+                    experimental_components._download(
+                        "https://example.invalid/model.bin",
+                        destination,
+                        expected_hash,
+                        lambda _message: None,
+                        expected_bytes=len(payload),
+                    )
+
+            self.assertFalse(partial.exists())
+            self.assertFalse(destination.exists())
+
     def test_invalid_existing_asset_is_removed_before_full_redownload(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
