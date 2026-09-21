@@ -20,6 +20,41 @@ class SafeOutputTests(unittest.TestCase):
             self.assertFalse(atomic.partial.exists())
             self.assertFalse(atomic.backup.exists())
 
+    def test_commit_fsyncs_directory_after_atomic_replace_on_posix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            atomic = AtomicOutput.for_path(final, pid=123)
+            atomic.prepare().write_bytes(b"new-video")
+            calls: list[str] = []
+            real_replace = __import__("os").replace
+
+            def tracked_replace(source, destination):
+                calls.append("replace")
+                return real_replace(source, destination)
+
+            def tracked_fsync(_path):
+                calls.append("fsync-dir")
+
+            with (
+                patch("cinepulse.safe_output.os.name", "posix"),
+                patch("cinepulse.safe_output.os.replace", side_effect=tracked_replace),
+                patch("cinepulse.safe_output._fsync_directory", side_effect=tracked_fsync),
+            ):
+                atomic.commit()
+
+            self.assertEqual(["replace", "fsync-dir"], calls)
+            self.assertEqual(b"new-video", final.read_bytes())
+
+    def test_commit_keeps_atomic_replace_when_directory_fsync_is_best_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            atomic = AtomicOutput.for_path(final, pid=123)
+            atomic.prepare().write_bytes(b"new-video")
+            with patch("cinepulse.safe_output._fsync_directory", return_value=None) as sync:
+                self.assertEqual(final, atomic.commit())
+            sync.assert_called_once_with(final.parent)
+            self.assertEqual(b"new-video", final.read_bytes())
+
     def test_missing_partial_keeps_existing_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             final = Path(temporary) / "video.mp4"
