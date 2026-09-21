@@ -70,3 +70,12 @@ def test_publisher_binds_release_notes_and_push_trigger_to_version_metadata() ->
     assert "RELEASE_$($ProjectVersion.Replace('.', '_')).md" in text
     assert "RELEASE_NOTES_FILE=$NotesFile" in text
     assert "'--notes-file', $env:RELEASE_NOTES_FILE" in text
+
+
+def test_publisher_retries_ffmpeg_download_but_still_requires_exact_hash() -> None:
+    text = _workflow()
+    assert 'for ($Attempt = 1; $Attempt -le 4; $Attempt++)' in text
+    assert 'FFmpeg download failed attempt ${Attempt}/4:' in text
+    assert "Start-Sleep -Seconds $DelaySeconds" in text
+    assert "Get-FileHash -Algorithm SHA256 -LiteralPath $Archive" in text
+    assert "FFmpeg hash mismatch: expected=" in text
