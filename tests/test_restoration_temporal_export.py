@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -10,6 +14,8 @@ from cinepulse.restoration_preview import PreviewRestorationPlan
 from cinepulse.restoration_temporal_export import (
     PreviewVideoGeometry,
     _parse_rate,
+    build_temporal_encoder_command,
+    probe_preview_geometry,
     reconstruct_window_target,
 )
 
@@ -25,6 +31,71 @@ class TemporalPreviewExportTests(unittest.TestCase):
         geometry = PreviewVideoGeometry(width=1920, height=1080, fps=60.0)
         self.assertEqual(geometry.frame_bytes, 1920 * 1080 * 3)
         self.assertFalse(geometry.suspected_vfr)
+
+    def test_geometry_exposes_frame_bound_duration(self):
+        geometry = PreviewVideoGeometry(
+            width=1920, height=1080, fps=30000 / 1001,
+            nominal_fps=30000 / 1001, frame_count=30,
+        )
+        self.assertAlmostEqual(1.001, geometry.frame_bound_duration, places=12)
+
+    def test_temporal_encoder_is_frame_bound_and_never_shortest(self):
+        geometry = PreviewVideoGeometry(
+            width=64, height=36, fps=4.0, nominal_fps=4.0,
+            frame_count=4, duration=1.0, has_audio=True,
+        )
+        plan = PreviewRestorationPlan(evidence=(), regions=(), overlay_filter="", color_filter="")
+        command = build_temporal_encoder_command(
+            "ffmpeg", Path("source.mp4"), Path("out.mp4"), geometry, plan,
+            video_codec="libx264", crf=16, preset="slow",
+        )
+        self.assertNotIn("-shortest", command)
+        self.assertEqual("4", command[command.index("-frames:v") + 1])
+        audio_index = command.index("source.mp4")
+        self.assertEqual(["-t", "1.000000", "-i"], command[audio_index - 3:audio_index])
+        self.assertIn("1:a:0", command)
+
+    def test_temporal_encoder_omits_audio_input_for_silent_source(self):
+        geometry = PreviewVideoGeometry(
+            width=64, height=36, fps=4.0, nominal_fps=4.0,
+            frame_count=4, duration=1.0, has_audio=False,
+        )
+        plan = PreviewRestorationPlan(evidence=(), regions=(), overlay_filter="", color_filter="")
+        command = build_temporal_encoder_command(
+            "ffmpeg", Path("source.mp4"), Path("out.mp4"), geometry, plan,
+            video_codec="libx264", crf=16, preset="slow",
+        )
+        self.assertNotIn("source.mp4", command)
+        self.assertIn("-an", command)
+        self.assertNotIn("-shortest", command)
+
+    def test_probe_reads_exact_frames_and_audio_presence(self):
+        payload = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "width": 64,
+                    "height": 36,
+                    "avg_frame_rate": "30000/1001",
+                    "r_frame_rate": "30000/1001",
+                    "nb_read_frames": "30",
+                    "duration": "1.001",
+                },
+                {"codec_type": "audio", "duration": "1.000"},
+            ],
+            "format": {"duration": "1.001"},
+        }
+        completed = subprocess.CompletedProcess(
+            args=["ffprobe"], returncode=0, stdout=json.dumps(payload), stderr=""
+        )
+        with patch("cinepulse.restoration_temporal_export.subprocess.run", return_value=completed) as run:
+            geometry = probe_preview_geometry("ffprobe", Path("source.mp4"))
+        self.assertEqual(30, geometry.frame_count)
+        self.assertTrue(geometry.has_audio)
+        self.assertAlmostEqual(1.001, geometry.duration or 0.0, places=6)
+        command = run.call_args.args[0]
+        self.assertIn("-count_frames", command)
+        self.assertIn("-show_streams", command)
 
     def test_geometry_flags_material_avg_nominal_rate_mismatch(self):
         geometry = PreviewVideoGeometry(width=1920, height=1080, fps=24.0, nominal_fps=30.0)
