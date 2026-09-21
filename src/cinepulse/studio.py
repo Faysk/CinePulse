@@ -1558,7 +1558,7 @@ class VideoOptimizerStudio:
         previous = self._custom_presets.get(name)
         self._custom_presets[name] = self._capture_preset()
         if not self._save_custom_presets():
-            if had_previous and previous is not None:
+            if had_previous:
                 self._custom_presets[name] = previous
             else:
                 self._custom_presets.pop(name, None)
