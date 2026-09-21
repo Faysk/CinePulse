@@ -201,6 +201,13 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         )
         self.assertNotIn("final_audio_duration", self.studio)
 
+    def test_final_nvenc_failure_has_true_cpu_rollback(self) -> None:
+        self.assertIn("cpu_fallback_command: list[str] | None = None", self.studio)
+        self.assertIn("use_cpu=True, nvenc_available=False", self.studio)
+        self.assertIn("if not looks_like_gpu_runtime_failure(exc):", self.studio)
+        self.assertIn("pipeline/encoder CPU", self.studio)
+        self.assertIn("cpu_fallback_command", self.studio)
+
     def test_final_cfr_delivery_is_frame_bound_not_timestamp_clipped(self) -> None:
         self.assertIn(
             "final_target_frames = max(1, int(round(project_duration * target_fps)))",
