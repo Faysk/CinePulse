@@ -53,7 +53,20 @@ class TemporalPreviewExportTests(unittest.TestCase):
         self.assertEqual("4", command[command.index("-frames:v") + 1])
         audio_index = command.index("source.mp4")
         self.assertEqual(["-t", "1.000000", "-i"], command[audio_index - 3:audio_index])
-        self.assertIn("1:a:0", command)
+        self.assertIn("1:a?", command)
+
+    def test_geometry_rejects_inconsistent_audio_presence_and_count(self):
+        with self.assertRaisesRegex(ValueError, "audio presence/count"):
+            PreviewVideoGeometry(
+                width=64,
+                height=36,
+                fps=4.0,
+                nominal_fps=4.0,
+                frame_count=4,
+                duration=1.0,
+                has_audio=True,
+                audio_stream_count=0,
+            )
 
     def test_temporal_encoder_omits_audio_input_for_silent_source(self):
         geometry = PreviewVideoGeometry(
@@ -92,6 +105,7 @@ class TemporalPreviewExportTests(unittest.TestCase):
             geometry = probe_preview_geometry("ffprobe", Path("source.mp4"))
         self.assertEqual(30, geometry.frame_count)
         self.assertTrue(geometry.has_audio)
+        self.assertEqual(1, geometry.audio_stream_count)
         self.assertAlmostEqual(1.001, geometry.duration or 0.0, places=6)
         command = run.call_args.args[0]
         self.assertIn("-count_frames", command)
