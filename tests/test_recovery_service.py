@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +92,8 @@ class RecoveryServiceTests(unittest.TestCase):
                 "subprocesses": [],
             }
             lease_path.write_text(json.dumps(payload), encoding="utf-8")
+            old_mtime = __import__("time").time() - 120
+            os.utime(lease_path, (old_mtime, old_mtime))
 
             candidate = RecoveryService(root).discover()[0]
 
