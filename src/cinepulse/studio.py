@@ -5000,7 +5000,11 @@ class VideoOptimizerStudio:
                         stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
                     )
                 except InterruptedError:
-                    raise
+                    display_path = output_path
+                    self._log(
+                        "Comparação A/B cancelada depois do preview principal já validado; "
+                        "mantendo o preview principal como resultado."
+                    )
                 except Exception as exc:
                     display_path = output_path
                     self._log(
