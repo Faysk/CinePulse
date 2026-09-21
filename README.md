@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.11`. Mantém o contrato CFR unificado da 1.2.10 e aplica a mesma integridade temporal ao Real-ESRGAN: chunks FFV1 são validados por packet count, o concat usa durações derivadas de `frames/fps`, o master final precisa ter exatamente a contagem esperada e o cache só é reutilizado quando resolução, codec FFV1, duração e quantidade de quadros batem com o contrato.
+> Estado Stable: `1.2.12`. Mantém a integridade temporal da 1.2.11 e fecha a consistência multi-GPU nos caminhos auxiliares: H.264/HEVC NVENC intermediário usa explicitamente o adaptador selecionado, o VFX direto recebe o mesmo `gpu_index`, e a comparação A/B passa a aparar/padronizar o áudio até a duração CFR exata em vez de stream-copy até EOF.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
