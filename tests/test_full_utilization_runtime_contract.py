@@ -104,6 +104,26 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             self.rife_recovery,
         )
 
+    def test_studio_final_contracts_share_exact_frame_bound_duration(self) -> None:
+        self.assertIn(
+            "final_timeline_duration = frame_bound_duration(final_target_frames, target_fps)",
+            self.studio,
+        )
+        self.assertIn(
+            '{"duration": final_timeline_duration, "width": target_w, "height": target_h, "fps": target_fps}',
+            self.studio,
+        )
+        self.assertIn('"duration": final_timeline_duration, "expect_audio": expected_audio', self.studio)
+        self.assertIn(
+            "str(partial_output), final_timeline_duration, target_w, target_h, target_fps",
+            self.studio,
+        )
+        self.assertIn(
+            "output_path, settings, verification, final_timeline_duration, render_plan=render_plan",
+            self.studio,
+        )
+        self.assertNotIn("final_audio_duration", self.studio)
+
     def test_final_cfr_delivery_is_frame_bound_not_timestamp_clipped(self) -> None:
         self.assertIn(
             "final_target_frames = max(1, int(round(project_duration * target_fps)))",
@@ -123,11 +143,11 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
 
     def test_audio_window_is_bounded_on_input_without_clipping_video(self) -> None:
         self.assertIn(
-            "*bounded_audio_input_args(settings.audio, final_audio_duration)",
+            "*bounded_audio_input_args(settings.audio, final_timeline_duration)",
             self.studio,
         )
         self.assertIn(
-            "*bounded_audio_input_args(settings.video, final_audio_duration)",
+            "*bounded_audio_input_args(settings.video, final_timeline_duration)",
             self.studio,
         )
         self.assertIn(
@@ -170,15 +190,15 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
 
     def test_audio_window_matches_exact_frame_bound_delivery(self) -> None:
         self.assertIn(
-            "final_audio_duration = frame_bound_duration(final_target_frames, target_fps)",
+            "final_timeline_duration = frame_bound_duration(final_target_frames, target_fps)",
             self.studio,
         )
         self.assertIn(
-            "bounded_audio_input_args(settings.audio, final_audio_duration)",
+            "bounded_audio_input_args(settings.audio, final_timeline_duration)",
             self.studio,
         )
         self.assertIn(
-            "build_delivery_audio_filter(settings.audio_mode, final_audio_duration, measurements)",
+            "build_delivery_audio_filter(settings.audio_mode, final_timeline_duration, measurements)",
             self.studio,
         )
         self.assertIn(

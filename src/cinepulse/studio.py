@@ -4378,7 +4378,7 @@ class VideoOptimizerStudio:
                 target_w, target_h = self._target_size("720p HD", settings.aspect, (source_w, source_h))
                 target_fps = min(60, target_fps)
             final_target_frames = max(1, int(round(project_duration * target_fps)))
-            final_audio_duration = frame_bound_duration(final_target_frames, target_fps)
+            final_timeline_duration = frame_bound_duration(final_target_frames, target_fps)
 
             output_path = Path(settings.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4389,11 +4389,11 @@ class VideoOptimizerStudio:
             self._render_journal.write(
                 atomic_output,
                 preview,
-                {"duration": project_duration, "width": target_w, "height": target_h, "fps": target_fps},
+                {"duration": final_timeline_duration, "width": target_w, "height": target_h, "fps": target_fps},
             )
 
             self._log(f"Fonte: {source_w}x{source_h}, {source_fps:.3f} fps, {video_duration:.3f} s")
-            self._log(f"Destino: {target_w}x{target_h}, {target_fps} fps, {project_duration:.3f} s")
+            self._log(f"Destino: {target_w}x{target_h}, {target_fps} fps, {final_timeline_duration:.6f} s ({final_target_frames} quadros)")
 
             effects_active = bool(settings.effects)
             transition_label = settings.transition
@@ -4511,7 +4511,7 @@ class VideoOptimizerStudio:
                     color=color_plan, delivery=delivery_plan, storage=storage_contract,
                     verification_expected={
                         "width": target_w, "height": target_h, "fps": target_fps,
-                        "duration": project_duration, "expect_audio": expected_audio,
+                        "duration": final_timeline_duration, "expect_audio": expected_audio,
                         "audio_channels": expected_audio_channels,
                         "audio_sample_rate": expected_audio_sample_rate,
                         "deep": bool(settings.deep_verify and not preview),
@@ -4732,11 +4732,11 @@ class VideoOptimizerStudio:
                         if settings.audio_mode != "Preservar dinâmica original":
                             self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
                             try:
-                                measurements = analyze_loudness(FFMPEG, audio_source, final_audio_duration, settings.audio_mode)
+                                measurements = analyze_loudness(FFMPEG, audio_source, final_timeline_duration, settings.audio_mode)
                                 self._log(f"Medição de loudness: {measurements}")
                             except Exception as exc:
                                 self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
-                        final_audio_filter = build_delivery_audio_filter(settings.audio_mode, final_audio_duration, measurements)
+                        final_audio_filter = build_delivery_audio_filter(settings.audio_mode, final_timeline_duration, measurements)
                         final_video_args = delivery_plan.video_args(
                             use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                             bitrate_mbps=estimated_bitrate, fps=target_fps,
@@ -4839,12 +4839,12 @@ class VideoOptimizerStudio:
                 command += ["-i", visual_source]
                 if settings.mode == MODE_MUSIC:
                     command += [
-                        *bounded_audio_input_args(settings.audio, final_audio_duration),
+                        *bounded_audio_input_args(settings.audio, final_timeline_duration),
                         "-map", "0:v:0", "-map", "1:a:0",
                     ]
                 elif settings.preserve_audio and source_has_audio:
                     command += [
-                        *bounded_audio_input_args(settings.video, final_audio_duration),
+                        *bounded_audio_input_args(settings.video, final_timeline_duration),
                         "-map", "0:v:0", "-map", "1:a:0",
                     ]
                 else:
@@ -4862,12 +4862,12 @@ class VideoOptimizerStudio:
                     if settings.audio_mode != "Preservar dinâmica original":
                         self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
                         try:
-                            measurements = analyze_loudness(FFMPEG, audio_source, final_audio_duration, settings.audio_mode)
+                            measurements = analyze_loudness(FFMPEG, audio_source, final_timeline_duration, settings.audio_mode)
                             self._log(f"Medição de loudness: {measurements}")
                         except Exception as exc:
                             self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
                     self._set_stage("Áudio 2/2", "Aplicando masterização e proteção de pico durante a codificação final.")
-                    audio_filter = build_delivery_audio_filter(settings.audio_mode, final_audio_duration, measurements)
+                    audio_filter = build_delivery_audio_filter(settings.audio_mode, final_timeline_duration, measurements)
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
@@ -4973,7 +4973,7 @@ class VideoOptimizerStudio:
                 self._set_stage("Finalizando", "VFX e entrega já foram codificados no mesmo passe; iniciando verificação final.")
                 self._push_progress(98.0)
             verification = self._verify_output(
-                str(partial_output), project_duration, target_w, target_h, target_fps,
+                str(partial_output), final_timeline_duration, target_w, target_h, target_fps,
                 delivery_plan=delivery_plan, expected_audio=expected_audio,
                 expected_audio_channels=expected_audio_channels,
                 expected_audio_sample_rate=expected_audio_sample_rate,
@@ -4986,14 +4986,14 @@ class VideoOptimizerStudio:
             report_path = ""
             if not preview:
                 report_path = self._write_quality_report(
-                    output_path, settings, verification, project_duration, render_plan=render_plan,
+                    output_path, settings, verification, final_timeline_duration, render_plan=render_plan,
                 )
             if history is not None:
                 history.finish("success", output=output_path, report=report_path)
             display_path = output_path
             if preview and settings.comparison_preview:
                 display_path = self._create_comparison_preview(
-                    output_path, settings, project_duration, loop_start, stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
+                    output_path, settings, final_timeline_duration, loop_start, stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc),
                 )
             self._events.put(("done", str(display_path), preview, display_path.stat().st_size, report_path, history.path if history else ""))
         except InterruptedError:
