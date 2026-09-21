@@ -49,7 +49,18 @@ jobs:
           python-version: '3.14.7'
           cache: pip
       - name: System media dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb python3-tk
+        shell: bash
+        run: |
+          # GitHub-hosted Ubuntu images may carry unrelated third-party APT
+          # sources. A transient/vendor 403 must not block CinePulse packages
+          # that come exclusively from the Ubuntu archives.
+          for source in /etc/apt/sources.list.d/*; do
+            if [ -f "$source" ] && grep -q "packages.microsoft.com" "$source"; then
+              sudo rm -f "$source"
+            fi
+          done
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb python3-tk
       - name: Install project
         run: python -m pip install --disable-pip-version-check --editable .
       - name: CPU integration gate
@@ -74,7 +85,18 @@ jobs:
           python-version: '3.14.7'
           cache: pip
       - name: System media dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb python3-tk
+        shell: bash
+        run: |
+          # GitHub-hosted Ubuntu images may carry unrelated third-party APT
+          # sources. A transient/vendor 403 must not block CinePulse packages
+          # that come exclusively from the Ubuntu archives.
+          for source in /etc/apt/sources.list.d/*; do
+            if [ -f "$source" ] && grep -q "packages.microsoft.com" "$source"; then
+              sudo rm -f "$source"
+            fi
+          done
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb python3-tk
       - name: Install project
         run: python -m pip install --disable-pip-version-check --editable .
       - name: Media integration gate
