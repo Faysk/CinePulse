@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import uuid
 import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -28,20 +28,36 @@ def _backup(path: Path) -> None:
         return
     backup = _backup_path(path)
     try:
-        shutil.copy2(path, backup)
+        _atomic_bytes(backup, path.read_bytes())
     except OSError:
         pass
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".restore.tmp")
+    temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
     try:
-        with temporary.open("wb") as handle:
+        with temporary.open("xb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -49,9 +65,8 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 def _atomic_write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _backup(path)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    _atomic_bytes(path, content)
 
 
 def _queue_from_payload(payload: Any) -> tuple[list[dict], bool]:
