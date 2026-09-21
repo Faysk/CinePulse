@@ -31,6 +31,21 @@ _DOWNLOAD_BLOCK_BYTES = 1024 * 1024
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class UpdateInfo:
     version: str
@@ -63,13 +78,18 @@ def configured_channel() -> UpdateChannel | None:
         payload = json.loads(CHANNEL_FILE.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
+    if not isinstance(payload, dict):
+        raise ValueError("Configuração do canal de atualização deve ser um objeto JSON.")
     schema = int(payload.get("schema") or 0)
     if schema not in {1, 2}:
         raise ValueError("Configuração do canal de atualização incompatível.")
     manifest_url = str(payload.get("manifest_url") or "").strip()
     if not manifest_url:
         return None
-    require_signature = bool(payload.get("require_signature", False))
+    require_signature_value = payload.get("require_signature", False)
+    if not isinstance(require_signature_value, bool):
+        raise ValueError("require_signature deve ser booleano.")
+    require_signature = require_signature_value
     public_key = str(payload.get("public_key") or "").strip() or None
     signature_url = str(payload.get("manifest_signature_url") or "").strip() or None
     if require_signature and (not public_key or not signature_url):
@@ -196,6 +216,8 @@ def check(feed_url: str, current_version: str, timeout: int = 15) -> UpdateInfo 
             raw_signature = _read_limited(response, MAX_SIGNATURE_BYTES, "Assinatura do manifesto")
         verify_bytes(raw_manifest, raw_signature, channel.public_key)
     payload = json.loads(raw_manifest.decode("utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("Manifesto de atualização deve ser um objeto JSON.")
     if payload.get("schema") != 1:
         raise ValueError("Canal de atualização incompatível.")
     info = UpdateInfo(
@@ -287,6 +309,8 @@ def check_github_release(
     with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = _read_limited(response, MAX_RELEASE_METADATA_BYTES, "Metadados da release")
     payload = json.loads(raw.decode("utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("Metadados da release GitHub devem ser um objeto JSON.")
     if payload.get("draft") or payload.get("prerelease"):
         return None
     tag = str(payload.get("tag_name") or "").strip()
@@ -424,12 +448,16 @@ def _stage_portable(info: UpdateInfo, version: str, expected_sha256: str) -> Pat
         descriptor, temporary_name = tempfile.mkstemp(prefix="pending-update-", suffix=".json", dir=runtime)
         os.close(descriptor)
         temporary = Path(temporary_name)
+        payload = (
+            json.dumps({"schema": 1, "version": version, "source": str(package.resolve())}, indent=2) + "\n"
+        ).encode("utf-8")
         try:
-            temporary.write_text(
-                json.dumps({"schema": 1, "version": version, "source": str(package.resolve())}, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            with temporary.open("wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, pending)
+            _fsync_directory(runtime)
         finally:
             temporary.unlink(missing_ok=True)
         return pending
