@@ -150,7 +150,13 @@ from .preflight import (
 )
 from .verification import VerifyExpectation, deep_verify, quick_verify
 from .render_history import RenderHistory
-from .state_store import load_presets_state, load_queue_state, save_presets_state, save_queue_state
+from .state_store import (
+    StateSchemaTooNew,
+    load_presets_state,
+    load_queue_state,
+    save_presets_state,
+    save_queue_state,
+)
 from .storage_engine import (
     cache_usage_bytes,
     choose_chunk_frames,
@@ -640,6 +646,11 @@ class VideoOptimizerStudio:
         self._started_at: float | None = None
         self._progress_value = 0.0
         self._logs: list[str] = []
+        self._presets_state_read_only = False
+        self._presets_state_error = ""
+        self._queue_state_read_only = False
+        self._queue_state_error = ""
+        self._state_schema_warning_signature: tuple[str, ...] | None = None
         self._log_window: Toplevel | None = None
         self._log_text: Text | None = None
         self._scrollable_tabs: list[ScrollableTab] = []
@@ -711,6 +722,7 @@ class VideoOptimizerStudio:
         self._build_ui()
         self._apply_selected_preset()
         self._load_queue()
+        self._announce_state_schema_guard()
         try:
             self.notebook.select(int(self._ui_state.get("last_tab", 0)))
         except Exception:
@@ -1259,8 +1271,37 @@ class VideoOptimizerStudio:
         except OSError:
             pass
 
-    @staticmethod
-    def _load_custom_presets() -> dict[str, dict]:
+    def _announce_state_schema_guard(self) -> None:
+        messages: list[str] = []
+        if getattr(self, "_presets_state_read_only", False):
+            messages.append(
+                "Presets pertencem a uma versão mais nova e ficaram somente-leitura"
+                + (f": {self._presets_state_error}" if self._presets_state_error else ".")
+            )
+        if getattr(self, "_queue_state_read_only", False):
+            messages.append(
+                "Fila pertence a uma versão mais nova e ficou somente-leitura"
+                + (f": {self._queue_state_error}" if self._queue_state_error else ".")
+            )
+        signature = tuple(messages)
+        if not signature or signature == getattr(self, "_state_schema_warning_signature", None):
+            return
+        self._state_schema_warning_signature = signature
+        detail = " | ".join(messages) + " Atualize o CinePulse para voltar a persistir esse estado."
+        self._log("Persistência protegida contra downgrade: " + detail)
+        if hasattr(self, "feedback_title"):
+            self._set_feedback(
+                "warning",
+                "Estado de versão mais nova preservado",
+                detail,
+                category="Persistência",
+                secondary=("Ver log", self._show_log),
+                technical_detail=detail,
+            )
+        else:
+            self.status.set(detail)
+
+    def _load_custom_presets(self) -> dict[str, dict]:
         if not PRESETS_FILE.is_file():
             return {}
         try:
@@ -1268,12 +1309,26 @@ class VideoOptimizerStudio:
             if migrated:
                 save_presets_state(PRESETS_FILE, data)
             return data
+        except StateSchemaTooNew as exc:
+            self._presets_state_read_only = True
+            self._presets_state_error = str(exc)
+            return {}
         except (OSError, ValueError, json.JSONDecodeError):
             return {}
 
-    def _save_custom_presets(self) -> None:
+    def _save_custom_presets(self) -> bool:
+        if getattr(self, "_presets_state_read_only", False):
+            self._announce_state_schema_guard()
+            return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        save_presets_state(PRESETS_FILE, self._custom_presets)
+        try:
+            save_presets_state(PRESETS_FILE, self._custom_presets)
+        except StateSchemaTooNew as exc:
+            self._presets_state_read_only = True
+            self._presets_state_error = str(exc)
+            self._announce_state_schema_guard()
+            return False
+        return True
 
     @staticmethod
     def _settings_from_dict(data: dict) -> RenderSettings:
@@ -1297,7 +1352,10 @@ class VideoOptimizerStudio:
         clean["effects"] = set(clean.get("effects", []))
         return RenderSettings(**clean)
 
-    def _save_queue(self) -> None:
+    def _save_queue(self) -> bool:
+        if getattr(self, "_queue_state_read_only", False):
+            self._announce_state_schema_guard()
+            return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         payload = []
         for item in self._queue_items:
@@ -1313,7 +1371,14 @@ class VideoOptimizerStudio:
                 "progress": round(queue_item_progress(item), 1),
                 "stage": item.get("stage", ""),
             })
-        save_queue_state(QUEUE_FILE, payload)
+        try:
+            save_queue_state(QUEUE_FILE, payload)
+        except StateSchemaTooNew as exc:
+            self._queue_state_read_only = True
+            self._queue_state_error = str(exc)
+            self._announce_state_schema_guard()
+            return False
+        return True
 
     def _load_queue(self) -> None:
         if not QUEUE_FILE.is_file():
@@ -1355,6 +1420,10 @@ class VideoOptimizerStudio:
                         "info", "Fila restaurada", f"{len(restored)} projeto(s) recuperados da sessão anterior.",
                         category="Fila", primary=("Abrir fila", lambda: self._open_tab(4)), record=False,
                     )
+        except StateSchemaTooNew as exc:
+            self._queue_state_read_only = True
+            self._queue_state_error = str(exc)
+            self._log(f"Fila preservada em modo somente-leitura: {exc}")
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             self._log(f"Não foi possível restaurar a fila: {exc}")
             self._set_feedback(
@@ -1480,10 +1549,20 @@ class VideoOptimizerStudio:
         if name in BUILTIN_PRESETS:
             messagebox.showwarning(APP_TITLE, "Esse nome pertence a um preset interno e não pode ser substituído.")
             return
+        if getattr(self, "_presets_state_read_only", False):
+            self._announce_state_schema_guard()
+            return
         if name in self._custom_presets and not messagebox.askyesno(APP_TITLE, "Esse preset já existe. Deseja atualizá-lo?"):
             return
+        had_previous = name in self._custom_presets
+        previous = self._custom_presets.get(name)
         self._custom_presets[name] = self._capture_preset()
-        self._save_custom_presets()
+        if not self._save_custom_presets():
+            if had_previous and previous is not None:
+                self._custom_presets[name] = previous
+            else:
+                self._custom_presets.pop(name, None)
+            return
         self._presets = {**BUILTIN_PRESETS, **self._custom_presets}
         self.preset_box.configure(values=tuple(self._presets))
         self.preset_name.set(name)
@@ -1499,13 +1578,18 @@ class VideoOptimizerStudio:
             return
         if name not in self._custom_presets:
             return
+        if getattr(self, "_presets_state_read_only", False):
+            self._announce_state_schema_guard()
+            return
         if not messagebox.askyesno(APP_TITLE, f"Excluir o preset ‘{name}’?"):
             return
-        del self._custom_presets[name]
+        removed = self._custom_presets.pop(name)
+        if not self._save_custom_presets():
+            self._custom_presets[name] = removed
+            return
         if self._active_preset_name == name:
             self._active_preset_name = ""
             self._applied_preset_snapshot = None
-        self._save_custom_presets()
         self._presets = {**BUILTIN_PRESETS, **self._custom_presets}
         self.preset_box.configure(values=tuple(self._presets))
         self.preset_name.set(next(iter(BUILTIN_PRESETS)))
