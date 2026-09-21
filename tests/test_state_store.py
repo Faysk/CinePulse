@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest import mock
 
 from cinepulse.state_store import (
     PRESETS_SCHEMA,
@@ -34,6 +36,43 @@ class StateStoreTests(TestCase):
             self.assertEqual(payload["kind"], "cinepulse.queue")
             self.assertEqual(payload["items"][0]["id"], 2)
             self.assertTrue(path.with_suffix(".json.bak").is_file())
+
+    def test_concurrent_queue_saves_use_independent_atomic_temps(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "queue.json"
+            save_queue_state(path, [{"id": 0}])
+            errors: list[BaseException] = []
+
+            def writer(value: int) -> None:
+                try:
+                    save_queue_state(path, [{"id": value}])
+                except BaseException as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=writer, args=(value,)) for value in range(1, 9)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+            self.assertFalse(errors)
+            primary = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual("cinepulse.queue", primary["kind"])
+            self.assertIn(primary["items"][0]["id"], range(1, 9))
+            backup = path.with_suffix(".json.bak")
+            self.assertTrue(backup.is_file())
+            json.loads(backup.read_text(encoding="utf-8"))
+            self.assertEqual([], list(root.glob("queue.json.tmp-*")))
+            self.assertEqual([], list(root.glob("queue.json.bak.tmp-*")))
+
+    def test_queue_save_flushes_state_before_atomic_promotion(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "queue.json"
+            with mock.patch("cinepulse.state_store.os.fsync", wraps=__import__("os").fsync) as fsync:
+                save_queue_state(path, [{"id": 1}])
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual(1, json.loads(path.read_text(encoding="utf-8"))["items"][0]["id"])
 
     def test_corrupt_queue_recovers_validated_backup_and_preserves_evidence(self):
         with TemporaryDirectory() as temp:
