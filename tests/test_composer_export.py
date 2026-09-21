@@ -11,6 +11,8 @@ from cinepulse.composer_export import (
     ComposerBaseProfile,
     ComposerExportRequest,
     _base_decode_command,
+    _composer_frame_count,
+    _composer_timeline_duration,
     _mux_command,
     _read_exact,
     _resolve_audio_envelopes,
@@ -111,8 +113,24 @@ class ComposerExportTests(unittest.TestCase):
         self.assertIn("-c:v copy", joined)
         self.assertIn("-c:a copy", joined)
         self.assertIn("1:a:0?", joined)
-        self.assertIn("-t 1.000000", joined)
+        self.assertIn("-frames:v 4", joined)
+        self.assertEqual(1, command.count("-t"))
+        audio_index = command.index(str(root / "source.mkv"), 1)
+        self.assertEqual(["-t", "1.000000", "-i"], command[audio_index - 3:audio_index])
         self.assertNotIn("-shortest", joined)
+
+    def test_fractional_fps_mux_uses_frame_bound_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.profile(fps=30000 / 1001, duration=1.0)
+            request = self.request(root, profile)
+            command = _mux_command(request, root / "visual.mkv", root / "final.mkv")
+        self.assertEqual(30, _composer_frame_count(profile))
+        self.assertAlmostEqual(1001 / 1000, _composer_timeline_duration(profile), places=12)
+        self.assertIn("-frames:v", command)
+        self.assertEqual("30", command[command.index("-frames:v") + 1])
+        self.assertEqual("1.001000", command[command.index("-t") + 1])
+        self.assertNotIn("1.000000", command)
 
     def test_mux_allows_explicit_output_audio_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
