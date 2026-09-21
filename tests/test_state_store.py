@@ -89,6 +89,25 @@ class StateStoreTests(TestCase):
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["items"][0]["id"], 7)
             self.assertTrue(list(Path(temp).glob("queue.json.corrupt-*")))
 
+    def test_repeated_queue_recovery_preserves_distinct_corrupt_evidence(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "queue.json"
+            backup = path.with_suffix(".json.bak")
+            backup.write_text(
+                json.dumps({"schema": QUEUE_SCHEMA, "kind": "cinepulse.queue", "items": [{"id": 7}]}),
+                encoding="utf-8",
+            )
+            with mock.patch("cinepulse.state_store.time.time_ns", side_effect=[1001, 1002]):
+                path.write_text("{broken-one", encoding="utf-8")
+                load_queue_state(path)
+                path.write_text("{broken-two", encoding="utf-8")
+                load_queue_state(path)
+
+            evidence = sorted(root.glob("queue.json.corrupt-*"))
+            self.assertEqual(2, len(evidence))
+            self.assertEqual({"{broken-one", "{broken-two"}, {item.read_text(encoding="utf-8") for item in evidence})
+
     def test_future_queue_schema_is_rejected_even_with_older_backup(self):
         with TemporaryDirectory() as temp:
             path = Path(temp) / "queue.json"
