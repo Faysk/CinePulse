@@ -29,6 +29,8 @@ def test_ffmpeg_command_uses_preview_filter_and_optional_audio_mapping(tmp_path)
     assert "-vf" in command
     assert "eq=contrast=1.05" in command
     assert "0:a?" in command
+    assert "-fps_mode" in command
+    assert command[command.index("-fps_mode") + 1] == "passthrough"
     assert command[-1].endswith("output.mp4")
 
 
