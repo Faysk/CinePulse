@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.16 — 2026-09-21
+
+- recovery discovery deixa de depender exclusivamente da existência de `manifest.json`: diretórios com apenas `manifest.json.bak` também são encontrados e passam pelo recovery normal do `JobStore`;
+- quando o manifesto principal sumiu mas o backup é válido, o backup é revalidado/restaurado e o job volta a aparecer com sua classificação real;
+- quando manifesto principal e backup estão ambos ilegíveis, o job não desaparece mais silenciosamente: aparece como `blocked/unreadable` com ações de inspeção e preservação;
+- a descoberta de manifesto irrecuperável não altera nem apaga as evidências corrompidas, mantendo o diretório intacto para diagnóstico/manual recovery;
+- adiciona testes para backup-only, corrupção dupla, preservação das evidências e apresentação segura do card de recovery.
+
 ## 1.2.15 — 2026-09-21
 
 - comparação A/B só troca H.264/NVENC por libx264 quando a exceção contém evidência real de falha GPU/NVENC; erro de disco, input ou filtro não dispara retry enganoso;
