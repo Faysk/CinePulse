@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.10`. Mantém o pipeline frame-bound da 1.2.9 e elimina a última duplicidade de duração: Studio, RenderHistory, verificação final, relatórios/comparison preview e recovery passam a usar a mesma duração CFR exata representada por `frame_count / fps`, enquanto `project_duration` permanece apenas como duração lógica de planejamento.
+> Estado Stable: `1.2.11`. Mantém o contrato CFR unificado da 1.2.10 e aplica a mesma integridade temporal ao Real-ESRGAN: chunks FFV1 são validados por packet count, o concat usa durações derivadas de `frames/fps`, o master final precisa ter exatamente a contagem esperada e o cache só é reutilizado quando resolução, codec FFV1, duração e quantidade de quadros batem com o contrato.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
