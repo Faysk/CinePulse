@@ -10,11 +10,14 @@ from cinepulse.vfx import build_vfx_filter_graph
 
 
 class _FakeStdin:
+    def __init__(self) -> None:
+        self.closed = False
+
     def write(self, _data: bytes) -> int:
         return len(_data)
 
     def close(self) -> None:
-        return None
+        self.closed = True
 
 
 class _FakeProcess:
@@ -177,6 +180,63 @@ class VfxTimingTests(unittest.TestCase):
         self.assertEqual("libx265", commands[1][commands[1].index("-c:v") + 1])
         self.assertNotIn("-gpu", commands[1])
         self.assertIn("+faststart", commands[1])
+
+    def test_vfx_cancellation_terminates_process_tree(self) -> None:
+        process = _FakeProcess(0)
+
+        with (
+            patch("cinepulse.vfx.load_music_envelope", return_value=_FakeEnvelope()),
+            patch(
+                "cinepulse.vfx.choose_vfx_render_spec",
+                return_value=SimpleNamespace(
+                    width=2,
+                    height=2,
+                    fps=1.0,
+                    label="test",
+                    native_spatial=True,
+                    native_temporal=True,
+                ),
+            ),
+            patch(
+                "cinepulse.vfx.StudioFrameGenerator",
+                return_value=SimpleNamespace(make=lambda *args, **kwargs: b"frame"),
+            ),
+            patch("cinepulse.vfx._spawn_vfx_process", return_value=process),
+            patch("cinepulse.vfx.terminate_process_tree") as terminate,
+        ):
+            with self.assertRaises(vfx_module.RenderCancelled):
+                vfx_module.render_vfx_intermediate(
+                    "ffmpeg",
+                    "master.mp4",
+                    "audio.wav",
+                    "out.mp4",
+                    1.0,
+                    {"Aurora"},
+                    "#ffffff",
+                    1.0,
+                    0.5,
+                    1920,
+                    1080,
+                    30.0,
+                    "50M",
+                    "100M",
+                    "200M",
+                    False,
+                    8,
+                    "Todos equilibrados",
+                    80.0,
+                    80.0,
+                    False,
+                    70.0,
+                    lambda _value: None,
+                    lambda: True,
+                    lambda _process: None,
+                    lambda _line: None,
+                    gpu_index=2,
+                )
+
+        self.assertGreaterEqual(terminate.call_count, 1)
+        self.assertTrue(process.stdin.closed)
 
     def test_direct_vfx_non_gpu_failure_does_not_retry_cpu(self) -> None:
         commands: list[list[str]] = []
