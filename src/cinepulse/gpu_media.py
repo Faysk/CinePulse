@@ -24,6 +24,7 @@ import tempfile
 import time
 
 from .media_profile import ColorProfile
+from .path_transaction import serialized_path_mutation
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -370,6 +371,7 @@ class GpuMediaTuningStore:
             return None
         return policy
 
+    @serialized_path_mutation
     def record(self, key: GpuMediaKey, evidence: GpuMediaEvidence) -> bool:
         if (
             evidence.policy.operation != key.operation
@@ -404,6 +406,7 @@ class GpuMediaTuningStore:
         self._atomic_write(payload)
         return True
 
+    @serialized_path_mutation
     def invalidate(self, key: GpuMediaKey) -> bool:
         payload = self._load()
         records = payload.get("records", {})
