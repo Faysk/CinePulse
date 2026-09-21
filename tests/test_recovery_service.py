@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import shutil
+import json
+import socket
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from cinepulse.job_lease import JobLease
@@ -67,6 +70,40 @@ class RecoveryServiceTests(unittest.TestCase):
                 self.assertTrue(candidate.owner_active)
             finally:
                 lease.release()
+
+    def test_expired_remote_lease_is_discovered_for_audit_even_with_local_pid_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.mp4"
+            source.write_bytes(b"media")
+            job_dir = self._job(root, "job-1", "running", source=source)
+            lease_path = job_dir / "lease.json"
+            payload = {
+                "schema": 1,
+                "job_id": "job-1",
+                "pid": 100,
+                "process_start": "remote-start",
+                "nonce": "remote-owner",
+                "host_id": "remote-host",
+                "acquired_at": 1.0,
+                "heartbeat_at": 1.0,
+                "progress_counter": 10,
+                "phase": "rife",
+                "unit": "segment-10",
+                "subprocesses": [777],
+            }
+            lease_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with (
+                mock.patch("cinepulse.job_lease.time.time", return_value=1000.0),
+                mock.patch("cinepulse.job_lease.socket.gethostname", return_value=socket.gethostname()),
+                mock.patch("cinepulse.job_lease.process_alive", side_effect=lambda pid: pid == 777),
+            ):
+                candidate = RecoveryService(root).discover()[0]
+
+            self.assertEqual("needs_audit", candidate.classification)
+            self.assertFalse(candidate.owner_active)
+            self.assertIn("auditar", candidate.actions)
 
     def test_missing_source_is_blocked_without_mutating_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
