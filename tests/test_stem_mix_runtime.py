@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from cinepulse.studio import VideoOptimizerStudio
+from cinepulse.studio import VideoOptimizerStudio, _valid_cached_wav
 
 
 def _fake_wav(payload: bytes = b"\x00" * 64) -> bytes:
@@ -25,6 +25,25 @@ def _fake_wav(payload: bytes = b"\x00" * 64) -> bytes:
     data_chunk = b"data" + struct.pack("<I", len(payload)) + payload
     riff_size = 4 + len(fmt_chunk) + len(data_chunk)
     return b"RIFF" + struct.pack("<I", riff_size) + b"WAVE" + fmt_chunk + data_chunk
+
+
+def test_cached_wav_validator_rejects_large_garbage_and_truncation() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        valid = root / "valid.wav"
+        garbage = root / "garbage.wav"
+        truncated = root / "truncated.wav"
+
+        valid.write_bytes(_fake_wav())
+        garbage.write_bytes(b"X" * 256)
+        payload = bytearray(_fake_wav())
+        data_size_offset = payload.index(b"data") + 4
+        payload[data_size_offset:data_size_offset + 4] = struct.pack("<I", 999_999)
+        truncated.write_bytes(payload)
+
+        assert _valid_cached_wav(valid)
+        assert not _valid_cached_wav(garbage)
+        assert not _valid_cached_wav(truncated)
 
 
 class FakeBackgroundCommand:
