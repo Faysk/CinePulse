@@ -18,6 +18,7 @@ EFFECT_HEIGHT = 180
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 from .audio_mastering import bounded_audio_input_args, frame_bound_duration
+from .gpu_failure import looks_like_gpu_runtime_failure
 from .music_envelope import (
     DEFAULT_ANALYSIS_FPS,
     analyze_music_structure,
@@ -517,6 +518,10 @@ def render_vfx_intermediate(
         if return_code == 0:
             progress(1.0)
             return
-        if attempt_index + 1 >= len(attempts):
-            break
+        failure = RuntimeError("Falha ao renderizar os VFX.\n\n" + "\n".join(last_recent))
+        if (
+            attempt_index + 1 >= len(attempts)
+            or not looks_like_gpu_runtime_failure(failure)
+        ):
+            raise failure
     raise RuntimeError("Falha ao renderizar os VFX.\n\n" + "\n".join(last_recent))
