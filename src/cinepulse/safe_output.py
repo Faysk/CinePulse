@@ -7,6 +7,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after atomic promotion on POSIX."""
+
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class AtomicOutput:
     final: Path
@@ -36,6 +53,7 @@ class AtomicOutput:
         # window in which the user's valid output disappeared from final.
         self.backup.unlink(missing_ok=True)
         os.replace(self.partial, self.final)
+        _fsync_directory(self.final.parent)
         return self.final
 
     def discard(self, *, timeout_seconds: float = 5.0, retry_seconds: float = 0.05) -> None:
