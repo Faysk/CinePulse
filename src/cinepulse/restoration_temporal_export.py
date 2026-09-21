@@ -280,6 +280,7 @@ def stream_temporal_preview(
     preset: str = "slow",
     policy: TemporalReconstructionPolicy = TemporalReconstructionPolicy(),
     max_working_set_bytes: int = DEFAULT_MAX_TEMPORAL_WORKING_SET_BYTES,
+    geometry: PreviewVideoGeometry | None = None,
 ) -> TemporalStreamReport:
     """Run bounded rolling-window temporal reconstruction into a complete file."""
 
@@ -290,7 +291,9 @@ def stream_temporal_preview(
     if int(max_working_set_bytes) <= 0:
         raise ValueError("max_working_set_bytes must be positive")
 
-    geometry = probe_preview_geometry(ffprobe, source)
+    geometry = geometry or probe_preview_geometry(ffprobe, source)
+    if geometry.frame_count is None:
+        raise RuntimeError("Preview temporal requer contagem exata de quadros da fonte.")
     if geometry.suspected_vfr:
         raise RuntimeError(
             "A reconstrução temporal Preview não preserva timestamps VFR com segurança; "
