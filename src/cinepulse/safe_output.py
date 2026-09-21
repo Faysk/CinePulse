@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,10 +32,17 @@ class AtomicOutput:
     backup: Path
 
     @classmethod
-    def for_path(cls, final: Path, pid: int | None = None) -> "AtomicOutput":
+    def for_path(
+        cls,
+        final: Path,
+        pid: int | None = None,
+        *,
+        nonce: str | None = None,
+    ) -> "AtomicOutput":
         final = final.expanduser().resolve()
         process_id = pid if pid is not None else os.getpid()
-        partial = final.with_name(f".{final.stem}.partial-{process_id}{final.suffix}")
+        token = str(nonce or uuid.uuid4().hex)
+        partial = final.with_name(f".{final.stem}.partial-{process_id}-{token}{final.suffix}")
         backup = final.with_name(f".{final.name}.previous")
         return cls(final=final, partial=partial, backup=backup)
 
