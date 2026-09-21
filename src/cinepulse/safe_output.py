@@ -8,6 +8,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after atomic metadata/output promotion."""
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class AtomicOutput:
     final: Path
@@ -15,10 +31,17 @@ class AtomicOutput:
     backup: Path
 
     @classmethod
-    def for_path(cls, final: Path, pid: int | None = None) -> "AtomicOutput":
+    def for_path(
+        cls,
+        final: Path,
+        pid: int | None = None,
+        *,
+        nonce: str | None = None,
+    ) -> "AtomicOutput":
         final = final.expanduser().resolve()
         process_id = pid if pid is not None else os.getpid()
-        partial = final.with_name(f".{final.stem}.partial-{process_id}{final.suffix}")
+        token = str(nonce or uuid.uuid4().hex)
+        partial = final.with_name(f".{final.stem}.partial-{process_id}-{token}{final.suffix}")
         backup = final.with_name(f".{final.name}.previous")
         return cls(final=final, partial=partial, backup=backup)
 
@@ -37,6 +60,7 @@ class AtomicOutput:
         # window in which the user's valid output disappeared from final.
         self.backup.unlink(missing_ok=True)
         os.replace(self.partial, self.final)
+        _fsync_directory(self.final.parent)
         return self.final
 
     def discard(self, *, timeout_seconds: float = 5.0, retry_seconds: float = 0.05) -> None:
@@ -83,25 +107,29 @@ class RenderJournal:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
-            if os.name != "nt":
-                try:
-                    descriptor = os.open(self.path.parent, os.O_RDONLY)
-                except OSError:
-                    descriptor = None
-                if descriptor is not None:
-                    try:
-                        os.fsync(descriptor)
-                    except OSError:
-                        pass
-                    finally:
-                        os.close(descriptor)
+            _fsync_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
     def read(self) -> dict | None:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
+        except FileNotFoundError:
+            return None
+        except OSError:
+            # A sharing/permission failure is not proof of corruption.
+            return None
+        except (ValueError, TypeError, json.JSONDecodeError):
+            evidence = self.path.with_name(
+                f"{self.path.name}.corrupt-{time.time_ns()}"
+            )
+            try:
+                os.replace(self.path, evidence)
+                _fsync_directory(self.path.parent)
+            except OSError:
+                pass
+            return None
+        if not isinstance(payload, dict):
             return None
         return payload if payload.get("schema") == 1 else None
 
