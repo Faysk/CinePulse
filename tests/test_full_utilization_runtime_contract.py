@@ -140,6 +140,7 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         comparison_end = self.studio.index("def _h264_encoder(", comparison_start)
         comparison_block = self.studio[comparison_start:comparison_end]
         self.assertIn("H.264 NVENC auxiliar falhou; repetindo com libx264", comparison_block)
+        self.assertIn("not looks_like_gpu_runtime_failure(exc)", comparison_block)
         self.assertIn("self._h264_encoder(1280, 720, True)", comparison_block)
 
     def test_comparison_audio_is_frame_bound_instead_of_stream_copied(self) -> None:

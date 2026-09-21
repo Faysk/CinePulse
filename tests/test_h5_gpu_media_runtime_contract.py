@@ -42,7 +42,8 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
         self.assertIn("fallback após OOM real", self.block)
         self.assertIn("CPU usada no restante deste render", self.block)
 
-    def test_foreground_failure_retries_cpu_after_clearing_partial_frames(self) -> None:
+    def test_foreground_failure_retries_cpu_only_after_classified_gpu_failure(self) -> None:
+        self.assertIn("policy is None or not looks_like_gpu_runtime_failure(exc)", self.block)
         self.assertIn("safe_rmtree(destination)", self.block)
         self.assertIn("policy=None", self.block)
         self.assertIn("retry = extraction_command", self.block)
@@ -78,6 +79,7 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
         full_end = self.text.index("        finally:", full_start)
         runtime = self.text[full_start:full_end]
         self.assertIn("except RuntimeError as exc:", runtime)
+        self.assertIn("or not looks_like_gpu_runtime_failure(exc)", runtime)
         self.assertIn("invalidate_gpu_extract(exc)", runtime)
         self.assertIn("run_extraction(", runtime)
 

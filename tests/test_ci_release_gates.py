@@ -45,6 +45,13 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", text)
         self.assertNotIn("actions/upload-artifact@v7", text)
 
+    def test_linux_media_jobs_ignore_unrelated_microsoft_apt_source(self) -> None:
+        text = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+        self.assertEqual(text.count('grep -q "packages.microsoft.com"'), 2)
+        self.assertEqual(text.count('sudo rm -f "$source"'), 2)
+        self.assertEqual(text.count("sudo apt-get update"), 2)
+        self.assertEqual(text.count("sudo apt-get install -y ffmpeg xvfb python3-tk"), 2)
+
     def test_release_candidate_builds_and_tests_both_distribution_modes(self) -> None:
         text = (ROOT / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
         for needle in (

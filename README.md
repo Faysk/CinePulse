@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.14`. Mantém os fallbacks NVENC→CPU da 1.2.13 e estende o mesmo contrato ao recovery crash-safe: o self-test e a codificação final recuperada tentam NVENC primeiro e, somente após erro realmente classificado como GPU/NVENC, descartam o partial e repetem uma vez com o encoder CPU equivalente. Falhas de disco, filtro, input ou timeout continuam fail-fast.
+> Estado Stable: `1.2.15`. Mantém os fallbacks GPU→CPU da 1.2.14, mas restringe os retries auxiliares restantes ao mesmo critério: comparação A/B e extração/prefetch CUDA só repetem pela CPU quando o erro é realmente classificado como GPU; disco, input, filtro e outros erros continuam fail-fast. O Quality Linux também deixa de depender de sources APT de terceiros presentes na imagem do runner.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
