@@ -60,6 +60,39 @@ class _FakeProcess:
 
 
 class RestorationExportTests(unittest.TestCase):
+
+    def test_temporal_candidate_validation_uses_exact_contract_not_short_clip_vfr_heuristic(self):
+        source = PreviewVideoGeometry(
+            width=64,
+            height=36,
+            fps=4.0,
+            nominal_fps=4.0,
+            frame_count=4,
+            duration=1.0,
+            has_audio=False,
+            audio_stream_count=0,
+        )
+        candidate = PreviewVideoGeometry(
+            width=64,
+            height=36,
+            fps=4.0,
+            nominal_fps=5.0,
+            frame_count=4,
+            duration=1.0,
+            has_audio=False,
+            audio_stream_count=0,
+        )
+        self.assertTrue(candidate.suspected_vfr)
+        with patch("cinepulse.restoration_export.probe_preview_geometry", return_value=candidate):
+            validated = validate_preview_output_contract(
+                "ffprobe",
+                source,
+                Path("candidate.mkv"),
+                expected_frames=4,
+                require_cfr=True,
+            )
+        self.assertEqual(4, validated.frame_count)
+
     def source_contract(self) -> PreviewVideoGeometry:
         return PreviewVideoGeometry(
             width=64,
