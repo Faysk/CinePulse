@@ -4,7 +4,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from cinepulse.verification import VerifyExpectation, deep_verify, quick_verify
+from cinepulse.verification import VerifyExpectation, deep_verify, expectation_from_journal, quick_verify
 
 
 def probe(*, frames="60", audio=True, fps="30/1", width=640, height=360, duration="2.000000", vcodec="hevc", acodec="aac"):
@@ -28,6 +28,27 @@ class VerificationTests(unittest.TestCase):
         values.update(overrides)
         return VerifyExpectation(**values)
 
+    def test_journal_expectation_is_exact_and_fail_closed(self):
+        expected = expectation_from_journal({
+            "width": 640, "height": 360, "fps": 30.0, "duration": 2.0,
+            "expect_audio": True, "video_codec": "HEVC", "audio_codec": "AAC",
+            "audio_channels": 2, "audio_sample_rate": 48000,
+        })
+        self.assertEqual(0, expected.frame_tolerance)
+        self.assertEqual("HEVC", expected.video_codec)
+        self.assertEqual("AAC", expected.audio_codec)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            expectation_from_journal({"width": 640, "height": 360, "fps": 30.0, "duration": 2.0})
+
+    def test_journal_exact_contract_blocks_playable_but_truncated_partial(self):
+        expected = expectation_from_journal({
+            "width": 640, "height": 360, "fps": 30.0, "duration": 2.0,
+            "expect_audio": True, "video_codec": "HEVC", "audio_codec": "AAC",
+            "audio_channels": 2, "audio_sample_rate": 48000,
+        })
+        result = quick_verify("ffprobe", "partial.mp4", expected, probe_data=probe(frames="59"))
+        self.assertFalse(result.passed)
+        self.assertTrue(any(issue.code == "VERIFY-FRAMES" for issue in result.errors))
     def test_quick_verify_accepts_exact_contract(self):
         result = quick_verify("ffprobe", "out.mp4", self.expected(), probe_data=probe())
         self.assertTrue(result.passed)
