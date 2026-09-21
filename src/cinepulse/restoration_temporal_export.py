@@ -212,6 +212,62 @@ def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
     )
 
 
+def build_temporal_encoder_command(
+    ffmpeg: str,
+    source: Path,
+    output: Path,
+    geometry: PreviewVideoGeometry,
+    plan: PreviewRestorationPlan,
+    *,
+    video_codec: str,
+    crf: int,
+    preset: str,
+) -> list[str]:
+    """Build the frame-bound temporal encoder without letting audio shorten video."""
+
+    if geometry.frame_count is None:
+        raise ValueError("temporal encoder requires an exact source frame count")
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s:v",
+        f"{geometry.width}x{geometry.height}",
+        "-r",
+        f"{geometry.fps:.8f}",
+        "-i",
+        "pipe:0",
+    ]
+    if geometry.has_audio:
+        command += bounded_audio_input_args(str(source), geometry.frame_bound_duration)
+    command += ["-map", "0:v:0"]
+    if geometry.has_audio:
+        command += ["-map", "1:a:0", "-c:a", "copy"]
+    else:
+        command += ["-an"]
+    if plan.color_filter:
+        command.extend(["-vf", plan.color_filter])
+    command.extend(
+        [
+            "-c:v",
+            video_codec,
+            "-preset",
+            preset,
+            "-crf",
+            str(int(crf)),
+            "-frames:v",
+            str(geometry.frame_count),
+            str(output),
+        ]
+    )
+    return command
+
+
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
     chunks: list[bytes] = []
     remaining = size
@@ -333,43 +389,15 @@ def stream_temporal_preview(
         "rgb24",
         "pipe:1",
     ]
-    encoder_command = [
+    encoder_command = build_temporal_encoder_command(
         ffmpeg,
-        "-hide_banner",
-        "-nostdin",
-        "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s:v",
-        f"{geometry.width}x{geometry.height}",
-        "-r",
-        f"{geometry.fps:.8f}",
-        "-i",
-        "pipe:0",
-    ]
-    if geometry.has_audio:
-        encoder_command += bounded_audio_input_args(str(source), geometry.frame_bound_duration)
-    encoder_command += ["-map", "0:v:0"]
-    if geometry.has_audio:
-        encoder_command += ["-map", "1:a:0", "-c:a", "copy"]
-    else:
-        encoder_command += ["-an"]
-    if plan.color_filter:
-        encoder_command.extend(["-vf", plan.color_filter])
-    encoder_command.extend(
-        [
-            "-c:v",
-            video_codec,
-            "-preset",
-            preset,
-            "-crf",
-            str(int(crf)),
-            "-frames:v",
-            str(geometry.frame_count),
-            str(output),
-        ]
+        source,
+        output,
+        geometry,
+        plan,
+        video_codec=video_codec,
+        crf=crf,
+        preset=preset,
     )
 
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as decoder_log, tempfile.TemporaryFile(
