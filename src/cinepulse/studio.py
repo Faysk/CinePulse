@@ -217,6 +217,65 @@ def _valid_cached_wav(path: Path) -> bool:
         return False
     return False
 
+DEMUX_STEMS = ("bass", "drums", "vocals", "other")
+
+
+def _complete_demucs_stem_cache(path: Path) -> bool:
+    return path.is_dir() and all(
+        _valid_cached_wav(path / f"{name}.wav")
+        for name in DEMUX_STEMS
+    )
+
+
+def _promote_demucs_stem_cache(staged: Path, target: Path) -> bool:
+    """Publish a complete Demucs stem directory without deleting a good winner.
+
+    Returns True when this caller promoted ``staged``. If another concurrent
+    render already published a complete cache, that winner is preserved and
+    False is returned. An incomplete previous cache is displaced only by rename
+    and restored if promotion fails, so a failed rename never creates a new
+    cache-loss window.
+    """
+
+    if not _complete_demucs_stem_cache(staged):
+        raise RuntimeError("staging Demucs incompleto não pode ser promovido")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if _complete_demucs_stem_cache(target):
+        return False
+
+    displaced = target.with_name(
+        f".demucs-replaced-{target.name}-{os.getpid()}-{time.time_ns()}"
+    )
+    displaced_present = False
+    promoted = False
+    try:
+        if target.exists():
+            try:
+                os.replace(target, displaced)
+                displaced_present = True
+            except FileNotFoundError:
+                pass
+            except OSError:
+                if _complete_demucs_stem_cache(target):
+                    return False
+                raise
+
+        try:
+            os.replace(staged, target)
+            promoted = True
+            return True
+        except OSError:
+            if _complete_demucs_stem_cache(target):
+                return False
+            if displaced_present and displaced.exists() and not target.exists():
+                os.replace(displaced, target)
+                displaced_present = False
+            raise
+    finally:
+        if promoted or _complete_demucs_stem_cache(target):
+            if displaced_present:
+                safe_rmtree(displaced)
+
 APP_TITLE = "CinePulse"
 APP_DIR = PATHS.root
 APP_TEMP = PATHS.temp
@@ -6225,7 +6284,7 @@ class VideoOptimizerStudio:
                 None,
             )
 
-        if not all(locate(name) for name in ("bass", "drums", "vocals", "other")):
+        if not all(locate(name) for name in DEMUX_STEMS):
             self._set_stage("Demucs", "Separando baixo, bateria, voz e instrumentos para dirigir os VFX.")
             cache_root.mkdir(parents=True, exist_ok=True)
             demucs_staging = cache_root / f".demucs-partial-{os.getpid()}-{time.time_ns()}"
@@ -6275,7 +6334,7 @@ class VideoOptimizerStudio:
                 staged_separated = demucs_staging / "htdemucs_ft" / source.stem
                 required_stems = tuple(
                     staged_separated / f"{name}.wav"
-                    for name in ("bass", "drums", "vocals", "other")
+                    for name in DEMUX_STEMS
                 )
                 invalid = [
                     path.name
@@ -6286,9 +6345,12 @@ class VideoOptimizerStudio:
                     raise RuntimeError(
                         "Demucs terminou sem stems WAV válidos: " + ", ".join(invalid)
                     )
-                separated.parent.mkdir(parents=True, exist_ok=True)
-                safe_rmtree(separated)
-                os.replace(staged_separated, separated)
+                promoted = _promote_demucs_stem_cache(staged_separated, separated)
+                if not promoted:
+                    self._log(
+                        "Demucs cache: outro render já publicou stems completos; "
+                        "preservando o vencedor concorrente."
+                    )
             finally:
                 safe_rmtree(demucs_staging)
 
