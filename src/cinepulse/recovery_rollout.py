@@ -34,12 +34,32 @@ def _bool(value: object) -> bool:
     return str(value).strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -63,7 +83,10 @@ def load_recovery_flags(path: Path | None = None) -> RecoveryFlags:
             if key == "ring":
                 continue
             if key in payload:
-                values[key] = bool(payload[key])
+                value = payload[key]
+                if not isinstance(value, bool):
+                    raise ValueError(f"recovery flag {key} deve ser booleano")
+                values[key] = value
         flags = RecoveryFlags(**values)
     env_ring = os.environ.get("CINEPULSE_RECOVERY_RING")
     if env_ring is not None:
