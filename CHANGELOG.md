@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.11 — 2026-09-21
+
+- aplica ao Real-ESRGAN o mesmo contrato temporal exato já usado pelo RIFE: cada chunk FFV1 é contado estruturalmente e o concat recebe `duration = frames/fps`;
+- recusa a montagem quando a soma dos packets dos chunks não coincide exatamente com o número de frames esperado para o trecho;
+- valida o master Real-ESRGAN depois do concat e exige `packet_count == total_frames` antes de promover/cachear;
+- endurece o cache de IA: reutilização agora exige resolução x2 correta, codec FFV1, packet count exato e duração compatível com a timeline CFR derivada dos frames;
+- a barra/progresso da concat usa a duração frame-bound real em vez do decimal original do trecho;
+- integração neural passa a verificar estruturalmente que o master Real-ESRGAN final contém exatamente todos os quadros esperados;
+- adiciona contratos de regressão para impedir retorno do concat simples sem durations ou cache aceito só por resolução/duração aproximada.
+
 ## 1.2.10 — 2026-09-21
 
 - recovery passa a derivar a duração de entrega diretamente de `total_target_frames / target_fps`;

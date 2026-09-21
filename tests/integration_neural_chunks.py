@@ -12,6 +12,7 @@ from tkinter import Tk
 
 from cinepulse.color_pipeline import build_color_pipeline
 from cinepulse.loop_engine import first_video_fps, first_video_size, media_duration, probe_media
+from cinepulse.matroska_quality import inspect_matroska_segment
 from cinepulse.media_profile import ColorProfile
 from cinepulse import studio
 from cinepulse.studio import VideoOptimizerStudio
@@ -111,6 +112,9 @@ def main() -> None:
         info=probe_media(enhanced)
         if first_video_size(info)!=(128,72):
             raise RuntimeError(f'AI chunk output size inesperado: {first_video_size(info)}')
+        ai_quality=inspect_matroska_segment(Path(enhanced))
+        if ai_quality.packet_count != 13:
+            raise RuntimeError(f'AI master ficou com {ai_quality.packet_count}/13 quadros')
         logs=drain_logs(app)
         if not any('lotes de até 5' in line for line in logs):
             raise RuntimeError('AI não registrou política de chunks.')
@@ -141,7 +145,7 @@ def main() -> None:
             raise RuntimeError('RIFE não registrou política de chunks.')
         if list(scratch.glob('rife_*')):
             raise RuntimeError('RIFE deixou diretório PNG após o processamento.')
-        print('CINEPULSE_NEURAL_CHUNKS_OK ai=13frames/5 rife=13->26/5')
+        print('CINEPULSE_NEURAL_CHUNKS_OK ai=13frames-exact/5 rife=13->26/5')
     finally:
         tk.destroy()
         (studio.REAL_ESRGAN, studio.REAL_ESRGAN_DIR, studio.REAL_ESRGAN_MODELS, studio.RIFE_EXE, studio.RIFE_MODEL, studio.CACHE_DIR, studio.PATHS, studio.choose_chunk_frames)=original

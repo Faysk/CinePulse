@@ -5376,6 +5376,8 @@ class VideoOptimizerStudio:
         """
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        total_frames = max(1, round(duration * source_fps))
+        expected_timeline_duration = frame_bound_duration(total_frames, source_fps)
         cache_key = self._ai_cache_key(cache_source_video or video, start_time, duration, source_fps, source_w, source_h)
         cache_path = CACHE_DIR / f"{cache_key}.mkv"
         if cache_path.is_file():
@@ -5383,13 +5385,24 @@ class VideoOptimizerStudio:
                 cached_info = probe_media(str(cache_path))
                 cached_w, cached_h = first_video_size(cached_info)
                 cached_duration = media_duration(cached_info)
+                cached_video = next(
+                    (stream for stream in cached_info.get("streams", []) if stream.get("codec_type") == "video"),
+                    {},
+                )
+                cached_codec = str(cached_video.get("codec_name") or "").lower()
+                cached_quality = inspect_matroska_segment(cache_path)
                 if (
                     (cached_w, cached_h) == (source_w * 2, source_h * 2)
-                    and abs(cached_duration - duration) <= 0.20
+                    and cached_codec == "ffv1"
+                    and cached_quality.packet_count == total_frames
+                    and abs(cached_duration - expected_timeline_duration) <= max(0.20, 2.0 / max(1.0, source_fps))
                 ):
                     touch_cache_entry(cache_path)
-                    self._set_stage("Cache da IA", "Master aprimorado encontrado; pulando o Real-ESRGAN.")
-                    self._log(f"Cache IA reutilizado: {cache_path.name}")
+                    self._set_stage("Cache da IA", "Master aprimorado íntegro encontrado; pulando o Real-ESRGAN.")
+                    self._log(
+                        f"Cache IA reutilizado: {cache_path.name} "
+                        f"frames={cached_quality.packet_count}/{total_frames} duration={cached_duration:.6f}s"
+                    )
                     self._push_progress(base + weight)
                     return str(cache_path), cached_w, cached_h
             except Exception:
@@ -5399,7 +5412,6 @@ class VideoOptimizerStudio:
             except OSError:
                 pass
 
-        total_frames = max(1, round(duration * source_fps))
         ai_input_spec = FrameSpec(source_w, source_h, source_fps, "RGBA/PNG")
         ai_output_spec = FrameSpec(source_w * 2, source_h * 2, source_fps, "RGBA/PNG")
         minimum_ai_workset_gb = neural_chunk_workset_gb(
@@ -5883,10 +5895,21 @@ class VideoOptimizerStudio:
 
         if not chunks:
             raise RuntimeError("Real-ESRGAN não produziu segmentos.")
+        chunk_frame_counts: list[int] = []
+        for item in chunks:
+            quality = inspect_matroska_segment(item)
+            if quality.packet_count <= 0:
+                raise RuntimeError(f"Real-ESRGAN: {item.name} não contém quadros válidos.")
+            chunk_frame_counts.append(quality.packet_count)
+        if sum(chunk_frame_counts) != total_frames:
+            raise RuntimeError(
+                f"Real-ESRGAN: chunks somam {sum(chunk_frame_counts)}/{total_frames} quadros."
+            )
+
         enhanced = self._temp_file(output_dir, "studio_ai_x2_", temp_paths, suffix=".mkv")
         concat_file = chunk_root / "concat.txt"
         concat_file.write_text(
-            "\n".join("file '" + str(item.resolve()).replace("'", "'\\''") + "'" for item in chunks) + "\n",
+            timed_concat_manifest(chunks, chunk_frame_counts, source_fps),
             encoding="utf-8",
         )
         self._set_stage("IA 3/3", f"Unindo {len(chunks)} lote(s) lossless no master aprimorado.")
@@ -5895,7 +5918,12 @@ class VideoOptimizerStudio:
             "-f", "concat", "-safe", "0", "-i", str(concat_file), "-map", "0:v:0", "-an", "-c", "copy",
             "-progress", "pipe:1", "-nostats", str(enhanced),
         ]
-        self._run_ffmpeg(concat, duration, base + weight * 0.90, weight * 0.10)
+        self._run_ffmpeg(concat, expected_timeline_duration, base + weight * 0.90, weight * 0.10)
+        enhanced_quality = inspect_matroska_segment(enhanced)
+        if enhanced_quality.packet_count != total_frames:
+            raise RuntimeError(
+                f"Real-ESRGAN: master ficou com {enhanced_quality.packet_count}/{total_frames} quadros após concat."
+            )
         for item in chunks:
             item.unlink(missing_ok=True)
         safe_rmtree(chunk_root)
