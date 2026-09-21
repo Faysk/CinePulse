@@ -99,6 +99,28 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn("enhanced_quality = inspect_matroska_segment(enhanced)", self.studio)
         self.assertIn("enhanced_quality.packet_count != total_frames", self.studio)
 
+    def test_auxiliary_nvenc_failures_retry_cpu_after_real_failure(self) -> None:
+        self.assertIn(
+            "Master SDR: H.264 NVENC auxiliar falhou; repetindo com libx264.",
+            self.studio,
+        )
+        self.assertIn(
+            "Transição: H.264 NVENC auxiliar falhou; repetindo com libx264.",
+            self.studio,
+        )
+        self.assertIn("final_video_fallback_args = None", self.studio)
+        self.assertIn(
+            "final_video_fallback_args = delivery_plan.video_args(",
+            self.studio,
+        )
+        self.assertIn(
+            "fallback_video_args=final_video_fallback_args",
+            self.studio,
+        )
+        self.assertIn("fallback_video_args: list[str] | None = None", self.vfx)
+        self.assertIn("VFX intermediário: H.264 NVENC falhou; repetindo com libx264.", self.vfx)
+        self.assertIn("VFX fused: NVENC final falhou; repetindo entrega com encoder CPU equivalente.", self.vfx)
+
     def test_auxiliary_nvenc_paths_stay_on_selected_gpu(self) -> None:
         self.assertGreaterEqual(
             self.studio.count('"-gpu", str(max(0, int(self._hardware.gpu_index)))'),
@@ -178,6 +200,13 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
             self.studio,
         )
         self.assertNotIn("final_audio_duration", self.studio)
+
+    def test_final_nvenc_failure_has_true_cpu_rollback(self) -> None:
+        self.assertIn("cpu_fallback_command: list[str] | None = None", self.studio)
+        self.assertIn("use_cpu=True, nvenc_available=False", self.studio)
+        self.assertIn("if not looks_like_gpu_runtime_failure(exc):", self.studio)
+        self.assertIn("pipeline/encoder CPU", self.studio)
+        self.assertIn("cpu_fallback_command", self.studio)
 
     def test_final_cfr_delivery_is_frame_bound_not_timestamp_clipped(self) -> None:
         self.assertIn(

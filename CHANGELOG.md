@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.13 — 2026-09-21
+
+- master SDR passa a tentar H.264/NVENC no adaptador selecionado e, após falha real, remove a saída parcial e repete uma vez com libx264;
+- transição de loop recebe o mesmo fallback NVENC→libx264, preservando filtro, geometria, pixel format, metadata de cor e timeline;
+- VFX intermediário H.264/NVENC passa a repetir uma vez com libx264 após `return_code != 0`, sem reavaliar RAM/VRAM nem reduzir carga antes da falha;
+- VFX fused recebe do Studio os argumentos CPU equivalentes da própria `DeliveryPlan`; se a entrega NVENC falhar, o segundo attempt troca apenas o encoder e preserva áudio, muxer, frame count e filtros;
+- cancelamento continua fail-fast e nunca aciona retry de encoder;
+- adiciona testes funcionais para transição, VFX intermediário e VFX fused, além dos contratos de regressão do pipeline.
+- retry CPU só ocorre quando o erro é classificado como GPU/NVENC; falhas não-GPU continuam fail-fast.
+- a finalização HEVC/NVENC normal também ganha rollback completo para `libx265` em falha GPU real; o fallback não reutiliza NVENC escondido no baseline.
+
+
 ## 1.2.12 — 2026-09-21
 
 - fixa explicitamente `-gpu <selected>` nos encoders H.264/HEVC NVENC auxiliares do Studio, evitando que intermediários, transições ou comparação caiam silenciosamente no adaptador 0 em máquinas multi-GPU;

@@ -18,6 +18,8 @@ EFFECT_HEIGHT = 180
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 from .audio_mastering import bounded_audio_input_args, frame_bound_duration
+from .gpu_failure import looks_like_gpu_runtime_failure
+from .process_control import popen_group_kwargs, terminate_process_tree
 from .music_envelope import (
     DEFAULT_ANALYSIS_FPS,
     analyze_music_structure,
@@ -247,6 +249,19 @@ def build_vfx_filter_graph(
     )
 
 
+def _spawn_vfx_process(command: list[str]) -> subprocess.Popen:
+    """Spawn one FFmpeg VFX attempt without exposing global subprocess state to tests."""
+
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=False,
+        **popen_group_kwargs(),
+    )
+
+
 def render_vfx_intermediate(
     ffmpeg: str,
     master_video: str,
@@ -283,6 +298,7 @@ def render_vfx_intermediate(
     output_range: str = "tv",
     lossless_intermediate: bool = False,
     final_video_args: list[str] | None = None,
+    fallback_video_args: list[str] | None = None,
     final_audio_source: str | None = None,
     final_audio_filter: str = "",
     final_audio_args: list[str] | None = None,
@@ -376,85 +392,60 @@ def render_vfx_intermediate(
         command += ["-an"]
     command += ["-frames:v", str(output_frame_count), "-r", f"{output_fps:.8f}"]
 
+    command_prefix = list(command)
     if final_delivery:
-        command += list(final_video_args or ())
+        primary_video_args = list(final_video_args or ())
     elif lossless_intermediate:
-        command += [
+        primary_video_args = [
             "-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1",
             "-g", "1", "-slicecrc", "1", "-pix_fmt", output_pixel_format,
         ]
     elif use_cpu:
-        command += ["-c:v", "libx264", "-preset", "medium", "-crf", "12", "-pix_fmt", output_pixel_format]
-    else:
-        command += [
-            "-c:v",
-            "h264_nvenc",
-            "-gpu",
-            str(max(0, int(gpu_index))),
-            "-preset",
-            "p7",
-            "-tune",
-            "hq",
-            "-rc",
-            "vbr",
-            "-cq",
-            "10",
-            "-b:v",
-            bitrate,
-            "-maxrate",
-            maxrate,
-            "-bufsize",
-            bufsize,
-            "-g",
-            "30",
-            "-bf",
-            "2",
-            "-pix_fmt",
-            output_pixel_format,
+        primary_video_args = [
+            "-c:v", "libx264", "-preset", "medium", "-crf", "12",
+            "-pix_fmt", output_pixel_format,
         ]
-    command += [
-        "-color_primaries",
-        output_primaries,
-        "-color_trc",
-        output_transfer,
-        "-colorspace",
-        output_space,
-        "-color_range",
-        "pc" if output_range in {"pc", "full"} else "tv",
-        "-threads",
-        str(max(1, cpu_threads)),
+    else:
+        primary_video_args = [
+            "-c:v", "h264_nvenc", "-gpu", str(max(0, int(gpu_index))),
+            "-preset", "p7", "-tune", "hq", "-rc", "vbr", "-cq", "10",
+            "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize,
+            "-g", "30", "-bf", "2", "-pix_fmt", output_pixel_format,
+        ]
+
+    command_suffix = [
+        "-color_primaries", output_primaries,
+        "-color_trc", output_transfer,
+        "-colorspace", output_space,
+        "-color_range", "pc" if output_range in {"pc", "full"} else "tv",
+        "-threads", str(max(1, cpu_threads)),
     ]
     if final_delivery:
         if final_audio_source:
             if final_audio_filter:
-                command += ["-af", final_audio_filter]
-            command += list(final_audio_args or ())
-        command += list(final_muxer_args or ())
+                command_suffix += ["-af", final_audio_filter]
+            command_suffix += list(final_audio_args or ())
+        command_suffix += list(final_muxer_args or ())
     elif not lossless_intermediate:
-        command += ["-movflags", "+faststart"]
-    command += [output_path]
-    log("Comando VFX: " + subprocess.list2cmdline(command))
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=False,
-        creationflags=CREATE_NO_WINDOW,
-    )
-    process_changed(process)
-    recent: deque[str] = deque(maxlen=50)
+        command_suffix += ["-movflags", "+faststart"]
+    command_suffix += [output_path]
 
-    def drain_output() -> None:
-        assert process.stdout is not None
-        for raw_line in process.stdout:
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if line:
-                recent.append(line)
-                log(line)
+    fallback_args: list[str] | None = None
+    fallback_label = ""
+    if final_delivery:
+        if (
+            fallback_video_args
+            and any(str(value).endswith("_nvenc") for value in primary_video_args)
+        ):
+            fallback_args = list(fallback_video_args)
+            fallback_label = "VFX fused: NVENC final falhou; repetindo entrega com encoder CPU equivalente."
+    elif not lossless_intermediate and not use_cpu and "h264_nvenc" in primary_video_args:
+        fallback_args = [
+            "-c:v", "libx264", "-preset", "medium", "-crf", "12",
+            "-pix_fmt", output_pixel_format,
+        ]
+        fallback_label = "VFX intermediário: H.264 NVENC falhou; repetindo com libx264."
 
-    reader = threading.Thread(target=drain_output, daemon=True)
-    reader.start()
     generator = StudioFrameGenerator(
         effects,
         color,
@@ -465,34 +456,82 @@ def render_vfx_intermediate(
         fps=spec.fps,
     )
     frame_count = len(shaped.energy)
-    try:
-        assert process.stdin is not None
-        for frame_number in range(frame_count):
-            if cancelled():
-                process.terminate()
-                raise RenderCancelled
-            frame = generator.make(
-                frame_number,
-                shaped.energy[frame_number],
-                float(shaped.rms[frame_number]),
-                float(shaped.onset[frame_number]),
-            )
-            try:
-                process.stdin.write(frame)
-            except (BrokenPipeError, OSError):
-                break
-            if frame_number % max(1, int(round(spec.fps / 5))) == 0:
-                progress(0.02 + 0.98 * ((frame_number + 1) / frame_count))
+
+    def run_attempt(attempt_command: list[str]) -> tuple[int, deque[str]]:
+        log("Comando VFX: " + subprocess.list2cmdline(attempt_command))
+        process = _spawn_vfx_process(attempt_command)
+        process_changed(process)
+        recent: deque[str] = deque(maxlen=50)
+
+        def drain_output() -> None:
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if line:
+                    recent.append(line)
+                    log(line)
+
+        reader = threading.Thread(target=drain_output, daemon=True)
+        reader.start()
         try:
-            process.stdin.close()
-        except OSError:
-            pass
-        return_code = process.wait()
-        reader.join(timeout=2)
-        if cancelled():
-            raise RenderCancelled
-        if return_code:
-            raise RuntimeError("Falha ao renderizar os VFX.\n\n" + "\n".join(recent))
-        progress(1.0)
-    finally:
-        process_changed(None)
+            assert process.stdin is not None
+            for frame_number in range(frame_count):
+                if cancelled():
+                    terminate_process_tree(process, log, grace_seconds=2.0)
+                    raise RenderCancelled
+                frame = generator.make(
+                    frame_number,
+                    shaped.energy[frame_number],
+                    float(shaped.rms[frame_number]),
+                    float(shaped.onset[frame_number]),
+                )
+                try:
+                    process.stdin.write(frame)
+                except (BrokenPipeError, OSError):
+                    break
+                if frame_number % max(1, int(round(spec.fps / 5))) == 0:
+                    progress(0.02 + 0.98 * ((frame_number + 1) / frame_count))
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+            return_code = process.wait()
+            reader.join(timeout=2)
+            if cancelled():
+                raise RenderCancelled
+            return return_code, recent
+        except BaseException:
+            terminate_process_tree(process, log, grace_seconds=2.0)
+            raise
+        finally:
+            try:
+                if process.stdin is not None and not process.stdin.closed:
+                    process.stdin.close()
+            except (OSError, ValueError):
+                pass
+            reader.join(timeout=2)
+            process_changed(None)
+
+    attempts = [primary_video_args]
+    if fallback_args is not None:
+        attempts.append(fallback_args)
+
+    last_recent: deque[str] = deque(maxlen=50)
+    for attempt_index, video_args in enumerate(attempts):
+        if attempt_index:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+            log(fallback_label)
+        return_code, last_recent = run_attempt(command_prefix + video_args + command_suffix)
+        if return_code == 0:
+            progress(1.0)
+            return
+        failure = RuntimeError("Falha ao renderizar os VFX.\n\n" + "\n".join(last_recent))
+        if (
+            attempt_index + 1 >= len(attempts)
+            or not looks_like_gpu_runtime_failure(failure)
+        ):
+            raise failure
+    raise RuntimeError("Falha ao renderizar os VFX.\n\n" + "\n".join(last_recent))

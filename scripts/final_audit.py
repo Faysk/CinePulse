@@ -235,8 +235,12 @@ def main() -> int:
         "ResidentEncodeStore",
         "select_resident_delivery_route",
         "baseline_command = list(command)",
+        "cpu_fallback_command: list[str] | None = None",
+        "use_cpu=True, nvenc_available=False",
+        "if not looks_like_gpu_runtime_failure(exc):",
         "resident_store.invalidate(resident_route.key)",
-        "baseline CPU/zscale",
+        "partial_output.unlink(missing_ok=True)",
+        "pipeline/encoder CPU",
     ))
     h8_forbidden_mutations = (
         "realtime_priority_class", "setpriorityclass", "powercfg", "-pl ", "--power-limit",

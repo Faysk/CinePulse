@@ -4662,21 +4662,48 @@ class VideoOptimizerStudio:
                     color_plan=color_plan,
                     color_already_converted=color_already_converted,
                 )
-                command = [
+                command_prefix = [
                     FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
                 ]
                 if working_start > 0:
-                    command += ["-ss", f"{working_start:.6f}"]
+                    command_prefix += ["-ss", f"{working_start:.6f}"]
                 master_target_frames = max(1, int(round(video_duration * work_fps)))
-                command += [
+                command_prefix += [
                     "-i", working_video,
                     "-map", "0:v:0", "-an", "-vf", master_filter,
-                ] + self._intermediate_encoder(work_w, work_h, settings.use_cpu, color_plan) + [
+                ]
+                master_encoder_args = self._intermediate_encoder(
+                    work_w, work_h, settings.use_cpu, color_plan
+                )
+                command_suffix = [
                     "-frames:v", str(master_target_frames),
                     "-threads", str(stage_threads("scale", gpu_active=not settings.use_cpu)),
                     "-progress", "pipe:1", "-nostats", str(master),
                 ]
-                self._run_ffmpeg(command, video_duration, progress_base, 10)
+                command = command_prefix + master_encoder_args + command_suffix
+                try:
+                    self._run_ffmpeg(command, video_duration, progress_base, 10)
+                except RuntimeError as exc:
+                    if (
+                        settings.use_cpu
+                        or "h264_nvenc" not in master_encoder_args
+                        or not looks_like_gpu_runtime_failure(exc)
+                    ):
+                        raise
+                    try:
+                        master.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    self._log(
+                        "Master SDR: H.264 NVENC auxiliar falhou; repetindo com libx264. "
+                        f"Motivo: {exc}"
+                    )
+                    command = (
+                        command_prefix
+                        + self._intermediate_encoder(work_w, work_h, True, color_plan)
+                        + command_suffix
+                    )
+                    self._run_ffmpeg(command, video_duration, progress_base, 10)
                 self._release_temp_path(working_video, temp_paths)
                 progress_base += 10
                 visual_source = str(master)
@@ -4725,6 +4752,7 @@ class VideoOptimizerStudio:
 
                     final_audio_filter = ""
                     final_video_args = None
+                    final_video_fallback_args = None
                     final_audio_args = None
                     final_muxer_args = None
                     final_audio_source = None
@@ -4743,6 +4771,12 @@ class VideoOptimizerStudio:
                             bitrate_mbps=estimated_bitrate, fps=target_fps,
                             gpu_index=self._hardware.gpu_index,
                         )
+                        if any(str(value).endswith("_nvenc") for value in final_video_args):
+                            final_video_fallback_args = delivery_plan.video_args(
+                                use_cpu=True, nvenc_available=False,
+                                bitrate_mbps=estimated_bitrate, fps=target_fps,
+                                gpu_index=self._hardware.gpu_index,
+                            )
                         final_audio_source = settings.audio
                         final_audio_args = delivery_plan.audio_args()
                         final_muxer_args = delivery_plan.muxer_args()
@@ -4773,6 +4807,7 @@ class VideoOptimizerStudio:
                             output_range=color_plan.working.range,
                             lossless_intermediate=color_plan.needs_lossless_intermediate and not fuse_vfx_delivery,
                             final_video_args=final_video_args,
+                            fallback_video_args=final_video_fallback_args,
                             final_audio_source=final_audio_source,
                             final_audio_filter=final_audio_filter,
                             final_audio_args=final_audio_args,
@@ -4853,11 +4888,12 @@ class VideoOptimizerStudio:
                     command += ["-map", "0:v:0", "-an"]
                 command += ["-vf", final_filter]
                 bitrate_mbps = estimated_bitrate
-                command += delivery_plan.video_args(
+                baseline_video_args = delivery_plan.video_args(
                     use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                     bitrate_mbps=bitrate_mbps, fps=target_fps,
                     gpu_index=self._hardware.gpu_index,
                 )
+                command += baseline_video_args
                 command += color_plan.metadata_args(output=True)
                 if settings.mode == MODE_MUSIC or (settings.preserve_audio and source_has_audio):
                     measurements = None
@@ -4880,9 +4916,27 @@ class VideoOptimizerStudio:
                 command += delivery_plan.muxer_args()
                 command += ["-progress", "pipe:1", "-nostats", str(partial_output)]
 
-                # H5: start from the complete Stable CPU/zscale command. The
-                # resident path is permissioned only by exact physical evidence.
+                # H5: baseline keeps the normal CPU/zscale filter path. If the
+                # selected final encoder is NVENC, also prepare a fully CPU
+                # equivalent so a real GPU failure cannot strand the render.
                 baseline_command = list(command)
+                cpu_fallback_command: list[str] | None = None
+                if (
+                    not settings.use_cpu
+                    and any(str(value).endswith("_nvenc") for value in baseline_video_args)
+                ):
+                    cpu_video_args = delivery_plan.video_args(
+                        use_cpu=True, nvenc_available=False,
+                        bitrate_mbps=bitrate_mbps, fps=target_fps,
+                        gpu_index=self._hardware.gpu_index,
+                    )
+                    start = next(
+                        index
+                        for index in range(len(baseline_command) - len(baseline_video_args) + 1)
+                        if baseline_command[index:index + len(baseline_video_args)] == baseline_video_args
+                    )
+                    cpu_fallback_command = list(baseline_command)
+                    cpu_fallback_command[start:start + len(baseline_video_args)] = cpu_video_args
                 resident_route = None
                 resident_store = ResidentEncodeStore(PATHS.cache / "hardware" / "resident-encode.json")
                 try:
@@ -4931,11 +4985,6 @@ class VideoOptimizerStudio:
                         resident_filter = resident_route.video_filter(target_w, target_h)
                         if resident_filter:
                             candidate[vf_index:vf_index] = ["-vf", resident_filter]
-                        baseline_video_args = delivery_plan.video_args(
-                            use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
-                            bitrate_mbps=bitrate_mbps, fps=target_fps,
-                            gpu_index=self._hardware.gpu_index,
-                        )
                         replacement_args = resident_route.contract.ffmpeg_args()
                         start = next(
                             index for index in range(len(candidate) - len(baseline_video_args) + 1)
@@ -4955,21 +5004,33 @@ class VideoOptimizerStudio:
                 try:
                     self._run_ffmpeg(command, project_duration, progress_base, 100 - progress_base)
                 except RuntimeError as exc:
-                    if resident_route is None or not resident_route.approved or resident_route.key is None:
+                    if not looks_like_gpu_runtime_failure(exc):
                         raise
-                    gpu_specific = looks_like_gpu_runtime_failure(exc)
-                    if gpu_specific:
+                    if (
+                        resident_route is not None
+                        and resident_route.approved
+                        and resident_route.key is not None
+                    ):
                         resident_store.invalidate(resident_route.key)
-                        evidence_text = "evidência exata invalidada"
+                        route_text = "fast-path resident invalidado"
                     else:
-                        evidence_text = "evidência preservada; falha não classificada como GPU"
-                    try: partial_output.unlink(missing_ok=True)
-                    except OSError: pass
+                        route_text = "baseline NVENC"
+                    if cpu_fallback_command is None:
+                        raise
+                    try:
+                        partial_output.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                     self._log(
-                        "H5 resident delivery: fast path aprovado falhou em produção; "
-                        f"{evidence_text}. Finalização repetida pelo baseline CPU/zscale. Motivo: {exc}"
+                        f"Finalização: {route_text} falhou por GPU; repetindo com pipeline/encoder CPU. "
+                        f"Motivo: {exc}"
                     )
-                    self._run_ffmpeg(baseline_command, project_duration, progress_base, 100 - progress_base)
+                    self._run_ffmpeg(
+                        cpu_fallback_command,
+                        project_duration,
+                        progress_base,
+                        100 - progress_base,
+                    )
                 self._release_temp_path(visual_source, temp_paths)
             else:
                 self._set_stage("Finalizando", "VFX e entrega já foram codificados no mesmo passe; iniciando verificação final.")
@@ -5294,14 +5355,39 @@ class VideoOptimizerStudio:
             f"{color_plan.setparams_filter()}[v]"
         )
         expected = max(0.1, duration - blend)
-        command = [
+        command_prefix = [
             FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", master,
             "-filter_complex", graph, "-map", "[v]", "-an",
-        ] + self._intermediate_encoder(width, height, use_cpu, color_plan) + [
+        ]
+        encoder_args = self._intermediate_encoder(width, height, use_cpu, color_plan)
+        command_suffix = [
             "-threads", str(cpu_threads), "-progress", "pipe:1", "-nostats", str(output)
         ]
+        command = command_prefix + encoder_args + command_suffix
         self._set_stage("Criando transição", f"Mesclando o final e o início com ‘{label}’ por {blend:.2f} s.")
-        self._run_ffmpeg(command, expected, base, weight)
+        try:
+            self._run_ffmpeg(command, expected, base, weight)
+        except RuntimeError as exc:
+            if (
+                use_cpu
+                or "h264_nvenc" not in encoder_args
+                or not looks_like_gpu_runtime_failure(exc)
+            ):
+                raise
+            try:
+                output.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._log(
+                "Transição: H.264 NVENC auxiliar falhou; repetindo com libx264. "
+                f"Motivo: {exc}"
+            )
+            command = (
+                command_prefix
+                + self._intermediate_encoder(width, height, True, color_plan)
+                + command_suffix
+            )
+            self._run_ffmpeg(command, expected, base, weight)
         return str(output)
 
     def _find_best_loop(self, video: str, duration: float) -> tuple[float, float, float]:
