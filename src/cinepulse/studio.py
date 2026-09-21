@@ -88,7 +88,13 @@ from .gpu_encode import ResidentEncodeStore
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .gpu_delivery import select_resident_delivery_route
 from .pipeline_runtime import BackgroundCommand
-from .audio_mastering import analyze_loudness, bounded_audio_input_args, build_audio_filter
+from .audio_mastering import (
+    analyze_loudness,
+    bounded_audio_input_args,
+    build_audio_filter,
+    build_delivery_audio_filter,
+    frame_bound_duration,
+)
 from . import __version__
 from .quality_metrics import measure_vmaf
 from .stem_engine import build_demucs_command, stem_cache_key, stems_for_focus
@@ -4372,6 +4378,7 @@ class VideoOptimizerStudio:
                 target_w, target_h = self._target_size("720p HD", settings.aspect, (source_w, source_h))
                 target_fps = min(60, target_fps)
             final_target_frames = max(1, int(round(project_duration * target_fps)))
+            final_audio_duration = frame_bound_duration(final_target_frames, target_fps)
 
             output_path = Path(settings.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4725,11 +4732,11 @@ class VideoOptimizerStudio:
                         if settings.audio_mode != "Preservar dinâmica original":
                             self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
                             try:
-                                measurements = analyze_loudness(FFMPEG, audio_source, project_duration, settings.audio_mode)
+                                measurements = analyze_loudness(FFMPEG, audio_source, final_audio_duration, settings.audio_mode)
                                 self._log(f"Medição de loudness: {measurements}")
                             except Exception as exc:
                                 self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
-                        final_audio_filter = build_audio_filter(settings.audio_mode, measurements)
+                        final_audio_filter = build_delivery_audio_filter(settings.audio_mode, final_audio_duration, measurements)
                         final_video_args = delivery_plan.video_args(
                             use_cpu=settings.use_cpu, nvenc_available=self._nvenc,
                             bitrate_mbps=estimated_bitrate, fps=target_fps,
@@ -4832,12 +4839,12 @@ class VideoOptimizerStudio:
                 command += ["-i", visual_source]
                 if settings.mode == MODE_MUSIC:
                     command += [
-                        *bounded_audio_input_args(settings.audio, project_duration),
+                        *bounded_audio_input_args(settings.audio, final_audio_duration),
                         "-map", "0:v:0", "-map", "1:a:0",
                     ]
                 elif settings.preserve_audio and source_has_audio:
                     command += [
-                        *bounded_audio_input_args(settings.video, project_duration),
+                        *bounded_audio_input_args(settings.video, final_audio_duration),
                         "-map", "0:v:0", "-map", "1:a:0",
                     ]
                 else:
@@ -4855,12 +4862,12 @@ class VideoOptimizerStudio:
                     if settings.audio_mode != "Preservar dinâmica original":
                         self._set_stage("Áudio 1/2", "Medindo loudness, true peak e faixa dinâmica da trilha completa.")
                         try:
-                            measurements = analyze_loudness(FFMPEG, audio_source, project_duration, settings.audio_mode)
+                            measurements = analyze_loudness(FFMPEG, audio_source, final_audio_duration, settings.audio_mode)
                             self._log(f"Medição de loudness: {measurements}")
                         except Exception as exc:
                             self._log(f"Medição em duas passagens indisponível; usando normalização dinâmica: {exc}")
                     self._set_stage("Áudio 2/2", "Aplicando masterização e proteção de pico durante a codificação final.")
-                    audio_filter = build_audio_filter(settings.audio_mode, measurements)
+                    audio_filter = build_delivery_audio_filter(settings.audio_mode, final_audio_duration, measurements)
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
