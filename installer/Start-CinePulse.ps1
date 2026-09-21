@@ -145,9 +145,13 @@ function Get-PortableUv {
     if ((Test-Path -LiteralPath $UvExe) -and (Test-Path -LiteralPath $StateFile)) {
         try {
             $State = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
-            if ($State.schema -eq 1 -and
+            $ActualUv = Get-Item -LiteralPath $UvExe
+            $ActualUvSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $UvExe).Hash.ToLowerInvariant()
+            if ($State.schema -eq 2 -and
                 [string]$State.version -eq $ExpectedVersion -and
-                ([string]$State.sha256).ToLowerInvariant() -eq $ExpectedSha256) {
+                ([string]$State.archive_sha256).ToLowerInvariant() -eq $ExpectedSha256 -and
+                ([string]$State.exe_sha256).ToLowerInvariant() -eq $ActualUvSha256 -and
+                [long]$State.exe_size -eq $ActualUv.Length) {
                 return $UvExe
             }
         } catch { }
@@ -162,9 +166,16 @@ function Get-PortableUv {
     $Found = Get-ChildItem -LiteralPath $Extracted -Recurse -File -Filter 'uv.exe' | Select-Object -First 1
     if (-not $Found) { throw 'O pacote do uv não contém o executável esperado.' }
     Move-Item -LiteralPath $Found.FullName -Destination $UvExe -Force
-    $StateTemp = "$StateFile.part"
-    @{ schema = 1; version = $ExpectedVersion; sha256 = $ExpectedSha256 } |
-        ConvertTo-Json | Set-Content -LiteralPath $StateTemp -Encoding UTF8
+    $UvInfo = Get-Item -LiteralPath $UvExe
+    $UvExeSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $UvExe).Hash.ToLowerInvariant()
+    $StateTemp = "$StateFile.part-$PID-$([guid]::NewGuid().ToString('N'))"
+    @{
+        schema = 2
+        version = $ExpectedVersion
+        archive_sha256 = $ExpectedSha256
+        exe_sha256 = $UvExeSha256
+        exe_size = $UvInfo.Length
+    } | ConvertTo-Json | Set-Content -LiteralPath $StateTemp -Encoding UTF8
     Move-Item -LiteralPath $StateTemp -Destination $StateFile -Force
     Remove-Item -LiteralPath $Archive -Force
     Remove-Item -LiteralPath $Extracted -Recurse -Force
@@ -264,9 +275,22 @@ function Install-VerifiedArchive {
     if (Test-Path -LiteralPath $Marker) {
         try {
             $State = Get-Content -LiteralPath $Marker -Raw | ConvertFrom-Json
-            $Complete = $true
+            $Complete = $State.schema -eq 3
+            $RequiredState = @($State.required_files)
+            if ($RequiredState.Count -ne $RequiredFiles.Count) { $Complete = $false }
             foreach ($RequiredFile in $RequiredFiles) {
-                if (-not (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile))) { $Complete = $false }
+                $RequiredPath = Join-Path $Destination $RequiredFile
+                $Entry = @($RequiredState | Where-Object { ([string]$_.path).Trim() -ieq $RequiredFile }) | Select-Object -First 1
+                if (-not $Entry -or -not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
+                    $Complete = $false
+                    continue
+                }
+                $Info = Get-Item -LiteralPath $RequiredPath
+                $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $RequiredPath).Hash.ToLowerInvariant()
+                if (
+                    [long]$Entry.size -ne $Info.Length -or
+                    ([string]$Entry.sha256).ToLowerInvariant() -ne $ActualHash
+                ) { $Complete = $false }
             }
             $StateKey = ([string]$State.key).Trim().ToLowerInvariant()
             $ExpectedKey = $Key.Trim().ToLowerInvariant()
@@ -304,8 +328,25 @@ function Install-VerifiedArchive {
         New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
         Move-Item -LiteralPath $Incoming -Destination $Destination
         if ($env:CINEPULSE_CI_COMPONENT_FAIL_AFTER_PROMOTE -eq $Key) { throw "Falha injetada após promoção de $Key." }
-        @{ schema = 2; key = $Key; version = $Manifest.version; sha256 = $Manifest.sha256 } |
-            ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
+        $RequiredIdentity = @()
+        foreach ($RequiredFile in $RequiredFiles) {
+            $RequiredPath = Join-Path $Destination $RequiredFile
+            $Info = Get-Item -LiteralPath $RequiredPath
+            $RequiredIdentity += [ordered]@{
+                path = $RequiredFile
+                sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $RequiredPath).Hash.ToLowerInvariant()
+                size = $Info.Length
+            }
+        }
+        $MarkerTemp = "$Marker.part-$PID-$([guid]::NewGuid().ToString('N'))"
+        [ordered]@{
+            schema = 3
+            key = $Key
+            version = $Manifest.version
+            sha256 = ([string]$Manifest.sha256).ToLowerInvariant()
+            required_files = $RequiredIdentity
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $MarkerTemp -Encoding UTF8
+        Move-Item -LiteralPath $MarkerTemp -Destination $Marker -Force
     } catch {
         if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
         if (Test-Path -LiteralPath $Previous) { Move-Item -LiteralPath $Previous -Destination $Destination }
