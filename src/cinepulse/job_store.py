@@ -124,6 +124,26 @@ class JobStore:
                 _atomic_bytes(self.path, _json_bytes(backup))
                 return backup
 
+    def peek(self, *, allow_backup: bool = True) -> tuple[RenderJobManifest, str]:
+        """Read manifest state without repairing, renaming or writing evidence.
+
+        Recovery discovery uses this observational path so startup dry-runs never
+        mutate preserved work merely by inspecting it. Provenance is returned as
+        either primary or backup so callers can fail closed on older backup state.
+        """
+        with self._lock:
+            try:
+                return self._parse(self.path), "primary"
+            except ManifestError as primary_error:
+                if not allow_backup or not self.backup_path.is_file():
+                    raise
+                try:
+                    return self._parse(self.backup_path), "backup"
+                except ManifestError as backup_error:
+                    raise ManifestStoreError(
+                        f"manifesto e backup inválidos: primary={primary_error}; backup={backup_error}"
+                    ) from backup_error
+
     def create(self, manifest: RenderJobManifest) -> RenderJobManifest:
         with self._lock:
             if self.path.exists():

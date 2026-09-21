@@ -65,9 +65,22 @@ class RecoveryService:
             return hint, False
 
     @staticmethod
-    def _classification(manifest, *, owner_active: bool, source_present: bool, had_stale_lease: bool) -> tuple[str, str, tuple[str, ...]]:
+    def _classification(
+        manifest,
+        *,
+        owner_active: bool,
+        source_present: bool,
+        had_stale_lease: bool,
+        manifest_from_backup: bool = False,
+    ) -> tuple[str, str, tuple[str, ...]]:
         if owner_active:
             return "active", "Worker continua processando este job.", ("acompanhar", "pausar")
+        if manifest_from_backup:
+            return (
+                "needs_audit",
+                "Somente o backup do manifesto está legível; o trabalho foi preservado e precisa de auditoria antes da retomada.",
+                ("inspecionar", "auditar", "preservar"),
+            )
         if not source_present:
             return "blocked", "A fonte do job não está disponível.", ("inspecionar", "reconectar_fonte", "preservar")
         if manifest.state == "blocked":
@@ -121,7 +134,7 @@ class RecoveryService:
 
     def inspect_job(self, job_dir: Path) -> RecoveryCandidate | None:
         store = JobStore(job_dir / "manifest.json")
-        manifest = store.load(recover_backup=True)
+        manifest, manifest_source = store.peek(allow_backup=True)
         if manifest.state in TERMINAL_STATES:
             return None
         lease = JobLease(job_dir / "lease.json", manifest.job_id)
@@ -147,6 +160,7 @@ class RecoveryService:
             owner_active=owner_active,
             source_present=source_present,
             had_stale_lease=had_stale_lease,
+            manifest_from_backup=manifest_source == "backup",
         )
         phase = str(manifest.phase.get("name") or manifest.state)
         committed = int(manifest.phase.get("units_committed") or 0)

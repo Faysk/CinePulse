@@ -79,5 +79,25 @@ class JobStoreTests(unittest.TestCase):
             self.assertEqual(0, store.load().revision)
 
 
+    def test_peek_uses_backup_without_repairing_or_quarantining_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = JobStore(root / "manifest.json")
+            first = store.create(RenderJobManifest.new("job-1", now=1.0))
+            store.save(first.transition("preflight", now=2.0), expected_revision=0)
+            backup_before = store.backup_path.read_bytes()
+            store.path.write_text("{truncated", encoding="utf-8")
+            primary_before = store.path.read_bytes()
+
+            observed, source = store.peek(allow_backup=True)
+
+            self.assertEqual("backup", source)
+            self.assertEqual(0, observed.revision)
+            self.assertEqual(primary_before, store.path.read_bytes())
+            self.assertEqual(backup_before, store.backup_path.read_bytes())
+            self.assertEqual([], list(root.glob("manifest.json.corrupt-*")))
+
+
+
 if __name__ == "__main__":
     unittest.main()
