@@ -9,6 +9,44 @@ from cinepulse.safe_output import AtomicOutput, RenderJournal, process_alive
 
 
 class SafeOutputTests(unittest.TestCase):
+    def test_same_process_outputs_use_unique_partial_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            first = AtomicOutput.for_path(final, pid=123)
+            second = AtomicOutput.for_path(final, pid=123)
+            self.assertNotEqual(first.partial, second.partial)
+            self.assertEqual(first.final, second.final)
+
+    def test_explicit_nonce_keeps_partial_path_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            atomic = AtomicOutput.for_path(final, pid=123, nonce="abc")
+            self.assertEqual(final.with_name(".video.partial-123-abc.mp4"), atomic.partial)
+
+    def test_commit_fsyncs_directory_after_atomic_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            atomic = AtomicOutput.for_path(final, pid=123, nonce="commit")
+            atomic.prepare().write_bytes(b"new-video")
+            calls: list[str] = []
+            real_replace = __import__("os").replace
+
+            def tracked_replace(source, destination):
+                calls.append("replace")
+                return real_replace(source, destination)
+
+            def tracked_fsync(_path):
+                calls.append("fsync-dir")
+
+            with (
+                patch("cinepulse.safe_output.os.replace", side_effect=tracked_replace),
+                patch("cinepulse.safe_output._fsync_directory", side_effect=tracked_fsync),
+            ):
+                atomic.commit()
+
+            self.assertEqual(["replace", "fsync-dir"], calls)
+            self.assertEqual(b"new-video", final.read_bytes())
+
     def test_commit_replaces_existing_only_after_partial_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             final = Path(temporary) / "video.mp4"
@@ -106,6 +144,26 @@ class SafeOutputTests(unittest.TestCase):
             self.assertGreaterEqual(fsync.call_count, 1)
             self.assertEqual([], list(root.glob("render.json.tmp-*")))
             self.assertEqual(60, journal.read()["expected"]["fps"])
+
+    def test_corrupt_journal_is_preserved_as_unique_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.path.write_text("{truncated", encoding="utf-8")
+            with patch("cinepulse.safe_output.time.time_ns", return_value=123456):
+                self.assertIsNone(journal.read())
+            evidence = root / "render.json.corrupt-123456"
+            self.assertTrue(evidence.is_file())
+            self.assertEqual("{truncated", evidence.read_text(encoding="utf-8"))
+            self.assertFalse(journal.path.exists())
+
+    def test_valid_json_with_wrong_shape_is_ignored_without_destroying_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.path.write_text("[]", encoding="utf-8")
+            self.assertIsNone(journal.read())
+            self.assertTrue(journal.path.is_file())
 
     def test_journal_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
