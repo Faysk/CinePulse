@@ -82,6 +82,26 @@ class FullUtilizationRuntimeContractTests(unittest.TestCase):
         self.assertIn('"-g", str(rife_gpu_index)', self.rife_recovery)
         self.assertIn("gpu_index=max(0, contract.gpu_index)", self.rife_recovery)
 
+    def test_realesrgan_chunks_cache_and_master_use_exact_frame_timeline(self) -> None:
+        self.assertIn(
+            "expected_timeline_duration = frame_bound_duration(total_frames, source_fps)",
+            self.studio,
+        )
+        self.assertIn("cached_quality = inspect_matroska_segment(cache_path)", self.studio)
+        self.assertIn("cached_quality.packet_count == total_frames", self.studio)
+        self.assertIn("chunk_frame_counts: list[int] = []", self.studio)
+        self.assertIn("sum(chunk_frame_counts) != total_frames", self.studio)
+        self.assertIn(
+            "timed_concat_manifest(chunks, chunk_frame_counts, source_fps)",
+            self.studio,
+        )
+        self.assertIn("enhanced_quality = inspect_matroska_segment(enhanced)", self.studio)
+        self.assertIn("enhanced_quality.packet_count != total_frames", self.studio)
+        self.assertNotIn(
+            '"\\n".join("file '" + str(item.resolve())',
+            self.studio,
+        )
+
     def test_rife_chunking_enforces_exact_cumulative_target_count(self) -> None:
         self.assertIn("distributed_chunk_target_count(", self.studio)
         self.assertIn("timed_concat_manifest(chunks, chunk_frame_counts, target_fps)", self.studio)
