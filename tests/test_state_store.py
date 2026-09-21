@@ -102,6 +102,18 @@ class StateStoreTests(TestCase):
             self.assertTrue(migrated)
             self.assertEqual(presets["Meu preset"]["fps"], 60)
 
+    def test_legacy_preset_named_schema_is_not_mistaken_for_version_envelope(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "presets.json"
+            path.write_text(
+                json.dumps({"schema": {"fps": 60}, "Outro": {"fps": 120}}),
+                encoding="utf-8",
+            )
+            presets, migrated = load_presets_state(path)
+            self.assertTrue(migrated)
+            self.assertEqual({"fps": 60}, presets["schema"])
+            self.assertEqual(120, presets["Outro"]["fps"])
+
     def test_presets_save_is_versioned_and_backed_up(self):
         with TemporaryDirectory() as temp:
             path = Path(temp) / "presets.json"
