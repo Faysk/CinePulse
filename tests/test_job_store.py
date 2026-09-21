@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -55,6 +56,29 @@ class JobStoreTests(unittest.TestCase):
                 {"first-corrupt", "second-corrupt"},
                 {path.read_text(encoding="utf-8") for path in evidence},
             )
+    def test_corrupt_primary_is_copied_to_evidence_when_rename_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = JobStore(root / "manifest.json")
+            first = store.create(RenderJobManifest.new("job-1", now=1.0))
+            store.save(first.transition("preflight", now=2.0), expected_revision=0)
+            store.path.write_text("locked-corrupt", encoding="utf-8")
+            real_replace = os.replace
+
+            def fail_only_primary_evidence_move(source, destination):
+                source_path = Path(source)
+                destination_path = Path(destination)
+                if source_path == store.path and ".corrupt-" in destination_path.name:
+                    raise PermissionError("injected evidence rename failure")
+                return real_replace(source, destination)
+
+            with patch("cinepulse.job_store.os.replace", side_effect=fail_only_primary_evidence_move):
+                recovered = store.load(recover_backup=True)
+
+            self.assertEqual(0, recovered.revision)
+            evidence = list(root.glob("manifest.json.corrupt-*"))
+            self.assertEqual(1, len(evidence))
+            self.assertEqual("locked-corrupt", evidence[0].read_text(encoding="utf-8"))
     def test_both_primary_and_backup_invalid_are_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = JobStore(Path(temporary) / "manifest.json")
