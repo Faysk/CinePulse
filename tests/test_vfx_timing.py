@@ -184,6 +184,7 @@ class VfxTimingTests(unittest.TestCase):
     def test_vfx_cancellation_terminates_process_tree(self) -> None:
         process = _FakeProcess(0)
 
+        cancelled_states = iter((False, True))
         with (
             patch("cinepulse.vfx.load_music_envelope", return_value=_FakeEnvelope()),
             patch(
@@ -229,7 +230,7 @@ class VfxTimingTests(unittest.TestCase):
                     False,
                     70.0,
                     lambda _value: None,
-                    lambda: True,
+                    lambda: next(cancelled_states),
                     lambda _process: None,
                     lambda _line: None,
                     gpu_index=2,
