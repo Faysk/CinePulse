@@ -49,6 +49,7 @@ class PreviewVideoGeometry:
     frame_count: int | None = None
     duration: float | None = None
     has_audio: bool = False
+    audio_stream_count: int | None = None
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0 or self.fps <= 0:
@@ -59,6 +60,11 @@ class PreviewVideoGeometry:
             raise ValueError("invalid Preview frame count")
         if self.duration is not None and self.duration <= 0:
             raise ValueError("invalid Preview duration")
+        if self.audio_stream_count is not None:
+            if self.audio_stream_count < 0:
+                raise ValueError("invalid Preview audio stream count")
+            if self.has_audio != (self.audio_stream_count > 0):
+                raise ValueError("Preview audio presence/count contract is inconsistent")
 
     @property
     def frame_bytes(self) -> int:
@@ -209,6 +215,11 @@ def probe_preview_geometry(ffprobe: str, source: Path) -> PreviewVideoGeometry:
             isinstance(item, dict) and item.get("codec_type") == "audio"
             for item in streams
         ),
+        audio_stream_count=sum(
+            1
+            for item in streams
+            if isinstance(item, dict) and item.get("codec_type") == "audio"
+        ),
     )
 
 
@@ -247,7 +258,7 @@ def build_temporal_encoder_command(
         command += bounded_audio_input_args(str(source), geometry.frame_bound_duration)
     command += ["-map", "0:v:0"]
     if geometry.has_audio:
-        command += ["-map", "1:a:0", "-c:a", "copy"]
+        command += ["-map", "1:a?", "-c:a", "copy"]
     else:
         command += ["-an"]
     if plan.color_filter:
