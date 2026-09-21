@@ -8,6 +8,16 @@ from cinepulse.vfx import build_vfx_filter_graph
 
 
 class VfxTimingTests(unittest.TestCase):
+    def test_vfx_has_one_shot_cpu_encoder_fallbacks(self) -> None:
+        source = inspect.getsource(vfx_module.render_vfx_intermediate)
+        self.assertIn("fallback_video_args: list[str] | None = None", source)
+        self.assertIn("VFX intermediário: H.264 NVENC falhou; repetindo com libx264.", source)
+        self.assertIn("VFX fused: NVENC final falhou; repetindo entrega com encoder CPU equivalente.", source)
+        self.assertIn("attempts = [primary_video_args]", source)
+        self.assertIn("attempts.append(fallback_args)", source)
+        self.assertIn("if return_code == 0:", source)
+        self.assertNotIn("while True", source)
+
     def test_direct_nvenc_fallback_has_explicit_gpu_selection(self) -> None:
         source = inspect.getsource(vfx_module.render_vfx_intermediate)
         self.assertIn("gpu_index: int = 0", source)
