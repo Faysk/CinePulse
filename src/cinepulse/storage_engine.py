@@ -471,6 +471,52 @@ def safe_rmtree(path: Path) -> None:
     except OSError:
         pass
 
+
+def reset_directory_for_retry(
+    path: Path,
+    *,
+    timeout_seconds: float = 5.0,
+    retry_seconds: float = 0.05,
+) -> None:
+    """Prepare an empty frame directory, retrying transient filesystem locks.
+
+    Cleanup-only callers may use :func:`safe_rmtree`, but a retry path must
+    never write new frames on top of leftovers from a failed attempt. Windows
+    can keep FFmpeg/NCNN files locked briefly after process exit, so retry the
+    destructive reset for a bounded interval and fail clearly if the directory
+    cannot be proven empty.
+    """
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    delay = max(0.001, float(retry_seconds))
+    last_error: OSError | None = None
+
+    while True:
+        try:
+            if path.exists():
+                if not path.is_dir():
+                    raise NotADirectoryError(f"caminho de frames não é diretório: {path}")
+                shutil.rmtree(path)
+            path.mkdir(parents=False, exist_ok=False)
+            if any(path.iterdir()):
+                raise OSError(f"diretório de retry não ficou vazio: {path}")
+            return
+        except FileNotFoundError:
+            # Another cleanup may have removed the path between the existence
+            # check and rmtree. Retry immediately and recreate it.
+            last_error = None
+        except OSError as exc:
+            last_error = exc
+
+        if time.monotonic() >= deadline:
+            detail = f": {last_error}" if last_error is not None else ""
+            raise RuntimeError(
+                f"Não foi possível preparar diretório limpo para retry: {path}{detail}"
+            ) from last_error
+        time.sleep(delay)
+
 @dataclass(frozen=True)
 class ScratchProbe:
     path: Path
