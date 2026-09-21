@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest import mock
 
 from cinepulse.render_history import RenderHistory, export_redacted_history
 
@@ -35,6 +36,18 @@ class RenderHistoryTests(TestCase):
             self.assertEqual(payload["settings"]["effects"], ["Aurora"])
             self.assertEqual("preflight", manifest["state"])
             self.assertEqual(history.job_id, manifest["job_id"])
+
+    def test_history_metadata_is_fsynced_and_leaves_no_atomic_temps(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch("cinepulse.render_history.os.fsync", wraps=__import__("os").fsync) as fsync:
+                history = RenderHistory.start(root, Settings(), preview=False, app_version="x")
+                history.write_plan({"fingerprint": "abc"})
+                history.write_contracts(verification_expected={"fps": 60})
+                history.write_verification({"passed": True})
+            self.assertGreaterEqual(fsync.call_count, 4)
+            self.assertEqual([], list(history.job_dir.glob("*.tmp-*")))
+            self.assertEqual("abc", json.loads((history.job_dir / "plan.json").read_text(encoding="utf-8"))["fingerprint"])
 
     def test_contract_artifacts_finish_and_manifest_are_persisted(self):
         with TemporaryDirectory() as temp:
