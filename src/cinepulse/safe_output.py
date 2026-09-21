@@ -8,6 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class AtomicOutput:
     final: Path
@@ -30,6 +45,13 @@ class AtomicOutput:
     def commit(self) -> Path:
         if not self.partial.is_file() or self.partial.stat().st_size == 0:
             raise RuntimeError("A saída temporária não existe ou está vazia.")
+        # Make the verified candidate durable before the atomic hand-off. If
+        # fsync fails, the previous final remains untouched and the partial stays
+        # available for recovery/inspection.
+        with self.partial.open("rb+") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
+
         # final and partial intentionally live in the same directory/filesystem.
         # os.replace(partial, final) therefore provides the atomic hand-off we
         # need while leaving an existing final untouched until the last step.
@@ -37,6 +59,7 @@ class AtomicOutput:
         # window in which the user's valid output disappeared from final.
         self.backup.unlink(missing_ok=True)
         os.replace(self.partial, self.final)
+        _fsync_directory(self.final.parent)
         return self.final
 
     def discard(self, *, timeout_seconds: float = 5.0, retry_seconds: float = 0.05) -> None:
@@ -64,20 +87,6 @@ class RenderJournal:
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def _fsync_directory(self) -> None:
-        if os.name == "nt":
-            return
-        try:
-            descriptor = os.open(self.path.parent, os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            os.fsync(descriptor)
-        except OSError:
-            pass
-        finally:
-            os.close(descriptor)
-
     def _write_payload(self, payload: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f"{self.path.name}.tmp-{uuid.uuid4().hex}")
@@ -88,7 +97,7 @@ class RenderJournal:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
-            self._fsync_directory()
+            _fsync_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -134,7 +143,7 @@ class RenderJournal:
         existed = self.path.exists()
         self.path.unlink(missing_ok=True)
         if existed:
-            self._fsync_directory()
+            _fsync_directory(self.path.parent)
 
 
 def process_alive(pid: int) -> bool:
