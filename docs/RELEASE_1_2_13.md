@@ -19,6 +19,14 @@ O renderer VFX agora trabalha com no máximo duas tentativas de encoder:
 
 O envelope musical, efeitos, frame count, áudio frame-bound, muxer e metadados de cor são preservados entre as tentativas. Cancelamento nunca é convertido em retry.
 
+## Classificação do retry
+
+O fallback CPU é acionado somente quando as linhas reais do FFmpeg indicam falha de GPU/NVENC. Erros de disco, filtro, input e outras falhas não-GPU continuam fail-fast e preservam o diagnóstico original.
+
+## Finalização comum
+
+O caminho final sem VFX também prepara um comando equivalente totalmente CPU (`libx265`). Se o fast-path resident ou o NVENC baseline falhar por erro classificado como GPU, o partial é descartado e a entrega é repetida sem depender novamente de NVENC.
+
 ## Proteções mantidas
 
 Continuam ativos AtomicOutput, verificação final, integridade de frames/pacotes, timeline CFR exata, pinning multi-GPU, cancelamento de processos e fallbacks neurais pós-falha.
