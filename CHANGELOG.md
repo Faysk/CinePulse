@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.18 — 2026-09-21
+
+- Overlay Composer deixa de usar `-t profile.duration` como corte global no mux final;
+- o número de quadros do Composer passa a ser uma função explícita do contrato `round(duration*fps)` e a duração real da timeline deriva de `frames/fps`;
+- o áudio do mux é limitado apenas na própria entrada com `bounded_audio_input_args`, preservando o vídeo frame-bound;
+- o vídeo final do Composer usa `-frames:v <frames>` mesmo em stream-copy, impedindo corte do último quadro em cadências fracionárias;
+- antes do `AtomicOutput.commit()`, o FFprobe conta os quadros do resultado e o export falha fechado se a contagem não coincidir exatamente;
+- a análise dos envelopes musicais usa a mesma duração CFR real da saída;
+- adiciona teste real de FFmpeg com base estática + áudio separado em 30000/1001 fps para provar 30 quadros completos em uma timeline de 1.001 s.
+
 ## 1.2.17 — 2026-09-21
 
 - recuperação de `.partial` no startup deixa de aceitar apenas `duration > 0` e resolução não-zero; passa a usar o mesmo contrato de verificação da saída final;
