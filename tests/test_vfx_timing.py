@@ -18,10 +18,10 @@ class _FakeStdin:
 
 
 class _FakeProcess:
-    def __init__(self, return_code: int) -> None:
+    def __init__(self, return_code: int, lines: list[bytes] | None = None) -> None:
         self.return_code = return_code
         self.stdin = _FakeStdin()
-        self.stdout = []
+        self.stdout = list(lines or [])
 
     def wait(self) -> int:
         return self.return_code
@@ -47,7 +47,11 @@ class VfxTimingTests(unittest.TestCase):
 
         def fake_popen(command, **_kwargs):
             commands.append(list(command))
-            return _FakeProcess(next(return_codes))
+            code = next(return_codes)
+            return _FakeProcess(
+                code,
+                [b"Failed to initialize NVENC\n"] if code else [],
+            )
 
         with (
             patch("cinepulse.vfx.load_music_envelope", return_value=_FakeEnvelope()),
@@ -110,7 +114,11 @@ class VfxTimingTests(unittest.TestCase):
 
         def fake_popen(command, **_kwargs):
             commands.append(list(command))
-            return _FakeProcess(next(return_codes))
+            code = next(return_codes)
+            return _FakeProcess(
+                code,
+                [b"Failed to initialize NVENC\n"] if code else [],
+            )
 
         with (
             patch("cinepulse.vfx.load_music_envelope", return_value=_FakeEnvelope()),
@@ -169,6 +177,65 @@ class VfxTimingTests(unittest.TestCase):
         self.assertEqual("libx265", commands[1][commands[1].index("-c:v") + 1])
         self.assertNotIn("-gpu", commands[1])
         self.assertIn("+faststart", commands[1])
+
+    def test_direct_vfx_non_gpu_failure_does_not_retry_cpu(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_popen(command, **_kwargs):
+            commands.append(list(command))
+            return _FakeProcess(1, [b"No space left on device\n"])
+
+        with (
+            patch("cinepulse.vfx.load_music_envelope", return_value=_FakeEnvelope()),
+            patch(
+                "cinepulse.vfx.choose_vfx_render_spec",
+                return_value=SimpleNamespace(
+                    width=2,
+                    height=2,
+                    fps=1.0,
+                    label="test",
+                    native_spatial=True,
+                    native_temporal=True,
+                ),
+            ),
+            patch(
+                "cinepulse.vfx.StudioFrameGenerator",
+                return_value=SimpleNamespace(make=lambda *args, **kwargs: b"frame"),
+            ),
+            patch("cinepulse.vfx._spawn_vfx_process", side_effect=fake_popen),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "No space left on device"):
+                vfx_module.render_vfx_intermediate(
+                    "ffmpeg",
+                    "master.mp4",
+                    "audio.wav",
+                    "out.mp4",
+                    1.0,
+                    {"Aurora"},
+                    "#ffffff",
+                    1.0,
+                    0.5,
+                    1920,
+                    1080,
+                    30.0,
+                    "50M",
+                    "100M",
+                    "200M",
+                    False,
+                    8,
+                    "Todos equilibrados",
+                    80.0,
+                    80.0,
+                    False,
+                    70.0,
+                    lambda _value: None,
+                    lambda: False,
+                    lambda _process: None,
+                    lambda _line: None,
+                    gpu_index=2,
+                )
+
+        self.assertEqual(1, len(commands))
 
     def test_vfx_has_one_shot_cpu_encoder_fallbacks(self) -> None:
         source = inspect.getsource(vfx_module.render_vfx_intermediate)
