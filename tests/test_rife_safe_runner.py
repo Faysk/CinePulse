@@ -242,6 +242,7 @@ class RifeSafeRunnerTests(unittest.TestCase):
                 ),
                 patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
                 patch("cinepulse.rife_safe_runner._move_native_frames"),
+                patch("cinepulse.rife_safe_runner._promote_atomic_output"),
             ):
                 applied = run_safe_rife(
                     rife_executable=root / "rife.exe",
@@ -347,6 +348,7 @@ class RifeSafeRunnerTests(unittest.TestCase):
                 ),
                 patch("cinepulse.rife_safe_runner._run_native_with_rollback", side_effect=fake_rollback),
                 patch("cinepulse.rife_safe_runner._move_native_frames"),
+                patch("cinepulse.rife_safe_runner._promote_atomic_output"),
             ):
                 applied = run_safe_rife(
                     rife_executable=root / "rife.exe",
