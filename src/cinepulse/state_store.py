@@ -71,7 +71,7 @@ def _queue_from_payload(payload: Any) -> tuple[list[dict], bool]:
 
 
 def _presets_from_payload(payload: Any) -> tuple[dict[str, dict], bool]:
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and ("kind" in payload or "items" in payload):
         schema = int(payload.get("schema") or 0)
         if schema > PRESETS_SCHEMA:
             raise StateSchemaTooNew(f"Presets usam schema futuro {schema}; esta versão suporta até {PRESETS_SCHEMA}.")
