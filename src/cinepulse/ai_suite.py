@@ -15,6 +15,21 @@ AI_ROOT = component_path("ai")
 MODELS = AI_ROOT / "models"
 REPOS = AI_ROOT / "repos"
 VENV_PYTHON = AI_ROOT / "venv" / "Scripts" / "python.exe"
+REAL_ESRGAN_DIR = component_path("real-esrgan")
+REAL_ESRGAN_EXE = REAL_ESRGAN_DIR / "realesrgan-ncnn-vulkan.exe"
+REAL_ESRGAN_MODEL = REAL_ESRGAN_DIR / "models" / "realesr-animevideov3-x2.bin"
+REAL_ESRGAN_PARAM = REAL_ESRGAN_DIR / "models" / "realesr-animevideov3-x2.param"
+
+
+def _usable_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _all_usable_files(paths: tuple[Path, ...]) -> bool:
+    return bool(paths) and all(_usable_file(path) for path in paths)
 
 
 @dataclass(frozen=True)
@@ -32,7 +47,7 @@ class AiModule:
 
     @property
     def installed(self) -> bool:
-        return self.detector() if self.detector else all(path.exists() for path in self.required)
+        return self.detector() if self.detector else _all_usable_files(self.required)
 
     @property
     def size_bytes(self) -> int:
@@ -48,6 +63,42 @@ RIFE_EXE = RIFE_DIR / "rife-ncnn-vulkan.exe"
 RIFE_PYTHON_MODEL = MODELS / "rife" / "practical-rife-4.25" / "train_log" / "flownet.pkl"
 RIFE_SCRIPT = REPOS / "practical-rife" / "inference_video.py"
 RIFE_NCNN_MODEL = RIFE_DIR / "rife-v4.6"
+RIFE_MODEL_BIN = RIFE_NCNN_MODEL / "flownet.bin"
+RIFE_MODEL_PARAM = RIFE_NCNN_MODEL / "flownet.param"
+REAL_ESRGAN_REQUIRED = (REAL_ESRGAN_EXE, REAL_ESRGAN_MODEL, REAL_ESRGAN_PARAM)
+RIFE_REQUIRED = (RIFE_EXE, RIFE_MODEL_BIN, RIFE_MODEL_PARAM)
+DEMUCS_REQUIRED = (VENV_PYTHON, MODELS / "demucs" / "local_repo" / "htdemucs_ft.yaml") + tuple(
+    MODELS / "demucs" / "local_repo" / name
+    for name in (
+        "f7e0c4bc-ba3fe64a.th",
+        "d12395a8-e57c48e6.th",
+        "92cfc3b6-ef3bcb9c.th",
+        "04573f0d-f3cf25b2.th",
+    )
+)
+LTX_REQUIRED_FILES = (
+    MODELS / "ltx-2.3" / "ltx-2.3-22b-distilled-1.1.safetensors",
+    MODELS / "ltx-2.3" / "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+)
+
+
+def real_esrgan_available() -> bool:
+    return _all_usable_files(REAL_ESRGAN_REQUIRED)
+
+
+def rife_available() -> bool:
+    return _all_usable_files(RIFE_REQUIRED)
+
+
+def demucs_available() -> bool:
+    return _all_usable_files(DEMUCS_REQUIRED)
+
+
+def _ltx_available() -> bool:
+    try:
+        return (REPOS / "ltx-2").is_dir() and _all_usable_files(LTX_REQUIRED_FILES)
+    except OSError:
+        return False
 
 
 def _vmaf_available() -> bool:
@@ -68,16 +119,13 @@ def _vmaf_available() -> bool:
 MODULES = (
     AiModule(
         "realesrgan", "Real-ESRGAN NCNN", "Upscale local com recuperação de detalhes",
-        (
-            component_path("real-esrgan") / "realesrgan-ncnn-vulkan.exe",
-            component_path("real-esrgan") / "models" / "realesr-animevideov3-x2.bin",
-        ),
-        "Integrado e validado em render real", None, "real-esrgan", download_bytes=8 * 1024 * 1024,
+        REAL_ESRGAN_REQUIRED,
+        "Integrado e validado em render real", real_esrgan_available, "real-esrgan", download_bytes=8 * 1024 * 1024,
     ),
     AiModule(
         "rife", "RIFE 4.6 NCNN / 4.25", "Interpolação neural de quadros para 60/120 fps",
-        (RIFE_EXE, RIFE_NCNN_MODEL / "flownet.bin", RIFE_NCNN_MODEL / "flownet.param"),
-        "Integrado, validado e com fallback FFmpeg", None, "rife", download_bytes=400 * 1024 * 1024,
+        RIFE_REQUIRED,
+        "Integrado, validado e com fallback FFmpeg", rife_available, "rife", download_bytes=400 * 1024 * 1024,
     ),
     AiModule(
         "basicvsrpp", "BasicVSR++ NTIRE", "Upscale e restauração temporal consistente",
@@ -87,12 +135,8 @@ MODULES = (
     ),
     AiModule(
         "demucs", "Hybrid Transformer Demucs", "Separação de voz, bateria, baixo e instrumentos",
-        (VENV_PYTHON, MODELS / "demucs" / "local_repo" / "htdemucs_ft.yaml") + tuple(
-            MODELS / "demucs" / "local_repo" / name for name in (
-                "f7e0c4bc-ba3fe64a.th", "d12395a8-e57c48e6.th",
-                "92cfc3b6-ef3bcb9c.th", "04573f0d-f3cf25b2.th",
-            )
-        ), "Integrado e validado para condução dos VFX", None, "demucs", download_bytes=3500 * 1024 * 1024,
+        DEMUCS_REQUIRED,
+        "Integrado e validado para condução dos VFX", demucs_available, "demucs", download_bytes=3500 * 1024 * 1024,
     ),
     AiModule(
         "clap", "LAION CLAP HTSAT", "Atmosfera, intenção e direção musical",
@@ -128,10 +172,9 @@ MODULES = (
     ),
     AiModule(
         "ltx2", "LTX-2.3", "Geração local opcional de áudio e vídeo",
-        (REPOS / "ltx-2", MODELS / "ltx-2.3" / "ltx-2.3-22b-distilled-1.1.safetensors",
-         MODELS / "ltx-2.3" / "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"),
+        (REPOS / "ltx-2",) + LTX_REQUIRED_FILES,
         "Arquivos de 22B instalados; ainda não integrado ao CinePulse",
-        installer_component="ltx2", experimental=True, license="LTX-2 Community License", download_bytes=47146217249,
+        detector=_ltx_available, installer_component="ltx2", experimental=True, license="LTX-2 Community License", download_bytes=47146217249,
     ),
 )
 
