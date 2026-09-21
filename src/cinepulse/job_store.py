@@ -116,7 +116,7 @@ class JobStore:
                         f"manifesto e backup inválidos: primary={primary_error}; backup={backup_error}"
                     ) from backup_error
                 if self.path.exists():
-                    evidence = self.path.with_name(f"{self.path.name}.corrupt-{int(time.time())}")
+                    evidence = self.path.with_name(f"{self.path.name}.corrupt-{time.time_ns()}")
                     try:
                         os.replace(self.path, evidence)
                     except OSError:
