@@ -113,7 +113,7 @@ class RecoveryServiceTests(unittest.TestCase):
             self.assertIn("reconectar_fonte", candidate.actions)
             self.assertEqual(before, after)
 
-    def test_backup_only_job_is_discovered_and_primary_is_restored(self) -> None:
+    def test_backup_only_job_is_discovered_for_audit_without_restoring_primary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source.mp4"
@@ -122,14 +122,37 @@ class RecoveryServiceTests(unittest.TestCase):
             primary = job_dir / "manifest.json"
             backup = job_dir / "manifest.json.bak"
             shutil.copy2(primary, backup)
+            backup_before = backup.read_bytes()
             primary.unlink()
 
             candidates = RecoveryService(root).discover()
 
             self.assertEqual(1, len(candidates))
-            self.assertEqual("recoverable", candidates[0].classification)
-            self.assertTrue(primary.is_file())
-            self.assertEqual(primary.read_bytes(), backup.read_bytes())
+            self.assertEqual("needs_audit", candidates[0].classification)
+            self.assertIn("backup", candidates[0].reason.casefold())
+            self.assertFalse(primary.exists())
+            self.assertEqual(backup_before, backup.read_bytes())
+            self.assertEqual([], list(job_dir.glob("manifest.json.corrupt-*")))
+
+    def test_corrupt_primary_with_valid_backup_is_observational(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.mp4"
+            source.write_bytes(b"media")
+            job_dir = self._job(root, "job-1", "paused", source=source)
+            primary = job_dir / "manifest.json"
+            backup = job_dir / "manifest.json.bak"
+            shutil.copy2(primary, backup)
+            backup_before = backup.read_bytes()
+            primary.write_text("{broken-primary", encoding="utf-8")
+            primary_before = primary.read_bytes()
+
+            candidate = RecoveryService(root).discover()[0]
+
+            self.assertEqual("needs_audit", candidate.classification)
+            self.assertEqual(primary_before, primary.read_bytes())
+            self.assertEqual(backup_before, backup.read_bytes())
+            self.assertEqual([], list(job_dir.glob("manifest.json.corrupt-*")))
 
     def test_unreadable_manifest_and_backup_remain_visible_as_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
