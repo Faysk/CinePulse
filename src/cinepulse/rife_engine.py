@@ -16,7 +16,15 @@ class RifePaths:
 
     @property
     def available(self) -> bool:
-        return self.executable.is_file() and self.model.is_dir()
+        required = (
+            self.executable,
+            self.model / "flownet.bin",
+            self.model / "flownet.param",
+        )
+        try:
+            return all(path.is_file() and path.stat().st_size > 0 for path in required)
+        except OSError:
+            return False
 
 
 def target_frame_count(duration: float, fps: float, minimum: int = 2) -> int:
