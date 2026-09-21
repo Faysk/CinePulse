@@ -5356,7 +5356,19 @@ class VideoOptimizerStudio:
                         "Comparação A/B falhou depois do preview principal já validado; "
                         f"mantendo o preview principal. Motivo: {exc}"
                     )
-            self._events.put(("done", str(display_path), preview, display_path.stat().st_size, report_path, history.path if history else ""))
+            try:
+                display_size = display_path.stat().st_size
+            except OSError as exc:
+                self._log(
+                    "RESULT WARNING: não foi possível ler o tamanho do resultado para a UI; "
+                    f"a entrega verificada permanece válida. {type(exc).__name__}: {exc}"
+                )
+                display_path = output_path
+                try:
+                    display_size = output_path.stat().st_size
+                except OSError:
+                    display_size = 0
+            self._events.put(("done", str(display_path), preview, display_size, report_path, history.path if history else ""))
         except InterruptedError:
             if atomic_output:
                 atomic_output.discard()
