@@ -20,7 +20,9 @@ O downloader hash-locked do instalador passa a repetir falhas transitórias de r
 
 ## Color-only e VFR
 
-O caminho simples adiciona `-fps_mode passthrough`, preservando timestamps em fontes VFR em vez de inventar uma cadência implícita. A validação continua exigindo a mesma quantidade de quadros e duração compatível.
+O caminho simples adiciona `-fps_mode passthrough`, preservando timestamps em fontes VFR em vez de inventar uma cadência implícita. A reconstrução temporal continua recusando fontes VFR porque o transporte raw RGB não preserva PTS de forma segura.
+
+A saída temporal gerada pelo CinePulse declara CFR explicitamente com `-r` + `-fps_mode cfr`. Na validação do candidato, a prova usa contagem exata de quadros, FPS e duração frame-bound; não usa a diferença agregada `avg_frame_rate` vs `r_frame_rate` como veto, porque FFprobe pode divergir nesses campos em clipes CFR muito curtos sem haver VFR real.
 
 ## Teste real
 
