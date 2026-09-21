@@ -29,6 +29,105 @@ from cinepulse.rife_recovery import (
 
 
 class RifeRecoveryTests(unittest.TestCase):
+    def test_final_nvenc_failure_retries_once_with_cpu_delivery(self) -> None:
+        contract = SimpleNamespace(use_cpu=False)
+        primary_delivery = SimpleNamespace(video_codec="HEVC")
+        cpu_delivery = SimpleNamespace(video_codec="HEVC")
+        command_calls: list[bool] = []
+
+        def fake_command(_contract, _master, _destination, *, duration, audio_filter="", force_cpu=False):
+            command_calls.append(bool(force_cpu))
+            command = ["ffmpeg", "-c:v", "libx265" if force_cpu else "hevc_nvenc"]
+            return command, "color", cpu_delivery if force_cpu else primary_delivery
+
+        run_calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            run_calls.append(list(command))
+            if len(run_calls) == 1:
+                raise rife_recovery.RecoveryError("Failed to initialize NVENC")
+
+        with TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "out.mp4"
+            destination.write_bytes(b"partial")
+            with (
+                mock.patch("cinepulse.rife_recovery._final_command", side_effect=fake_command),
+                mock.patch("cinepulse.rife_recovery._run_logged", side_effect=fake_run),
+            ):
+                _color, delivery = rife_recovery._run_final_encode_with_fallback(
+                    contract,
+                    Path("master.mkv"),
+                    destination,
+                    duration=1.0,
+                    audio_filter="",
+                    label="final-encode",
+                    log=lambda _message: None,
+                    timeout_seconds=60.0,
+                )
+
+        self.assertEqual([False, True], command_calls)
+        self.assertEqual(2, len(run_calls))
+        self.assertEqual("libx265", run_calls[1][run_calls[1].index("-c:v") + 1])
+        self.assertIs(delivery, cpu_delivery)
+
+    def test_final_non_gpu_failure_does_not_retry_cpu(self) -> None:
+        contract = SimpleNamespace(use_cpu=False)
+        command_calls: list[bool] = []
+
+        def fake_command(_contract, _master, _destination, *, duration, audio_filter="", force_cpu=False):
+            command_calls.append(bool(force_cpu))
+            return ["ffmpeg", "-c:v", "hevc_nvenc"], "color", SimpleNamespace(video_codec="HEVC")
+
+        with (
+            mock.patch("cinepulse.rife_recovery._final_command", side_effect=fake_command),
+            mock.patch(
+                "cinepulse.rife_recovery._run_logged",
+                side_effect=rife_recovery.RecoveryError("No space left on device"),
+            ),
+        ):
+            with self.assertRaisesRegex(rife_recovery.RecoveryError, "No space left"):
+                rife_recovery._run_final_encode_with_fallback(
+                    contract,
+                    Path("master.mkv"),
+                    Path("out.mp4"),
+                    duration=1.0,
+                    audio_filter="",
+                    label="final-encode",
+                    log=lambda _message: None,
+                    timeout_seconds=60.0,
+                )
+
+        self.assertEqual([False], command_calls)
+
+    def test_original_cpu_recovery_never_retries_redundantly(self) -> None:
+        contract = SimpleNamespace(use_cpu=True)
+        command_calls: list[bool] = []
+
+        def fake_command(_contract, _master, _destination, *, duration, audio_filter="", force_cpu=False):
+            command_calls.append(bool(force_cpu))
+            return ["ffmpeg", "-c:v", "libx265"], "color", SimpleNamespace(video_codec="HEVC")
+
+        with (
+            mock.patch("cinepulse.rife_recovery._final_command", side_effect=fake_command),
+            mock.patch(
+                "cinepulse.rife_recovery._run_logged",
+                side_effect=rife_recovery.RecoveryError("CUDA device failure"),
+            ),
+        ):
+            with self.assertRaises(rife_recovery.RecoveryError):
+                rife_recovery._run_final_encode_with_fallback(
+                    contract,
+                    Path("master.mkv"),
+                    Path("out.mp4"),
+                    duration=1.0,
+                    audio_filter="",
+                    label="final-encode",
+                    log=lambda _message: None,
+                    timeout_seconds=60.0,
+                )
+
+        self.assertEqual([False], command_calls)
+
     def test_recovery_master_concat_does_not_use_duration_clip(self) -> None:
         source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
         start = source.index("def concatenate_master(")
