@@ -164,6 +164,59 @@ from .storage_engine import (
 )
 
 
+def __valid_cached_wav(path: Path) -> bool:
+    """Validate the minimal RIFF/RF64 WAVE structure used by Demucs cache."""
+
+    try:
+        if not path.is_file():
+            return False
+        size = path.stat().st_size
+        if size <= 44:
+            return False
+        with path.open("rb") as handle:
+            header = handle.read(12)
+            if len(header) != 12:
+                return False
+            container = header[:4]
+            if container not in {b"RIFF", b"RF64"} or header[8:12] != b"WAVE":
+                return False
+            if container == b"RIFF":
+                declared_size = int.from_bytes(header[4:8], "little", signed=False) + 8
+                if declared_size > size:
+                    return False
+
+            found_fmt = False
+            offset = 12
+            for _ in range(128):
+                if offset + 8 > size:
+                    return False
+                handle.seek(offset)
+                chunk_header = handle.read(8)
+                if len(chunk_header) != 8:
+                    return False
+                chunk_id = chunk_header[:4]
+                chunk_size = int.from_bytes(chunk_header[4:8], "little", signed=False)
+                data_start = offset + 8
+
+                if chunk_id == b"fmt ":
+                    if chunk_size < 16 or data_start + chunk_size > size:
+                        return False
+                    found_fmt = True
+                elif chunk_id == b"data":
+                    if not found_fmt or chunk_size == 0:
+                        return False
+                    if container == b"RF64" and chunk_size == 0xFFFFFFFF:
+                        return data_start < size
+                    return data_start + chunk_size <= size
+
+                next_offset = data_start + chunk_size + (chunk_size & 1)
+                if next_offset <= offset or next_offset > size:
+                    return False
+                offset = next_offset
+    except OSError:
+        return False
+    return False
+
 APP_TITLE = "CinePulse"
 APP_DIR = PATHS.root
 APP_TEMP = PATHS.temp
@@ -6156,15 +6209,9 @@ class VideoOptimizerStudio:
         )
         separated = cache_root / "htdemucs_ft" / source.stem
 
-        def valid_cached_wav(path: Path) -> bool:
-            try:
-                return path.is_file() and path.stat().st_size > 44
-            except OSError:
-                return False
-
         def locate(name: str) -> Path | None:
             direct = separated / f"{name}.wav"
-            if valid_cached_wav(direct):
+            if _valid_cached_wav(direct):
                 return direct
             if not cache_root.exists():
                 return None
@@ -6172,7 +6219,7 @@ class VideoOptimizerStudio:
                 (
                     candidate
                     for candidate in cache_root.rglob(f"{name}.wav")
-                    if valid_cached_wav(candidate)
+                    if _valid_cached_wav(candidate)
                     and not any(part.startswith(".demucs-partial-") for part in candidate.parts)
                 ),
                 None,
@@ -6233,7 +6280,7 @@ class VideoOptimizerStudio:
                 invalid = [
                     path.name
                     for path in required_stems
-                    if not valid_cached_wav(path)
+                    if not _valid_cached_wav(path)
                 ]
                 if invalid:
                     raise RuntimeError(
@@ -6251,7 +6298,7 @@ class VideoOptimizerStudio:
         if len(stems) == 1:
             return str(stems[0])
         mixed = cache_root / ("reactive_" + "_".join(selected) + ".wav")
-        if not valid_cached_wav(mixed):
+        if not _valid_cached_wav(mixed):
             mixed.unlink(missing_ok=True)
             partial_mixed = mixed.with_name(
                 f"{mixed.stem}.partial-{os.getpid()}-{time.time_ns()}{mixed.suffix}"
@@ -6273,7 +6320,7 @@ class VideoOptimizerStudio:
                 result = task.wait()
                 if result.cancelled or self._cancelled:
                     raise InterruptedError
-                if not valid_cached_wav(partial_mixed):
+                if not _valid_cached_wav(partial_mixed):
                     raise RuntimeError("Mistura reativa do Demucs não produziu WAV válido.")
                 os.replace(partial_mixed, mixed)
             finally:
