@@ -303,7 +303,8 @@ class RifeRecoveryTests(unittest.TestCase):
         self.assertIn("gpu_index=-1 if use_cpu else recovery_gpu_index()", source)
         self.assertIn('rife_gpu_index = -1 if contract.use_cpu else contract.gpu_index', source)
         self.assertIn('rife_jobs = "1:2:2" if contract.use_cpu else "1:1:1"', source)
-        self.assertGreaterEqual(source.count("use_cpu=contract.use_cpu"), 2)
+        self.assertIn("effective_use_cpu = bool(contract.use_cpu or force_cpu)", source)
+        self.assertGreaterEqual(source.count("use_cpu=effective_use_cpu"), 2)
 
     def test_recovery_self_test_uses_original_container_and_codec_contract(self) -> None:
         source = Path(rife_recovery.__file__).read_text(encoding="utf-8")
