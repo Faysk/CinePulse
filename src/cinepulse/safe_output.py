@@ -64,18 +64,23 @@ class RenderJournal:
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def write(self, atomic: AtomicOutput, preview: bool, expected: dict | None = None) -> None:
+    def _fsync_directory(self) -> None:
+        if os.name == "nt":
+            return
+        try:
+            descriptor = os.open(self.path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        finally:
+            os.close(descriptor)
+
+    def _write_payload(self, payload: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f"{self.path.name}.tmp-{uuid.uuid4().hex}")
-        payload = {
-            "schema": 1,
-            "pid": os.getpid(),
-            "started_at": time.time(),
-            "preview": bool(preview),
-            "final": str(atomic.final),
-            "partial": str(atomic.partial),
-            "expected": expected or {},
-        }
         content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         try:
             with temporary.open("xb") as handle:
@@ -83,30 +88,53 @@ class RenderJournal:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
-            if os.name != "nt":
-                try:
-                    descriptor = os.open(self.path.parent, os.O_RDONLY)
-                except OSError:
-                    descriptor = None
-                if descriptor is not None:
-                    try:
-                        os.fsync(descriptor)
-                    except OSError:
-                        pass
-                    finally:
-                        os.close(descriptor)
+            self._fsync_directory()
         finally:
             temporary.unlink(missing_ok=True)
+
+    def claim(self, preview: bool) -> None:
+        """Persist render ownership before the worker thread starts.
+
+        The richer output contract is written later, once AtomicOutput exists.
+        Keeping the initial owner record durable lets another CinePulse instance
+        detect the live renderer without sharing a fixed temporary filename.
+        """
+        self._write_payload(
+            {
+                "schema": 1,
+                "pid": os.getpid(),
+                "started_at": time.time(),
+                "preview": bool(preview),
+            }
+        )
+
+    def write(self, atomic: AtomicOutput, preview: bool, expected: dict | None = None) -> None:
+        self._write_payload(
+            {
+                "schema": 1,
+                "pid": os.getpid(),
+                "started_at": time.time(),
+                "preview": bool(preview),
+                "final": str(atomic.final),
+                "partial": str(atomic.partial),
+                "expected": expected or {},
+            }
+        )
 
     def read(self) -> dict | None:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return None
+        if not isinstance(payload, dict):
+            return None
         return payload if payload.get("schema") == 1 else None
 
     def clear(self) -> None:
+        existed = self.path.exists()
         self.path.unlink(missing_ok=True)
+        if existed:
+            self._fsync_directory()
 
 
 def process_alive(pid: int) -> bool:

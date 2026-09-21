@@ -119,5 +119,38 @@ class SafeOutputTests(unittest.TestCase):
             self.assertIsNone(journal.read())
 
 
+    def test_initial_owner_claim_is_fsynced_and_contains_no_output_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            with patch("cinepulse.safe_output.os.fsync", wraps=__import__("os").fsync) as fsync:
+                journal.claim(preview=True)
+            payload = journal.read()
+            self.assertEqual(1, payload["schema"])
+            self.assertTrue(payload["preview"])
+            self.assertGreater(payload["pid"], 0)
+            self.assertNotIn("partial", payload)
+            self.assertNotIn("final", payload)
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual([], list(root.glob("render.json.tmp-*")))
+
+    def test_clear_removes_durable_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.claim(preview=False)
+            self.assertTrue(journal.path.is_file())
+            journal.clear()
+            self.assertFalse(journal.path.exists())
+
+
+    def test_non_object_journal_is_treated_as_invalid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = RenderJournal(root / "render.json")
+            journal.path.write_text("[]", encoding="utf-8")
+            self.assertIsNone(journal.read())
+
+
 if __name__ == "__main__":
     unittest.main()
