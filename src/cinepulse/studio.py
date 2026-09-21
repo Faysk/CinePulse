@@ -5327,16 +5327,16 @@ class VideoOptimizerStudio:
                 deep=bool(settings.deep_verify and not preview),
             )
             if history is not None:
-                history.write_verification(verification["verification"])
+                self._history_write_verification_safely(history, verification["verification"])
             output_path = atomic_output.commit()
-            self._render_journal.clear()
+            self._clear_render_journal_safely("após promoção final")
             report_path = ""
             if not preview:
-                report_path = self._write_quality_report(
+                report_path = self._write_quality_report_safely(
                     output_path, settings, verification, final_timeline_duration, render_plan=render_plan,
                 )
             if history is not None:
-                history.finish("success", output=output_path, report=report_path)
+                self._history_finish_safely(history, "success", output=output_path, report=report_path)
             display_path = output_path
             if preview and settings.comparison_preview:
                 try:
@@ -5356,18 +5356,35 @@ class VideoOptimizerStudio:
                         "Comparação A/B falhou depois do preview principal já validado; "
                         f"mantendo o preview principal. Motivo: {exc}"
                     )
-            self._events.put(("done", str(display_path), preview, display_path.stat().st_size, report_path, history.path if history else ""))
+            try:
+                display_size = display_path.stat().st_size
+            except OSError as exc:
+                self._log(
+                    "RESULT WARNING: não foi possível ler o tamanho do resultado para a UI; "
+                    f"a entrega verificada permanece válida. {type(exc).__name__}: {exc}"
+                )
+                display_path = output_path
+                try:
+                    display_size = output_path.stat().st_size
+                except OSError:
+                    display_size = 0
+            self._events.put(("done", str(display_path), preview, display_size, report_path, history.path if history else ""))
         except InterruptedError:
             if atomic_output:
                 atomic_output.discard()
-            self._render_journal.clear()
+            self._clear_render_journal_safely("após cancelamento")
             if history is not None:
-                history.finish("cancelled", error="Execução cancelada pelo usuário.")
+                self._history_finish_safely(history, "cancelled", error="Execução cancelada pelo usuário.")
             self._events.put(("cancelled", history.path if history else ""))
         except Exception as exc:
             self._log("ERRO: " + str(exc))
             if history is not None:
-                history.finish("error", error=str(exc), output=atomic_output.final if atomic_output and atomic_output.final.exists() else None)
+                self._history_finish_safely(
+                    history,
+                    "error",
+                    error=str(exc),
+                    output=atomic_output.final if atomic_output and atomic_output.final.exists() else None,
+                )
             self._events.put(("error", str(exc), history.path if history else ""))
         finally:
             self._process = None
@@ -5387,6 +5404,71 @@ class VideoOptimizerStudio:
                     "log",
                     f"[{time.strftime('%H:%M:%S')}] RENDER LEASE WARNING: {lease_error}",
                 ))
+
+    def _history_write_verification_safely(self, history: RenderHistory, verification: dict) -> bool:
+        try:
+            history.write_verification(verification)
+            return True
+        except Exception as exc:
+            self._log(
+                "HISTORY WARNING: verificação final não pôde ser persistida; "
+                f"a validação em memória continua autoritativa. {type(exc).__name__}: {exc}"
+            )
+            return False
+
+    def _history_finish_safely(
+        self,
+        history: RenderHistory,
+        status: str,
+        *,
+        output: str | Path | None = None,
+        report: str | Path | None = None,
+        error: str = "",
+    ) -> bool:
+        try:
+            history.finish(status, output=output, report=report, error=error)
+            return True
+        except Exception as exc:
+            self._log(
+                f"HISTORY WARNING: não foi possível finalizar histórico como {status}. "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False
+
+    def _write_quality_report_safely(
+        self,
+        output_path: Path,
+        settings: RenderSettings,
+        verification,
+        final_timeline_duration: float,
+        *,
+        render_plan: RenderPlan,
+    ) -> str:
+        try:
+            return self._write_quality_report(
+                output_path,
+                settings,
+                verification,
+                final_timeline_duration,
+                render_plan=render_plan,
+            )
+        except Exception as exc:
+            self._log(
+                "REPORT WARNING: vídeo final já foi verificado e promovido, "
+                f"mas o relatório não pôde ser gravado. {type(exc).__name__}: {exc}"
+            )
+            return ""
+
+    def _clear_render_journal_safely(self, context: str) -> bool:
+        try:
+            self._render_journal.clear()
+            return True
+        except Exception as exc:
+            self._log(
+                f"RECOVERY WARNING: não foi possível limpar o journal {context}; "
+                f"o próximo startup poderá reconciliá-lo. {type(exc).__name__}: {exc}"
+            )
+            return False
 
     def _release_render_ownership(self) -> str:
         error = ""
