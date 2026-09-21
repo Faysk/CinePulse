@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$Version = '1.2.10',
+    [string]$Version = '1.2.9',
     [string]$Repository = '',
     [string]$MinisignPublicKey = '',
     [string]$MinisignSecretKey = '',
