@@ -53,7 +53,15 @@ class ExperimentalComponentTests(unittest.TestCase):
             self.assertTrue((destination / "new.bin").is_file())
             self.assertFalse((destination / "old.bin").exists())
             marker = json.loads((destination / ".cinepulse-experimental.json").read_text(encoding="utf-8"))
+            self.assertEqual(2, marker["schema"])
             self.assertEqual("new-hash", marker["sha256"])
+            self.assertTrue(marker["tree_fingerprint"].startswith("tree-v1:"))
+            self.assertTrue(
+                experimental_components._marker_matches(
+                    destination / ".cinepulse-experimental.json",
+                    "new-hash",
+                )
+            )
             self.assertFalse(destination.with_name("preview.previous").exists())
 
     def test_marker_failure_restores_previous_component(self) -> None:
@@ -84,6 +92,54 @@ class ExperimentalComponentTests(unittest.TestCase):
             marker.write_text("{broken", encoding="utf-8")
             self.assertFalse(experimental_components._marker_matches(marker, "hash"))
 
+
+    def test_marker_detects_modified_or_missing_installed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "bundle"
+            destination.mkdir()
+            payload = destination / "model.py"
+            payload.write_bytes(b"original")
+            marker = destination / ".cinepulse-experimental.json"
+            marker.write_text(
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "sha256": "archive-hash",
+                        "tree_fingerprint": experimental_components._tree_fingerprint(destination),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(experimental_components._marker_matches(marker, "archive-hash"))
+
+            payload.write_bytes(b"tampered")
+            self.assertFalse(experimental_components._marker_matches(marker, "archive-hash"))
+
+            marker.write_text(
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "sha256": "archive-hash",
+                        "tree_fingerprint": experimental_components._tree_fingerprint(destination),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload.unlink()
+            self.assertFalse(experimental_components._marker_matches(marker, "archive-hash"))
+
+    def test_legacy_marker_without_tree_fingerprint_is_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "bundle"
+            destination.mkdir()
+            (destination / "model.py").write_bytes(b"model")
+            marker = destination / ".cinepulse-experimental.json"
+            marker.write_text(
+                json.dumps({"schema": 1, "sha256": "archive-hash"}),
+                encoding="utf-8",
+            )
+            self.assertFalse(experimental_components._marker_matches(marker, "archive-hash"))
 
     def test_archive_rejects_symlink_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
