@@ -83,6 +83,42 @@ class RecoveryService:
             return "needs_audit", "Entrega existe, mas ainda precisa concluir a verificação.", ("inspecionar", "verificar", "preservar")
         return "blocked", f"Estado {manifest.state} exige inspeção.", ("inspecionar", "preservar")
 
+    @staticmethod
+    def _unreadable_candidate(job_dir: Path, error: BaseException) -> RecoveryCandidate:
+        """Keep preserved work visible even when both manifest copies are unreadable."""
+
+        updated_at = 0.0
+        for evidence in (
+            job_dir / "manifest.json",
+            job_dir / "manifest.json.bak",
+            job_dir,
+        ):
+            try:
+                updated_at = max(updated_at, float(evidence.stat().st_mtime))
+            except OSError:
+                pass
+        if updated_at <= 0:
+            updated_at = time.time()
+        return RecoveryCandidate(
+            job_id=job_dir.name,
+            history_dir=str(job_dir),
+            state="unreadable",
+            classification="blocked",
+            reason=(
+                "Manifesto do job não pôde ser lido com segurança; "
+                f"o trabalho foi preservado para inspeção. {type(error).__name__}: {error}"
+            ),
+            phase="manifest",
+            units_committed=0,
+            units_total=None,
+            source_hint="",
+            source_present=False,
+            updated_at=updated_at,
+            owner_pid=None,
+            owner_active=False,
+            actions=("inspecionar", "preservar"),
+        )
+
     def inspect_job(self, job_dir: Path) -> RecoveryCandidate | None:
         store = JobStore(job_dir / "manifest.json")
         manifest = store.load(recover_backup=True)
@@ -137,11 +173,16 @@ class RecoveryService:
         if not self.history_root.is_dir():
             return []
         candidates: list[RecoveryCandidate] = []
-        for manifest_path in sorted(self.history_root.glob("*/manifest.json")):
+        job_dirs = {
+            path.parent
+            for pattern in ("*/manifest.json", "*/manifest.json.bak")
+            for path in self.history_root.glob(pattern)
+        }
+        for job_dir in sorted(job_dirs):
             try:
-                candidate = self.inspect_job(manifest_path.parent)
-            except Exception:
-                continue
+                candidate = self.inspect_job(job_dir)
+            except Exception as exc:
+                candidate = self._unreadable_candidate(job_dir, exc)
             if candidate is not None:
                 candidates.append(candidate)
         return sorted(candidates, key=lambda item: item.updated_at, reverse=True)
