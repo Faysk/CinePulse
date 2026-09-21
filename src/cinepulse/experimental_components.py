@@ -163,7 +163,18 @@ def _download(
     log(f"{'Retomando' if existing else 'Baixando'} {destination.name}…")
     with urllib.request.urlopen(request, timeout=120) as response:
         resumed = existing > 0 and getattr(response, "status", 200) == 206
-        if not resumed:
+        if existing > 0 and not resumed:
+            # The server ignored Range. Drop the stale partial before checking
+            # headroom for a full restart; otherwise the old bytes consume disk
+            # while our earlier estimate accounts only for the remainder.
+            partial.unlink(missing_ok=True)
+            existing = 0
+            if expected_size is not None and shutil.disk_usage(destination.parent).free < expected_size:
+                raise RuntimeError(
+                    f"Espaço insuficiente para reiniciar o download completo de {destination.name}: "
+                    f"são necessários {expected_size} bytes."
+                )
+        elif not resumed:
             existing = 0
         try:
             response_size = int(response.headers.get("Content-Length") or 0)
