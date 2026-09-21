@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.14 — 2026-09-21
+
+- recovery crash-safe passa a usar o mesmo contrato GPU-first/CPU-fallback da renderização normal na codificação final;
+- o self-test do encoder recuperado também pode repetir `hevc_nvenc` com `libx265`, evitando bloquear uma recuperação válida apenas porque o NVENC falhou naquele momento;
+- retry CPU só ocorre quando a exceção contém evidência real de falha GPU/NVENC; disco cheio, filtro inválido, input quebrado, timeout e outros erros não-GPU continuam fail-fast;
+- o partial produzido pela tentativa GPU é removido antes do retry CPU para impedir reaproveitamento de container/trailer incompleto;
+- a `DeliveryPlan` devolvida pelo helper corresponde ao encoder que realmente venceu, mantendo a verificação final coerente após fallback;
+- adiciona testes para NVENC→CPU, falha não-GPU sem retry e jobs originalmente CPU sem tentativa redundante.
+
 ## 1.2.13 — 2026-09-21
 
 - master SDR passa a tentar H.264/NVENC no adaptador selecionado e, após falha real, remove a saída parcial e repete uma vez com libx264;
