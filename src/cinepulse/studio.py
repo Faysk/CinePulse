@@ -5268,7 +5268,11 @@ class VideoOptimizerStudio:
         try:
             self._run_ffmpeg(command, comparison_duration, 100, 0)
         except RuntimeError as exc:
-            if settings.use_cpu or "h264_nvenc" not in encoder_args:
+            if (
+                settings.use_cpu
+                or "h264_nvenc" not in encoder_args
+                or not looks_like_gpu_runtime_failure(exc)
+            ):
                 raise
             try:
                 comparison.unlink(missing_ok=True)
@@ -5731,7 +5735,7 @@ class VideoOptimizerStudio:
                     command, expected_duration, stage_progress_base, stage_progress_weight
                 )
             except RuntimeError as exc:
-                if policy is None:
+                if policy is None or not looks_like_gpu_runtime_failure(exc):
                     raise
                 invalidate_gpu_extract(exc)
                 safe_rmtree(destination)
@@ -5791,7 +5795,10 @@ class VideoOptimizerStudio:
                     try:
                         result = task.wait()
                     except RuntimeError as exc:
-                        if prefetched_policy is None:
+                        if (
+                            prefetched_policy is None
+                            or not looks_like_gpu_runtime_failure(exc)
+                        ):
                             raise
                         invalidate_gpu_extract(exc)
                         safe_rmtree(incoming)
