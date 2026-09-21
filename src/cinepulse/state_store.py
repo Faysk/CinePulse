@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -13,6 +14,14 @@ from typing import Any, Callable, TypeVar
 QUEUE_SCHEMA = 2
 PRESETS_SCHEMA = 1
 _T = TypeVar("_T")
+_LOCKS_GUARD = threading.Lock()
+_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _path_lock(path: Path) -> threading.RLock:
+    key = os.path.normcase(str(path.resolve(strict=False)))
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(key, threading.RLock())
 
 
 class StateSchemaTooNew(ValueError):
@@ -64,9 +73,13 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 
 def _atomic_write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    _backup(path)
     content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    _atomic_bytes(path, content)
+    # Backup + promotion form one local transaction. Unique temp files prevent
+    # temp collisions; the path lock also prevents Windows from racing two
+    # os.replace operations against the same primary/backup destination.
+    with _path_lock(path):
+        _backup(path)
+        _atomic_bytes(path, content)
 
 
 def _queue_from_payload(payload: Any) -> tuple[list[dict], bool]:
