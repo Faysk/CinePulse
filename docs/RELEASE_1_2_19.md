@@ -16,7 +16,7 @@ O caminho temporal deixa de mapear apenas `1:a:0` e preserva todas as faixas da 
 
 ## Bootstrap mais resiliente
 
-O downloader hash-locked do instalador passa a repetir falhas transitórias de rede com backoff antes de desistir. O `uv` usa o mesmo caminho verificado e o smoke neural de release recebe retry equivalente. SHA-256 continua obrigatório antes de qualquer promoção/extração.
+O downloader hash-locked do instalador passa a repetir falhas transitórias de rede com backoff antes de desistir. O `uv` usa o mesmo caminho verificado, o smoke neural de release recebe retry equivalente e o publisher também repete o download hash-locked do FFmpeg quando há 5xx transitório. SHA-256 continua obrigatório antes de qualquer promoção/extração.
 
 ## Color-only e VFR
 
