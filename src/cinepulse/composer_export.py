@@ -23,7 +23,7 @@ from .composer_audio_binding import composer_audio_features, load_bound_visualiz
 from .audio_mastering import bounded_audio_input_args, frame_bound_duration
 from .composer_base_probe import ComposerBaseProfile
 from .composer_decode_stream import ComposerMediaDecoderPool
-from .composer_media import ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
+from .composer_media import CREATE_NO_WINDOW, ComposerMediaInfo, playback_position, probe_composer_media, validate_layer_media
 from .composer_preflight import validate_composer_resources
 from .composer_runtime import ComposerFrameInputs, render_composer_frame
 from .overlay_composer import OverlayComposerState
@@ -132,6 +132,7 @@ def _muxed_video_frame_count(ffprobe: str, path: Path) -> int:
         errors="replace",
         timeout=120,
         check=False,
+        creationflags=CREATE_NO_WINDOW,
     )
     if result.returncode:
         raise RuntimeError((result.stderr or "").strip() or "FFprobe could not count Composer output frames")
