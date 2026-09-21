@@ -23,6 +23,8 @@ import tempfile
 import time
 from typing import Literal
 
+from .path_transaction import serialized_path_mutation
+
 
 # Schema 4 invalidates H5 records created before the complete encoder-quality
 # contract also bound the exact NVENC adapter index.
@@ -214,6 +216,7 @@ class ResidentEncodeStore:
         record = self._load().get("records", {}).get(key.token())
         return bool(isinstance(record, dict) and record.get("accepted"))
 
+    @serialized_path_mutation
     def record(self, key: ResidentEncodeKey, contract: NvencContract, evidence: ResidentEncodeEvidence) -> bool:
         if key.encode_contract != contract.token() or not evidence.accepted:
             return False
@@ -229,6 +232,7 @@ class ResidentEncodeStore:
         self._atomic_write(payload)
         return True
 
+    @serialized_path_mutation
     def invalidate(self, key: ResidentEncodeKey) -> bool:
         payload = self._load()
         records = payload.get("records", {})
