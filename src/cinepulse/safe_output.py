@@ -107,7 +107,22 @@ class RenderJournal:
     def read(self) -> dict | None:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
+        except FileNotFoundError:
+            return None
+        except OSError:
+            # A transient sharing/permission error is not proof of corruption.
+            return None
+        except (ValueError, TypeError, json.JSONDecodeError):
+            evidence = self.path.with_name(
+                f"{self.path.name}.corrupt-{time.time_ns()}"
+            )
+            try:
+                os.replace(self.path, evidence)
+                _fsync_directory(self.path.parent)
+            except OSError:
+                pass
+            return None
+        if not isinstance(payload, dict):
             return None
         return payload if payload.get("schema") == 1 else None
 
