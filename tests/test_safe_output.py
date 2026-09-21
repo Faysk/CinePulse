@@ -152,5 +152,44 @@ class SafeOutputTests(unittest.TestCase):
             self.assertIsNone(journal.read())
 
 
+    def test_commit_fsyncs_verified_partial_before_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            final = root / "video.mp4"
+            final.write_bytes(b"old")
+            atomic = AtomicOutput.for_path(final, pid=123)
+            atomic.prepare().write_bytes(b"new-video")
+            real_replace = __import__("os").replace
+            events: list[str] = []
+
+            def observed_replace(source, destination):
+                if Path(source) == atomic.partial and Path(destination) == atomic.final:
+                    events.append("replace")
+                return real_replace(source, destination)
+
+            with (
+                patch("cinepulse.safe_output.os.fsync", wraps=__import__("os").fsync) as fsync,
+                patch("cinepulse.safe_output.os.replace", side_effect=observed_replace),
+            ):
+                atomic.commit()
+            self.assertGreaterEqual(fsync.call_count, 1)
+            self.assertEqual(["replace"], events)
+            self.assertEqual(b"new-video", final.read_bytes())
+
+    def test_fsync_failure_keeps_previous_final_and_recoverable_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            final = Path(temporary) / "video.mp4"
+            final.write_bytes(b"old")
+            atomic = AtomicOutput.for_path(final, pid=123)
+            atomic.prepare().write_bytes(b"new-video")
+
+            with patch("cinepulse.safe_output.os.fsync", side_effect=OSError("disk flush failed")):
+                with self.assertRaisesRegex(OSError, "disk flush failed"):
+                    atomic.commit()
+
+            self.assertEqual(b"old", final.read_bytes())
+            self.assertEqual(b"new-video", atomic.partial.read_bytes())
+
+
 if __name__ == "__main__":
     unittest.main()
