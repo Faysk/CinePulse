@@ -57,11 +57,13 @@ def _atomic_write(path: Path, payload: dict) -> None:
 def _queue_from_payload(payload: Any) -> tuple[list[dict], bool]:
     if isinstance(payload, list):
         return payload, True
+    if isinstance(payload, dict):
+        schema = int(payload.get("schema") or 0)
+        if schema > QUEUE_SCHEMA:
+            raise StateSchemaTooNew(f"Fila usa schema futuro {schema}; esta versão suporta até {QUEUE_SCHEMA}.")
     if not isinstance(payload, dict) or payload.get("kind") != "cinepulse.queue":
         raise ValueError("Arquivo de fila não possui formato reconhecido.")
     schema = int(payload.get("schema") or 0)
-    if schema > QUEUE_SCHEMA:
-        raise StateSchemaTooNew(f"Fila usa schema futuro {schema}; esta versão suporta até {QUEUE_SCHEMA}.")
     items = payload.get("items")
     if not isinstance(items, list):
         raise ValueError("Fila versionada não contém uma lista de items válida.")
@@ -69,10 +71,12 @@ def _queue_from_payload(payload: Any) -> tuple[list[dict], bool]:
 
 
 def _presets_from_payload(payload: Any) -> tuple[dict[str, dict], bool]:
-    if isinstance(payload, dict) and payload.get("kind") == "cinepulse.presets":
+    if isinstance(payload, dict):
         schema = int(payload.get("schema") or 0)
         if schema > PRESETS_SCHEMA:
             raise StateSchemaTooNew(f"Presets usam schema futuro {schema}; esta versão suporta até {PRESETS_SCHEMA}.")
+    if isinstance(payload, dict) and payload.get("kind") == "cinepulse.presets":
+        schema = int(payload.get("schema") or 0)
         items = payload.get("items")
         if not isinstance(items, dict):
             raise ValueError("Arquivo de presets versionado não contém objeto items válido.")
@@ -84,6 +88,22 @@ def _presets_from_payload(payload: Any) -> tuple[dict[str, dict], bool]:
 
 def _read_and_parse(path: Path, parser: Callable[[Any], _T]) -> _T:
     return parser(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _assert_writable_schema(path: Path, parser: Callable[[Any], _T]) -> None:
+    """Refuse to overwrite primary or backup state written by a newer CinePulse."""
+
+    for candidate in (path, _backup_path(path)):
+        if not candidate.is_file():
+            continue
+        try:
+            _read_and_parse(candidate, parser)
+        except StateSchemaTooNew:
+            raise
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            # Corrupt/legacy state is handled by the normal backup/write path.
+            # Only a positively identified future schema makes this path read-only.
+            continue
 
 
 def _load_with_backup(path: Path, parser: Callable[[Any], _T]) -> tuple[_T, bool]:
@@ -120,6 +140,7 @@ def _load_with_backup(path: Path, parser: Callable[[Any], _T]) -> tuple[_T, bool
 
 
 def save_queue_state(path: Path, items: list[dict]) -> None:
+    _assert_writable_schema(path, _queue_from_payload)
     _atomic_write(path, {
         "schema": QUEUE_SCHEMA,
         "kind": "cinepulse.queue",
@@ -134,6 +155,7 @@ def load_queue_state(path: Path) -> tuple[list[dict], bool]:
 
 
 def save_presets_state(path: Path, presets: dict[str, dict]) -> None:
+    _assert_writable_schema(path, _presets_from_payload)
     _atomic_write(path, {
         "schema": PRESETS_SCHEMA,
         "kind": "cinepulse.presets",
