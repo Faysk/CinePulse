@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from cinepulse.audio_mastering import bounded_audio_input_args, build_audio_filter, parse_loudnorm_json
+from cinepulse.audio_mastering import (
+    bound_delivery_audio_filter,
+    bounded_audio_input_args,
+    build_audio_filter,
+    build_delivery_audio_filter,
+    frame_bound_duration,
+    parse_loudnorm_json,
+)
 
 
 class AudioMasteringTests(unittest.TestCase):
@@ -17,6 +24,22 @@ class AudioMasteringTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     bounded_audio_input_args("track.wav", value)
+
+    def test_frame_bound_duration_matches_integer_cfr_contract(self) -> None:
+        self.assertAlmostEqual(1001 / 120.0, frame_bound_duration(1001, 120.0), places=12)
+
+    def test_delivery_audio_filter_trims_resets_and_pads_exact_timeline(self) -> None:
+        value = bound_delivery_audio_filter(1.25, "volume=0.5")
+        self.assertEqual(
+            "atrim=duration=1.250000000000,asetpts=PTS-STARTPTS,volume=0.5,apad=whole_dur=1.250000000000",
+            value,
+        )
+
+    def test_mastered_delivery_audio_wraps_mastering_inside_exact_timeline(self) -> None:
+        value = build_delivery_audio_filter("Normalizar para YouTube — -14 LUFS", 2.0)
+        self.assertTrue(value.startswith("atrim=duration=2.000000000000,asetpts=PTS-STARTPTS,"))
+        self.assertIn("loudnorm=I=-14.0:TP=-1.0:LRA=11.0", value)
+        self.assertTrue(value.endswith("apad=whole_dur=2.000000000000"))
 
     def test_parses_ffmpeg_measurement(self) -> None:
         text = 'noise\n{"input_i":"-18.2","input_tp":"-2.1","input_lra":"4.3","input_thresh":"-28.0","target_offset":"0.2"}'
