@@ -78,6 +78,7 @@ def render_case(
     root: Path,
     name: str,
     source_audio_duration: float,
+    inner_filter: str = "",
 ) -> None:
     fps = 30.0
     frame_count = 31
@@ -103,7 +104,7 @@ def render_case(
         "-map",
         "1:a:0",
         "-af",
-        bound_delivery_audio_filter(exact_duration),
+        bound_delivery_audio_filter(exact_duration, inner_filter),
         "-frames:v",
         str(frame_count),
         "-c:v",
@@ -173,8 +174,11 @@ def main() -> int:
             ffmpeg=ffmpeg,
             ffprobe=ffprobe,
             root=root,
-            name="long-trim",
+            name="long-trim-after-inner-filter",
             source_audio_duration=1.50,
+            # Deliberately adds 100 ms. The second atrim after the inner
+            # mastering slot must remove this tail before whole_dur padding.
+            inner_filter="adelay=100",
         )
     print("AUDIO_FRAME_TIMELINE_INTEGRATION_OK")
     return 0
