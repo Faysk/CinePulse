@@ -472,8 +472,8 @@ def render_vfx_intermediate(
                     log(line)
 
         reader = threading.Thread(target=drain_output, daemon=True)
-        reader.start()
         try:
+            reader.start()
             assert process.stdin is not None
             for frame_number in range(frame_count):
                 if cancelled():
@@ -509,7 +509,10 @@ def render_vfx_intermediate(
                     process.stdin.close()
             except (OSError, ValueError):
                 pass
-            reader.join(timeout=2)
+            try:
+                reader.join(timeout=2)
+            except RuntimeError:
+                pass
             try:
                 if process.stdout is not None and not process.stdout.closed:
                     process.stdout.close()
