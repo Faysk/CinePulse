@@ -90,13 +90,14 @@ class StudioNeuralProcessLifecycleTests(unittest.TestCase):
             del _log, grace_seconds
             target._running = False
 
-        with tempfile.TemporaryDirectory() as temporary, (
-            patch("cinepulse.studio.subprocess.Popen", return_value=process),
-            patch("cinepulse.studio.terminate_process_tree", side_effect=terminate) as kill,
-            patch("cinepulse.studio.time.sleep", return_value=None),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "progress exploded"):
-                app._run_ai(["realesrgan"], Path(temporary), 1, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                patch("cinepulse.studio.subprocess.Popen", return_value=process),
+                patch("cinepulse.studio.terminate_process_tree", side_effect=terminate) as kill,
+                patch("cinepulse.studio.time.sleep", return_value=None),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "progress exploded"):
+                    app._run_ai(["realesrgan"], Path(temporary), 1, 0.0, 1.0)
 
         self.assertGreaterEqual(kill.call_count, 1)
         self.assertTrue(process.stdout.closed)
