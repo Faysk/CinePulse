@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import math
+import tempfile
+import threading
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
-from cinepulse.composer_audio import analyze_visualizer_samples, frame_audio
-from cinepulse.music_envelope import SAMPLE_RATE
+from cinepulse.composer_audio import (\n    analyze_visualizer_samples, clear_visualizer_memory_cache, frame_audio, load_visualizer_envelope,\n)\nfrom cinepulse.music_envelope import SAMPLE_RATE
 
 
 class ComposerAudioTests(unittest.TestCase):
@@ -56,6 +59,47 @@ class ComposerAudioTests(unittest.TestCase):
         first = frame_audio(envelope, time_seconds=1.1, kind="circular", bars=48, smoothing=0.8)
         second = frame_audio(envelope, time_seconds=1.1, kind="circular", bars=48, smoothing=0.8)
         self.assertEqual(first, second)
+
+    def test_concurrent_disk_cache_publication_uses_unique_temps(self) -> None:
+        clear_visualizer_memory_cache()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "audio.wav"
+            media.write_bytes(b"placeholder")
+            cache = root / "cache"
+            save_barrier = threading.Barrier(2)
+            save_paths = []
+            errors = []
+
+            def fake_save(path, **_payload):
+                save_paths.append(Path(path))
+                save_barrier.wait(timeout=2.0)
+                Path(path).write_bytes(b"cache")
+
+            def worker():
+                try:
+                    load_visualizer_envelope(
+                        "ffmpeg", str(media), 0.1,
+                        analysis_fps=10.0, bands=8, waveform_rate=120.0, cache_dir=cache,
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            with (
+                mock.patch("cinepulse.composer_audio.decode_audio", return_value=np.zeros(4_800, dtype=np.float32)),
+                mock.patch("cinepulse.composer_audio.np.savez_compressed", side_effect=fake_save),
+            ):
+                threads = [threading.Thread(target=worker) for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=3.0)
+
+            self.assertEqual([], errors)
+            self.assertEqual(2, len(save_paths))
+            self.assertNotEqual(save_paths[0], save_paths[1])
+            self.assertEqual([], list(cache.glob("*.tmp.npz")))
+        clear_visualizer_memory_cache()
 
     def test_analysis_shapes_are_bounded_and_float32(self) -> None:
         envelope = analyze_visualizer_samples(self.sine(1000.0, 0.5), 0.5, fps=30, bands=16, waveform_rate=240)
