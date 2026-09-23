@@ -81,6 +81,26 @@ class StudioNeuralProcessLifecycleTests(unittest.TestCase):
 
         self.assertTrue(process.stdout.closed)
 
+    def test_ffmpeg_reader_start_failure_reaps_child_and_clears_foreground_process(self) -> None:
+        app = _studio()
+        process = _FakeProcess(running=True)
+
+        def terminate(target, _log=None, *, grace_seconds=0):
+            del _log, grace_seconds
+            target._running = False
+
+        with (
+            patch("cinepulse.studio.subprocess.Popen", return_value=process),
+            patch("cinepulse.studio.threading.Thread.start", side_effect=RuntimeError("thread start failed")),
+            patch("cinepulse.studio.terminate_process_tree", side_effect=terminate) as kill,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                app._run_ffmpeg(["ffmpeg"], 1.0, 0.0, 1.0)
+
+        kill.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+        self.assertIsNone(app._process)
+
     def test_realesrgan_progress_exception_reaps_child_and_closes_pipe(self) -> None:
         app = _studio()
         process = _FakeProcess(["working\n"], running=True)
