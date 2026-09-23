@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -23,6 +25,56 @@ class StageAdapterTests(unittest.TestCase):
             stage="rife",
             policy_fingerprint="policy-v1",
         )
+
+    def test_concurrent_checkpoint_records_preserve_both_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = self._checkpoint(root)
+            second = self._checkpoint(root)
+            original_load = StageCheckpointStore.load
+            first_loaded = threading.Event()
+            release_first = threading.Event()
+            load_count = {"value": 0}
+            guard = threading.Lock()
+
+            def delayed_load(store):
+                payload = original_load(store)
+                with guard:
+                    load_count["value"] += 1
+                    position = load_count["value"]
+                if position == 1:
+                    first_loaded.set()
+                    release_first.wait(timeout=2.0)
+                return payload
+
+            errors = []
+
+            def write(store, unit):
+                try:
+                    store.record(
+                        unit_id=unit,
+                        ordinal=1 if unit == "a" else 2,
+                        state="committed",
+                        artifact=f"{unit}.mkv",
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            with patch.object(StageCheckpointStore, "load", delayed_load):
+                first_thread = threading.Thread(target=write, args=(first, "a"))
+                second_thread = threading.Thread(target=write, args=(second, "b"))
+                first_thread.start()
+                self.assertTrue(first_loaded.wait(timeout=1.0))
+                second_thread.start()
+                time.sleep(0.05)
+                release_first.set()
+                first_thread.join(timeout=2.0)
+                second_thread.join(timeout=2.0)
+
+            self.assertEqual([], errors)
+            payload = original_load(first)
+            self.assertEqual({"a", "b"}, set(payload["units"]))
+            self.assertEqual(2, payload["revision"])
 
     def test_success_commits_only_after_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
