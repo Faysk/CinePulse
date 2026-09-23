@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
@@ -61,11 +62,14 @@ class RestorationLabTests(unittest.TestCase):
             source.write_bytes(b"first")
             before = source_identity(source)
             self.assertIsNotNone(before)
-            source.write_bytes(b"second-version")
+            stat = source.stat()
+            source.write_bytes(b"other")
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             after = source_identity(source)
             self.assertIsNotNone(after)
             self.assertNotEqual(before, after)
-            self.assertEqual(after.size, len(b"second-version"))
+            self.assertEqual(after.size, before.size)
+            self.assertNotEqual(before.content_sha256, after.content_sha256)
 
     def test_source_identity_fails_closed_for_missing_source(self):
         self.assertIsNone(source_identity(Path("definitely-missing-cinepulse-preview.mp4")))
