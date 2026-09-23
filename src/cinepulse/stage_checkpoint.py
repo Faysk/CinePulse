@@ -7,6 +7,8 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .path_transaction import serialized_path_mutation
+
 
 CHECKPOINT_SCHEMA = 1
 UNIT_STATES = frozenset({"planned", "producing", "validating", "committed", "rejected", "quarantined", "interrupted"})
@@ -28,6 +30,21 @@ class UnitRecord:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
 
 
 class StageCheckpointStore:
@@ -84,10 +101,12 @@ class StageCheckpointStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
+            _fsync_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
         return payload
 
+    @serialized_path_mutation
     def record(
         self,
         *,

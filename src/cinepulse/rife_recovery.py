@@ -9,7 +9,6 @@ therefore resumes from the last committed segment.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import queue
@@ -23,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .ai_cache_identity import realesrgan_cache_key
 from .audio_mastering import (
     analyze_loudness,
     bound_delivery_audio_filter,
@@ -248,22 +248,19 @@ def ai_cache_key(
     source_width: int,
     source_height: int,
 ) -> str:
-    source_stat = source.stat()
-    model_stat = model.stat() if model.is_file() else None
-    identity = {
-        "path": str(source.resolve()),
-        "size": source_stat.st_size,
-        "mtime": source_stat.st_mtime_ns,
-        "start": round(start_time, 5),
-        "duration": round(duration, 5),
-        "fps": round(source_fps, 5),
-        "width": source_width,
-        "height": source_height,
-        "model_size": model_stat.st_size if model_stat else 0,
-        "model_mtime": model_stat.st_mtime_ns if model_stat else 0,
-        "scale": 2,
-    }
-    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+    model = Path(model)
+    component_root = model.parent.parent
+    return realesrgan_cache_key(
+        source,
+        start_time=start_time,
+        duration=duration,
+        source_fps=source_fps,
+        source_width=source_width,
+        source_height=source_height,
+        executable=component_root / "realesrgan-ncnn-vulkan.exe",
+        model_bin=model,
+        model_param=model.with_suffix(".param"),
+    )
 
 
 def recovery_audio_expectation(
@@ -655,19 +652,23 @@ def _run_logged(
     )
     messages: queue.Queue[str] = queue.Queue()
     recent: list[str] = []
+    thread: threading.Thread | None = None
 
     def reader() -> None:
         assert process.stdout is not None
-        for line in process.stdout:
-            messages.put(line.rstrip())
+        try:
+            for line in process.stdout:
+                messages.put(line.rstrip())
+        except (OSError, ValueError):
+            return
 
-    thread = threading.Thread(target=reader, daemon=True)
-    thread.start()
     started = time.monotonic()
-    last_activity = started
-    last_gpu = 0.0
-    last_progress = progress_probe() if progress_probe else 0
     try:
+        thread = threading.Thread(target=reader, daemon=True)
+        thread.start()
+        last_activity = started
+        last_gpu = 0.0
+        last_progress = progress_probe() if progress_probe else 0
         while process.poll() is None:
             drained = False
             while True:
@@ -697,22 +698,28 @@ def _run_logged(
             if timeout_seconds and now - last_activity > timeout_seconds:
                 raise RecoveryError(f"{label} sem progresso por {timeout_seconds / 60:.1f} minutos")
             time.sleep(0.5)
-    except BaseException:
-        terminate_process_tree(process, log)
-        raise
-    code = process.wait()
-    thread.join(timeout=3)
-    while True:
+        code = process.wait()
+        while True:
+            try:
+                message = messages.get_nowait()
+            except queue.Empty:
+                break
+            if message:
+                recent.append(message)
+                del recent[:-80]
+        if code:
+            raise RecoveryError(f"{label} terminou com codigo {code}: {' | '.join(recent[-12:])}")
+        log(f"DONE {label} elapsed={time.monotonic() - started:.1f}s")
+    finally:
+        if process.poll() is None:
+            terminate_process_tree(process, log)
         try:
-            message = messages.get_nowait()
-        except queue.Empty:
-            break
-        if message:
-            recent.append(message)
-            del recent[:-80]
-    if code:
-        raise RecoveryError(f"{label} terminou com codigo {code}: {' | '.join(recent[-12:])}")
-    log(f"DONE {label} elapsed={time.monotonic() - started:.1f}s")
+            if process.stdout is not None and not process.stdout.closed:
+                process.stdout.close()
+        except (OSError, ValueError, AttributeError):
+            pass
+        if thread is not None:
+            thread.join(timeout=3.0)
 
 
 def _quarantine_incomplete(contract: RecoveryContract, next_index: int, log: Callable[[str], None]) -> None:

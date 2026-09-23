@@ -23,6 +23,9 @@ import time
 from typing import Literal
 
 
+from .source_identity import file_content_identity
+
+
 TENSORRT_PREVIEW_SCHEMA = 3
 BackendModel = Literal["realesrgan", "rife"]
 Precision = Literal["fp32", "fp16"]
@@ -68,8 +71,11 @@ def fingerprint_model_path(path: Path) -> str:
         rows: list[str] = []
         for item in sorted(candidate.rglob("*")):
             if item.is_file():
-                stat = item.stat()
-                rows.append(f"{item.relative_to(candidate)}:{stat.st_size}:{stat.st_mtime_ns}")
+                identity = file_content_identity(item)
+                rows.append(
+                    f"{item.relative_to(candidate)}:{identity['size']}:"
+                    f"{identity['content_mode']}:{identity['content_sha256']}"
+                )
         return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()[:24]
     raise FileNotFoundError(candidate)
 

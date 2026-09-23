@@ -173,6 +173,36 @@ class RestorationExportTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), b"old-good")
             self.assertEqual(list(root.glob(".*cinepulse-preview*")), [])
 
+    def test_unexpected_polling_exception_terminates_process_and_removes_temp(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.mp4"
+            output = root / "done.mp4"
+            source.write_bytes(b"source")
+            holder = {}
+
+            def factory(command, **_kwargs):
+                process = _FakeProcess(command, finish_after=999)
+                Path(command[-1]).write_bytes(b"partial")
+                holder["process"] = process
+                return process
+
+            with (
+                patch("cinepulse.restoration_export.ensure_preview_scratch_capacity", return_value=0),
+                patch("cinepulse.restoration_export.probe_preview_geometry", return_value=self.source_contract()),
+                patch("cinepulse.restoration_export.subprocess.Popen", side_effect=factory),
+                patch("cinepulse.restoration_export.time.sleep", side_effect=RuntimeError("polling exploded")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "polling exploded"):
+                    export_preview_restoration(
+                        "ffmpeg", source, output, EMPTY_PLAN,
+                        ffprobe="ffprobe", poll_interval=0.001,
+                    )
+
+            self.assertTrue(holder["process"].terminated)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".*cinepulse-preview*")), [])
+
     def test_cancel_terminates_process_and_removes_temp(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

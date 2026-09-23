@@ -307,7 +307,7 @@ def export_preview_restoration(
             elapsed_seconds=max(0.0, time.monotonic() - started),
         )
     finally:
-        if process is not None and cancel.is_set() and process.poll() is None:
+        if process is not None and process.poll() is None:
             _terminate_process(process)
         try:
             temporary.unlink(missing_ok=True)

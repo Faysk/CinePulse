@@ -5,6 +5,7 @@ import math
 import os
 import subprocess
 import threading
+import uuid
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -371,16 +372,19 @@ def load_music_envelope(
     )
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        temp = cache_path.with_suffix(".tmp.npz")
-        np.savez_compressed(
-            temp,
-            energy=envelope.energy,
-            rms=envelope.rms,
-            onset=envelope.onset,
-            fps=np.asarray(envelope.fps, dtype=np.float64),
-            duration=np.asarray(envelope.duration, dtype=np.float64),
-        )
-        os.replace(temp, cache_path)
+        temp = cache_path.with_name(f".{cache_path.name}.{uuid.uuid4().hex}.tmp.npz")
+        try:
+            np.savez_compressed(
+                temp,
+                energy=envelope.energy,
+                rms=envelope.rms,
+                onset=envelope.onset,
+                fps=np.asarray(envelope.fps, dtype=np.float64),
+                duration=np.asarray(envelope.duration, dtype=np.float64),
+            )
+            os.replace(temp, cache_path)
+        finally:
+            temp.unlink(missing_ok=True)
     except OSError:
         pass
     with _cache_lock:

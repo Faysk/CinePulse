@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -78,6 +79,41 @@ class MusicEnvelopeTests(unittest.TestCase):
         energy, rms, _ = analyze_samples(samples, 2.0, fps=60.0)
         self.assertLess(float(np.mean(rms[:50])), float(np.mean(rms[70:])))
         self.assertLess(float(np.mean(energy[:50, 0])), float(np.mean(energy[70:, 0])))
+
+    def test_concurrent_disk_cache_publication_uses_unique_temps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = Path(tmp) / "audio.wav"
+            media.write_bytes(b"placeholder")
+            cache = Path(tmp) / "cache"
+            save_barrier = threading.Barrier(2)
+            save_paths = []
+            errors = []
+
+            def fake_save(path, **_payload):
+                save_paths.append(Path(path))
+                save_barrier.wait(timeout=2.0)
+                Path(path).write_bytes(b"cache")
+
+            def worker():
+                try:
+                    load_music_envelope("ffmpeg", str(media), 0.1, analysis_fps=10.0, cache_dir=cache)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            with (
+                mock.patch("cinepulse.music_envelope.decode_audio", return_value=np.zeros(4_800, dtype=np.float32)),
+                mock.patch("cinepulse.music_envelope.np.savez_compressed", side_effect=fake_save),
+            ):
+                threads = [threading.Thread(target=worker) for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=3.0)
+
+            self.assertEqual([], errors)
+            self.assertEqual(2, len(save_paths))
+            self.assertNotEqual(save_paths[0], save_paths[1])
+            self.assertEqual([], list(cache.glob("*.tmp.npz")))
 
     def test_disk_cache_reuses_analysis_without_decoding_again(self):
         with tempfile.TemporaryDirectory() as tmp:
