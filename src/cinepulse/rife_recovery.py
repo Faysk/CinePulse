@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -122,11 +123,51 @@ class RecoveryLogger:
         print(line, flush=True)
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    temporary = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _promote_verified_output(partial: Path, final: Path) -> Path:
+    """Atomically publish a verified recovery output without hiding the old final."""
+    partial = Path(partial)
+    final = Path(final)
+    if not partial.is_file() or partial.stat().st_size <= 0:
+        raise RecoveryError(f"Saída parcial ausente ou vazia: {partial}")
+    final.parent.mkdir(parents=True, exist_ok=True)
+    if partial.parent.resolve(strict=False) != final.parent.resolve(strict=False):
+        raise RecoveryError("Saída parcial de recovery deve estar no mesmo diretório do destino final.")
+    with partial.open("rb+") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(partial, final)
+    _fsync_directory(final.parent)
+    return final
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -1339,17 +1380,7 @@ def finalize(contract: RecoveryContract, master: Path, log: Callable[[str], None
     if not verification.passed:
         details = " | ".join(f"{issue.code}: {issue.message}" for issue in verification.errors)
         raise RecoveryError("Verificacao final falhou: " + details)
-    backup = contract.output.with_name(f".{contract.output.name}.previous")
-    backup.unlink(missing_ok=True)
-    if contract.output.exists():
-        os.replace(contract.output, backup)
-    try:
-        os.replace(partial, contract.output)
-    except BaseException:
-        if backup.exists() and not contract.output.exists():
-            os.replace(backup, contract.output)
-        raise
-    backup.unlink(missing_ok=True)
+    _promote_verified_output(partial, contract.output)
     job_path = contract.history_dir / "job.json"
     job = _load_json(job_path)
     job.update({
