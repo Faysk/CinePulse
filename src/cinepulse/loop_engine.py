@@ -691,7 +691,7 @@ class LoopMusicApp:
         weight: float,
     ) -> None:
         recent: deque[str] = deque(maxlen=40)
-        self._process = subprocess.Popen(
+        process = subprocess.Popen(
             command,
             cwd=str(REAL_ESRGAN_DIR),
             stdout=subprocess.PIPE,
@@ -701,21 +701,25 @@ class LoopMusicApp:
             errors="replace",
             **popen_group_kwargs(),
         )
+        self._process = process
 
         def drain_output() -> None:
-            assert self._process is not None and self._process.stdout is not None
-            for raw_line in self._process.stdout:
-                line = raw_line.strip()
-                if line:
-                    recent.append(line)
+            assert process.stdout is not None
+            try:
+                for raw_line in process.stdout:
+                    line = raw_line.strip()
+                    if line:
+                        recent.append(line)
+            except (OSError, ValueError):
+                return
 
         reader = threading.Thread(target=drain_output, daemon=True)
         reader.start()
         last_done = -1
         try:
-            while self._process.poll() is None:
+            while process.poll() is None:
                 if self._cancelled:
-                    terminate_process_tree(self._process, grace_seconds=2.0)
+                    terminate_process_tree(process, grace_seconds=2.0)
                     break
                 done = len(list(output_dir.glob("frame*.png")))
                 if done != last_done:
@@ -723,15 +727,16 @@ class LoopMusicApp:
                     self._events.put(("progress", base + weight * fraction))
                     last_done = done
                 threading.Event().wait(0.25)
-            return_code = self._process.wait()
-            reader.join(timeout=2)
+            return_code = process.wait()
         finally:
-            reader.join(timeout=2)
+            if process.poll() is None:
+                terminate_process_tree(process, grace_seconds=2.0)
             try:
-                if self._process.stdout is not None and not self._process.stdout.closed:
-                    self._process.stdout.close()
+                if process.stdout is not None and not process.stdout.closed:
+                    process.stdout.close()
             except (OSError, ValueError, AttributeError):
                 pass
+            reader.join(timeout=2)
         if self._cancelled:
             raise InterruptedError
         if return_code != 0:
@@ -981,7 +986,7 @@ class LoopMusicApp:
 
     def _run_ffmpeg(self, command: list[str], duration: float, base: float, weight: float) -> None:
         recent = deque(maxlen=30)
-        self._process = subprocess.Popen(
+        process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -990,9 +995,10 @@ class LoopMusicApp:
             errors="replace",
             **popen_group_kwargs(),
         )
-        assert self._process.stdout is not None
+        self._process = process
+        assert process.stdout is not None
         try:
-            for raw_line in self._process.stdout:
+            for raw_line in process.stdout:
                 line = raw_line.strip()
                 if line:
                     recent.append(line)
@@ -1005,11 +1011,13 @@ class LoopMusicApp:
                         self._events.put(("progress", base + weight * fraction))
                     except (ValueError, ZeroDivisionError):
                         pass
-            return_code = self._process.wait()
+            return_code = process.wait()
         finally:
+            if process.poll() is None:
+                terminate_process_tree(process, grace_seconds=2.0)
             try:
-                if self._process.stdout is not None and not self._process.stdout.closed:
-                    self._process.stdout.close()
+                if process.stdout is not None and not process.stdout.closed:
+                    process.stdout.close()
             except (OSError, ValueError, AttributeError):
                 pass
         if self._cancelled:
