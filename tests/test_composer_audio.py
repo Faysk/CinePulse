@@ -9,8 +9,13 @@ from unittest import mock
 
 import numpy as np
 
-from cinepulse.composer_audio import (\n    analyze_visualizer_samples, clear_visualizer_memory_cache, frame_audio, load_visualizer_envelope,\n)\nfrom cinepulse.music_envelope import SAMPLE_RATE
-
+from cinepulse.composer_audio import (
+    analyze_visualizer_samples,
+    clear_visualizer_memory_cache,
+    frame_audio,
+    load_visualizer_envelope,
+)
+from cinepulse.music_envelope import SAMPLE_RATE
 
 class ComposerAudioTests(unittest.TestCase):
     @staticmethod
