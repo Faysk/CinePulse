@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import threading
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
+from .path_transaction import path_mutation_transaction
 from .render_job import ManifestError, RenderJobManifest
 
 
@@ -20,15 +20,6 @@ class ManifestConflict(ManifestError):
 class ManifestStoreError(ManifestError):
     pass
 
-
-_LOCKS_GUARD = threading.Lock()
-_LOCKS: dict[str, threading.RLock] = {}
-
-
-def _thread_lock(path: Path) -> threading.RLock:
-    key = os.path.normcase(str(path.resolve(strict=False)))
-    with _LOCKS_GUARD:
-        return _LOCKS.setdefault(key, threading.RLock())
 
 
 def _json_bytes(manifest: RenderJobManifest) -> bytes:
@@ -76,21 +67,20 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 class JobStore:
     """Durable compare-and-swap store for ``RenderJobManifest``.
 
-    Phase 1 deliberately keeps worker ownership separate: this lock protects a
-    manifest transaction inside the current process, while the Phase 2 job
-    lease is responsible for cross-process execution ownership.  CAS/revision
-    checks remain mandatory even when the lock is held so stale callers cannot
-    silently overwrite newer state.
+    Durable path mutations are serialized across threads and processes. The job
+    lease still owns execution rights, while this store-level lock closes the
+    read-modify-write race if recovery tooling or another process touches the
+    same manifest unexpectedly. CAS/revision checks remain mandatory so stale
+    callers are rejected even while the transaction lock is held.
     """
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.backup_path = self.path.with_suffix(self.path.suffix + ".bak")
-        self._lock = _thread_lock(self.path)
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        with self._lock:
+        with path_mutation_transaction(self.path):
             yield
 
     def _parse(self, path: Path) -> RenderJobManifest:
@@ -103,7 +93,7 @@ class JobStore:
         return RenderJobManifest.from_dict(payload)
 
     def load(self, *, recover_backup: bool = True) -> RenderJobManifest:
-        with self._lock:
+        with path_mutation_transaction(self.path):
             try:
                 return self._parse(self.path)
             except ManifestError as primary_error:
@@ -131,7 +121,7 @@ class JobStore:
         mutate preserved work merely by inspecting it. Provenance is returned as
         either primary or backup so callers can fail closed on older backup state.
         """
-        with self._lock:
+        with path_mutation_transaction(self.path):
             try:
                 return self._parse(self.path), "primary"
             except ManifestError as primary_error:
@@ -145,7 +135,7 @@ class JobStore:
                     ) from backup_error
 
     def create(self, manifest: RenderJobManifest) -> RenderJobManifest:
-        with self._lock:
+        with path_mutation_transaction(self.path):
             if self.path.exists():
                 raise ManifestConflict(f"manifesto já existe: {self.path}")
             _atomic_bytes(self.path, _json_bytes(manifest))
@@ -155,7 +145,7 @@ class JobStore:
             return stored
 
     def save(self, manifest: RenderJobManifest, *, expected_revision: int) -> RenderJobManifest:
-        with self._lock:
+        with path_mutation_transaction(self.path):
             current = self.load(recover_backup=True)
             if current.revision != expected_revision:
                 raise ManifestConflict(
@@ -176,7 +166,7 @@ class JobStore:
             return stored
 
     def update(self, mutator: Callable[[RenderJobManifest], RenderJobManifest]) -> RenderJobManifest:
-        with self._lock:
+        with path_mutation_transaction(self.path):
             current = self.load(recover_backup=True)
             updated = mutator(current)
             if not isinstance(updated, RenderJobManifest):
