@@ -158,6 +158,14 @@ class BackgroundCommand:
             self._error = exc
         finally:
             with self._lock:
+                process = self._process
+            if process is not None and process.poll() is None:
+                terminate_process_tree(process, self.log, grace_seconds=1.0)
+                try:
+                    process.wait(timeout=2.0)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            with self._lock:
                 self._process = None
             if output_handle is not None:
                 try:
