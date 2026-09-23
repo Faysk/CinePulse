@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,24 @@ class Settings:
 
 
 class RenderHistoryTests(TestCase):
+    def test_manifest_source_identity_changes_on_same_size_same_mtime_replacement(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.mp4"
+            source.write_bytes(b"video-v1")
+            settings = Settings(video=str(source))
+            first = RenderHistory.start(root / "history-a", settings, preview=False, app_version="x")
+            first_manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
+            stat = source.stat()
+            source.write_bytes(b"video-v2")
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            second = RenderHistory.start(root / "history-b", settings, preview=False, app_version="x")
+            second_manifest = json.loads(second.manifest_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(
+                first_manifest["source"]["content"]["content_sha256"],
+                second_manifest["source"]["content"]["content_sha256"],
+            )
+
     def test_start_creates_job_log_and_shadow_manifest(self):
         with TemporaryDirectory() as temp:
             history = RenderHistory.start(Path(temp), Settings(), preview=False, app_version="1.0.0rc5")
