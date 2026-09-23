@@ -10,6 +10,17 @@ from unittest.mock import patch
 from cinepulse.loop_engine import LoopMusicApp
 
 
+class _ExplodingLines:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __iter__(self):
+        raise RuntimeError("injected stream failure")
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _CloseableLines(list):
     def __init__(self, lines=()) -> None:
         super().__init__(lines)
@@ -77,6 +88,39 @@ class ClassicProcessLifecycleTests(unittest.TestCase):
 
         self.assertTrue(process.stdout.closed)
         self.assertTrue(captured["start_new_session"])
+
+    def test_ffmpeg_exception_reaps_process_tree_and_closes_pipe(self) -> None:
+        app = _app()
+        process = _FakeProcess(poll_value=None)
+        process.stdout = _ExplodingLines()
+
+        with (
+            patch("cinepulse.loop_engine.subprocess.Popen", return_value=process),
+            patch("cinepulse.loop_engine.terminate_process_tree") as terminate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected stream failure"):
+                app._run_ffmpeg(["ffmpeg"], 1.0, 0.0, 1.0)
+
+        terminate.assert_called_once_with(process, grace_seconds=2.0)
+        self.assertTrue(process.stdout.closed)
+
+    def test_ai_progress_exception_reaps_process_tree_and_closes_pipe(self) -> None:
+        app = _app()
+        process = _FakeProcess([], poll_value=None)
+
+        class BrokenOutput:
+            def glob(self, _pattern):
+                raise RuntimeError("injected progress failure")
+
+        with (
+            patch("cinepulse.loop_engine.subprocess.Popen", return_value=process),
+            patch("cinepulse.loop_engine.terminate_process_tree") as terminate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected progress failure"):
+                app._run_ai_process(["realesrgan"], BrokenOutput(), 1, 0.0, 1.0)
+
+        terminate.assert_called_once_with(process, grace_seconds=2.0)
+        self.assertTrue(process.stdout.closed)
 
     def test_classic_cancel_terminates_entire_process_tree(self) -> None:
         app = _app()
