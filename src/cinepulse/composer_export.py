@@ -260,22 +260,25 @@ def export_composer_reference(
     with tempfile.TemporaryDirectory(prefix="cinepulse-composer-", dir=output.parent) as temporary:
         temp_root = Path(temporary)
         visual = temp_root / "composer-reference.mkv"
-        base = subprocess.Popen(
-            _base_decode_command(request, frames),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            **popen_group_kwargs(),
-        )
-        encoder = subprocess.Popen(
-            _video_encode_command(request, visual),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            **popen_group_kwargs(),
-        )
-        logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
-        decoders = ComposerMediaDecoderPool(request.ffmpeg, decoder_layers, log=logger)
+        base: subprocess.Popen | None = None
+        encoder: subprocess.Popen | None = None
+        decoders: ComposerMediaDecoderPool | None = None
         try:
+            base = subprocess.Popen(
+                _base_decode_command(request, frames),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **popen_group_kwargs(),
+            )
+            encoder = subprocess.Popen(
+                _video_encode_command(request, visual),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                **popen_group_kwargs(),
+            )
+            logger("Composer Preview: iniciando referência CPU RGBA/FFV1 lossless.")
+            decoders = ComposerMediaDecoderPool(request.ffmpeg, decoder_layers, log=logger)
             assert base.stdout is not None
             assert encoder.stdin is not None
             for frame_index in range(frames):
@@ -355,20 +358,28 @@ def export_composer_reference(
             finally:
                 atomic.discard()
         finally:
-            decoders.close()
+            if decoders is not None:
+                decoders.close()
             for process in (base, encoder):
-                if process.poll() is None:
+                if process is not None and process.poll() is None:
                     terminate_process_tree(process, logger)
             # Popen does not close user-visible pipe objects just because the
             # child exited. Close every stream explicitly so repeated Preview
             # exports/cancellations cannot accumulate Windows handles or leak
-            # ResourceWarning noise into the release gate.
-            for stream in (base.stdout, base.stderr, encoder.stdin, encoder.stderr):
+            # ResourceWarning noise into the release gate. Keep this cleanup
+            # valid even when the second Popen (or decoder-pool construction)
+            # fails before the render loop begins.
+            streams = []
+            if base is not None:
+                streams.extend((base.stdout, base.stderr))
+            if encoder is not None:
+                streams.extend((encoder.stdin, encoder.stderr))
+            for stream in streams:
                 if stream is None:
                     continue
                 try:
                     if not stream.closed:
                         stream.close()
-                except OSError:
+                except (OSError, ValueError, AttributeError):
                     pass
     return ComposerExportResult(output, frames)
