@@ -13,6 +13,7 @@ import numpy as np
 
 from ..restoration_color import RestorationColorControls, RestorationPreset, preset_controls
 from ..restoration_preview import PreviewRestorationPlan
+from ..source_identity import file_content_identity
 
 
 RESTORATION_PRESETS: tuple[tuple[RestorationPreset, str, str], ...] = (
@@ -29,29 +30,33 @@ class RestorationSourceIdentity:
     path: str
     size: int
     mtime_ns: int
+    content_mode: str
+    content_sha256: str
 
 
 def source_identity(value: str | Path) -> RestorationSourceIdentity | None:
-    """Return the minimum identity required to prove Preview analysis freshness.
+    """Return a bounded content-aware identity for Preview analysis freshness.
 
-    Overlay regions are coordinates derived from specific source bytes. A path
-    string alone is insufficient because a file can be replaced in place while
-    the desktop remains open. Size + nanosecond mtime fail closed for that common
-    case without hashing an entire multi-gigabyte video on the UI thread.
+    Overlay regions are coordinates derived from specific source bytes. Large
+    media uses the shared sampled identity rather than hashing the whole file,
+    so replacing a source in place cannot keep stale overlay evidence merely by
+    preserving its path, byte size and mtime.
     """
 
     path = Path(value)
     try:
         resolved = path.resolve(strict=True)
-        stat = resolved.stat()
+        identity = file_content_identity(resolved)
     except OSError:
         return None
     if not resolved.is_file():
         return None
     return RestorationSourceIdentity(
         path=str(resolved),
-        size=int(stat.st_size),
-        mtime_ns=int(stat.st_mtime_ns),
+        size=int(identity["size"]),
+        mtime_ns=int(identity["mtime_ns"]),
+        content_mode=str(identity["content_mode"]),
+        content_sha256=str(identity["content_sha256"]),
     )
 
 
