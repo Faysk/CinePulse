@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.20 — 2026-09-23
+
+- corrige o contrato entre produtores de `cinepulse-files.json` e o runtime de integridade: Portable/MSI convergem para o mesmo formato rico, mantendo leitura compatível de manifestos legados;
+- o próprio Build-Portable valida o manifesto recém-gerado com `cinepulse.integrity.verify()` antes de permitir a criação do ZIP;
+- persistência de fila, histórico, journal, rollout, telemetria e checkpoints críticos usa temporários únicos, promoção atômica e fsync onde aplicável;
+- recovery discovery torna-se estritamente observacional: backup-only/corrupt-primary não é reparado nem renomeado durante startup; jobs backup-only ficam `needs_audit`;
+- RIFE recovery promove a saída verificada em um único handoff atômico, preservando qualquer output anterior se a publicação falhar;
+- comandos de worker presos em `processing` após crash são reconciliados sob lease: replies duráveis são finalizados e comandos sem reply voltam ao inbox;
+- bootstrap passa a vincular UV/FFmpeg/RIFE/Real-ESRGAN ao conteúdo instalado real, não apenas a markers/version strings;
+- archives experimentais rejeitam traversal, symlink, duplicatas case-insensitive, entradas criptografadas e expansão fora do orçamento; downloads obedecem tamanho exato + SHA-256;
+- readiness de archives experimentais passa a incluir fingerprint da árvore instalada, detectando tamper/arquivo ausente;
+- caches de mídia e stems passam a usar identidade de conteúdo do source; Demucs/Real-ESRGAN também vinculam identidade aos modelos/componentes críticos;
+- evidence/tuning stores serializam transações read-modify-write por caminho para evitar lost updates dentro do processo;
+- lifecycle de processos foi endurecido em Restoration Preview, VFX, modo clássico, Aurora, BackgroundCommand e Studio neural: process groups, kill-tree e fechamento determinístico de pipes;
+- retry neural recusa diretórios de frames sujos; cache Demucs valida WAV estruturalmente antes de reutilizar;
+- promoção final de delivery permanece autoritativa depois do commit verificado, evitando reclassificação por falhas secundárias posteriores;
+- a rodada física de 23/09/2026 confirmou capacidade da máquina alvo em PyTorch/CUDA, NVDEC, NVENC 1080p60, pipeline residente 4K60, RIFE 1080p, Real-ESRGAN 1080p→4K, Demucs CUDA, recovery RIFE 8K e HEVC NVENC 8K120 bounded, mas foi executada sobre instalação 1.2.0 e não conta como aceite final desta build;
+- GPU Acceptance físico permanece separado e só pode ser fechado após repetir a bateria na build 1.2.20 candidata.
+
 ## 1.2.19 — 2026-09-21
 
 - Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
