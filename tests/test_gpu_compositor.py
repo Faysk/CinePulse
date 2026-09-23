@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -135,7 +136,9 @@ class GpuCompositorTests(unittest.TestCase):
             layer = OverlayLayer(str(source), "png")
             first = layer.contract_token()
             first_stack = overlay_stack_contract_token((layer,))
-            source.write_bytes(b"replacement-with-different-size")
+            stat = source.stat()
+            source.write_bytes(b"other")
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             second = layer.contract_token()
             second_stack = overlay_stack_contract_token((layer,))
             self.assertNotEqual(first, second)
@@ -188,7 +191,9 @@ class GpuCompositorTests(unittest.TestCase):
                 return ""
             with patch("cinepulse.gpu_compositor._probe", side_effect=fake_probe):
                 first = detect_gpu_compositor_capabilities(str(ffmpeg)).fingerprint
-                ffmpeg.write_bytes(b"binary-v2-with-different-size")
+                stat = ffmpeg.stat()
+                ffmpeg.write_bytes(b"binary-v2")
+                os.utime(ffmpeg, ns=(stat.st_atime_ns, stat.st_mtime_ns))
                 second = detect_gpu_compositor_capabilities(str(ffmpeg)).fingerprint
             self.assertNotEqual(first, second)
 
