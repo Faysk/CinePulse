@@ -23,11 +23,12 @@ import time
 from typing import Literal
 
 
+from .source_identity import file_content_identity
+
+
 TENSORRT_PREVIEW_SCHEMA = 3
 BackendModel = Literal["realesrgan", "rife"]
 Precision = Literal["fp32", "fp16"]
-
-from .source_identity import file_content_identity
 
 
 @dataclass(frozen=True)
