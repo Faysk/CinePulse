@@ -13,7 +13,7 @@
 - `rife_recovery.py`: reconstrução do contrato de um job RIFE interrompido, checkpoint por segmento, concatenação com timeline exata, entrega e promoção atômica;
 - `rife_black_repair.py`: auditoria e substituição atômica de segmentos RIFE com o defeito preto determinístico observado em 8K;
 - `matroska_quality.py`: inspeção estrutural rápida dos pacotes FFV1/Matroska usada pelo gate específico de recuperação;
-- `component_manager.py`: catálogo e instalação verificada;
+- `installer/bootstrap-manifest.json` + `installer/Start-CinePulse.ps1`: bootstrap hash-locked dos componentes Stable; `experimental_components.py` aplica o contrato separado dos componentes experimentais;
 - `diagnostics.py`: diagnóstico reproduzível sem nomes de projetos;
 - `ui/tokens.py`: design tokens compartilhados;
 - `ui/preview.py`: preview leve, frame de demonstração/extração e composição VFX;
