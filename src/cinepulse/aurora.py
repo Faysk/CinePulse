@@ -286,6 +286,8 @@ def render_reactive_intermediate(
         "+faststart",
         output_path,
     ]
+    generator = AuroraFrameGenerator()
+    frame_count = len(energy)
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -305,10 +307,8 @@ def render_reactive_intermediate(
                 recent.append(line)
 
     reader = threading.Thread(target=drain_output, daemon=True)
-    reader.start()
-    generator = AuroraFrameGenerator()
-    frame_count = len(energy)
     try:
+        reader.start()
         assert process.stdin is not None
         for frame_number in range(frame_count):
             if cancelled():
@@ -341,7 +341,10 @@ def render_reactive_intermediate(
                 process.stdin.close()
         except (OSError, ValueError, AttributeError):
             pass
-        reader.join(timeout=2.0)
+        try:
+            reader.join(timeout=2.0)
+        except RuntimeError:
+            pass
         try:
             if process.stdout is not None and not process.stdout.closed:
                 process.stdout.close()
