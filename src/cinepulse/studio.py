@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import queue
 import shutil
@@ -55,6 +54,7 @@ from .loop_engine import (
 
 from .paths import PATHS
 from .component_identity import bootstrap_component_fingerprint
+from .ai_cache_identity import realesrgan_cache_key
 from .runtime_distribution import find_powershell, installation_mode
 from .hardware import detect_hardware
 from .performance_policy import default_cpu_threads, realesrgan_pipeline_threads
@@ -69,7 +69,6 @@ from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .safe_output import AtomicOutput, RenderJournal, process_alive
-from .source_identity import file_content_identity
 from .job_lease import JobLease, LeaseBusy
 from .rife_engine import (
     applied_jobs_from_log,
@@ -5870,7 +5869,6 @@ class VideoOptimizerStudio:
         source_w: int,
         source_h: int,
     ) -> str:
-        source = Path(video)
         model_bin = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.bin"
         model_param = REAL_ESRGAN_MODELS / "realesr-animevideov3-x2.param"
         component_fingerprint = bootstrap_component_fingerprint(
@@ -5878,18 +5876,18 @@ class VideoOptimizerStudio:
             component_root=REAL_ESRGAN.parent,
             critical_files=(REAL_ESRGAN, model_bin, model_param),
         )
-
-        identity = {
-            "source": file_content_identity(source),
-            "start": round(start_time, 5),
-            "duration": round(duration, 5),
-            "fps": round(source_fps, 5),
-            "width": source_w,
-            "height": source_h,
-            "component": component_fingerprint or "unverified-component",
-            "scale": 2,
-        }
-        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+        return realesrgan_cache_key(
+            video,
+            start_time=start_time,
+            duration=duration,
+            source_fps=source_fps,
+            source_width=source_w,
+            source_height=source_h,
+            executable=REAL_ESRGAN,
+            model_bin=model_bin,
+            model_param=model_param,
+            component_fingerprint=component_fingerprint,
+        )
 
     def _enhance_clip_ai(
         self, video: str, output_dir: Path, start_time: float, duration: float, source_fps: float,
