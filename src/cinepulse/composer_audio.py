@@ -20,6 +20,7 @@ import math
 import os
 from pathlib import Path
 import threading
+import uuid
 from typing import Callable, Literal
 
 import numpy as np
@@ -344,19 +345,22 @@ def load_visualizer_envelope(
     )
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        temporary = cache_path.with_suffix(".tmp.npz")
-        np.savez_compressed(
-            temporary,
-            spectrum=envelope.spectrum.astype(np.float16),
-            rms=envelope.rms.astype(np.float16),
-            onset=envelope.onset.astype(np.float16),
-            frequencies=envelope.frequencies,
-            waveform=envelope.waveform.astype(np.float16),
-            fps=np.asarray(envelope.fps, dtype=np.float64),
-            waveform_rate=np.asarray(envelope.waveform_rate, dtype=np.float64),
-            duration=np.asarray(envelope.duration, dtype=np.float64),
-        )
-        os.replace(temporary, cache_path)
+        temporary = cache_path.with_name(f".{cache_path.name}.{uuid.uuid4().hex}.tmp.npz")
+        try:
+            np.savez_compressed(
+                temporary,
+                spectrum=envelope.spectrum.astype(np.float16),
+                rms=envelope.rms.astype(np.float16),
+                onset=envelope.onset.astype(np.float16),
+                frequencies=envelope.frequencies,
+                waveform=envelope.waveform.astype(np.float16),
+                fps=np.asarray(envelope.fps, dtype=np.float64),
+                waveform_rate=np.asarray(envelope.waveform_rate, dtype=np.float64),
+                duration=np.asarray(envelope.duration, dtype=np.float64),
+            )
+            os.replace(temporary, cache_path)
+        finally:
+            temporary.unlink(missing_ok=True)
     except OSError:
         pass
     with _cache_lock:
