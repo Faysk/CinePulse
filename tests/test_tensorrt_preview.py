@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from cinepulse.tensorrt_preview import (
     TensorRtKey,
     TensorRtPreviewStore,
     build_external_command,
+    fingerprint_model_path,
 )
 
 
@@ -34,6 +36,19 @@ def key(value: TensorRtExternalBackend | None = None, *, baseline: str = "ncnn-p
 
 
 class TensorRtPreviewTests(unittest.TestCase):
+    def test_directory_fingerprint_changes_on_same_size_same_mtime_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "engine"
+            model.mkdir()
+            shard = model / "engine.plan"
+            shard.write_bytes(b"first")
+            before = fingerprint_model_path(model)
+            stat = shard.stat()
+            shard.write_bytes(b"other")
+            os.utime(shard, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            after = fingerprint_model_path(model)
+            self.assertNotEqual(before, after)
+
     def test_backend_is_never_promoted_to_stable_distribution(self) -> None:
         self.assertFalse(backend().stable_distribution_allowed)
 
