@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .job_store import JobStore
+from .source_identity import file_content_identity
 from .render_job import InvalidJobTransition, ManifestError, RenderJobManifest
 from .hardware_telemetry import HardwareTelemetrySession
 from .hardware_advisor import analyze_hardware_summary
@@ -80,10 +81,14 @@ def _source_identity(settings: Any) -> dict[str, Any]:
         return identity
     path = Path(value)
     try:
-        stat = path.stat()
+        content = file_content_identity(path)
     except OSError:
         return identity
-    identity.update({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+    identity.update({
+        "size": content["size"],
+        "mtime_ns": content["mtime_ns"],
+        "content": content,
+    })
     return identity
 
 
