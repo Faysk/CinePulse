@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -29,6 +29,34 @@ from cinepulse.rife_recovery import (
 
 
 class RifeRecoveryTests(unittest.TestCase):
+    def test_run_logged_progress_probe_exception_reaps_child_and_closes_pipe(self) -> None:
+        class CloseableLines(list):
+            def __init__(self) -> None:
+                super().__init__()
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        process = mock.Mock()
+        process.stdout = CloseableLines()
+        process.poll.return_value = None
+
+        with (
+            mock.patch("cinepulse.rife_recovery.subprocess.Popen", return_value=process),
+            mock.patch("cinepulse.rife_recovery.terminate_process_tree") as terminate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "probe exploded"):
+                rife_recovery._run_logged(
+                    ["fake.exe"],
+                    label="probe",
+                    log=lambda _message: None,
+                    progress_probe=lambda: (_ for _ in ()).throw(RuntimeError("probe exploded")),
+                )
+
+        terminate.assert_called_once_with(process, mock.ANY)
+        self.assertTrue(process.stdout.closed)
+
     def test_verified_output_promotion_keeps_old_final_when_replace_fails(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -419,28 +447,47 @@ class RifeRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Sequencia"):
                 contiguous_segments(root)
 
-    def test_cache_key_matches_studio_identity_contract(self) -> None:
+    def test_cache_key_uses_shared_content_aware_identity_contract(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source.mp4"
-            model = root / "model.bin"
-            source.write_bytes(b"source")
-            model.write_bytes(b"model")
-            actual = ai_cache_key(
+            component = root / "real-esrgan"
+            models = component / "models"
+            models.mkdir(parents=True)
+            exe = component / "realesrgan-ncnn-vulkan.exe"
+            model = models / "realesr-animevideov3-x2.bin"
+            param = models / "realesr-animevideov3-x2.param"
+            source.write_bytes(b"source-v1")
+            exe.write_bytes(b"exe-v1")
+            model.write_bytes(b"model-v1")
+            param.write_bytes(b"param-v1")
+            (component / ".cinepulse-component.json").write_text(
+                json.dumps({"key": "real_esrgan", "version": "test", "sha256": "a" * 64}),
+                encoding="utf-8",
+            )
+
+            first = ai_cache_key(
                 source, model, start_time=0.0, duration=12.5,
                 source_fps=60000 / 1001, source_width=3840, source_height=2160,
             )
+
             source_stat = source.stat()
-            model_stat = model.stat()
-            identity = {
-                "path": str(source.resolve()), "size": source_stat.st_size,
-                "mtime": source_stat.st_mtime_ns, "start": 0.0, "duration": 12.5,
-                "fps": round(60000 / 1001, 5), "width": 3840, "height": 2160,
-                "model_size": model_stat.st_size, "model_mtime": model_stat.st_mtime_ns,
-                "scale": 2,
-            }
-            expected = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
-            self.assertEqual(actual, expected)
+            source.write_bytes(b"source-v2")
+            os.utime(source, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+            second = ai_cache_key(
+                source, model, start_time=0.0, duration=12.5,
+                source_fps=60000 / 1001, source_width=3840, source_height=2160,
+            )
+            self.assertNotEqual(first, second)
+
+            param_stat = param.stat()
+            param.write_bytes(b"param-v2")
+            os.utime(param, ns=(param_stat.st_atime_ns, param_stat.st_mtime_ns))
+            third = ai_cache_key(
+                source, model, start_time=0.0, duration=12.5,
+                source_fps=60000 / 1001, source_width=3840, source_height=2160,
+            )
+            self.assertNotEqual(second, third)
 
 
 if __name__ == "__main__":
