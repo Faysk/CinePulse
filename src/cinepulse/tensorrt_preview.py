@@ -23,6 +23,7 @@ import time
 from typing import Literal
 
 
+from .path_transaction import serialized_path_mutation
 from .source_identity import file_content_identity
 
 
@@ -201,6 +202,7 @@ class TensorRtPreviewStore:
         record = self._load().get("records", {}).get(key.token())
         return bool(isinstance(record, dict) and record.get("accepted"))
 
+    @serialized_path_mutation
     def record(self, key: TensorRtKey, backend: TensorRtExternalBackend, evidence: TensorRtEvidence) -> bool:
         if (
             key.backend_fingerprint != backend.fingerprint
@@ -226,6 +228,7 @@ class TensorRtPreviewStore:
         self._atomic_write(payload)
         return True
 
+    @serialized_path_mutation
     def invalidate(self, key: TensorRtKey) -> bool:
         payload = self._load()
         records = payload.get("records", {})
