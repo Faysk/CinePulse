@@ -578,6 +578,18 @@ class ScrollableTab(ttk.Frame):
             return
 
 
+def _safe_join_reader(reader_thread: threading.Thread | None, timeout: float) -> None:
+    if reader_thread is None or reader_thread is threading.current_thread():
+        return
+    try:
+        reader_thread.join(timeout=timeout)
+    except RuntimeError:
+        # Thread.start() itself may fail under resource exhaustion. Cleanup must
+        # still reap the already spawned external process without masking the
+        # original exception by trying to join an unstarted Python thread.
+        pass
+
+
 def _finalize_piped_process(
     process: subprocess.Popen | None,
     reader_thread: threading.Thread | None,
@@ -588,8 +600,7 @@ def _finalize_piped_process(
         return
     if process.poll() is None:
         terminate_process_tree(process, log, grace_seconds=2.0)
-    if reader_thread is not None and reader_thread is not threading.current_thread():
-        reader_thread.join(timeout=2.0)
+    _safe_join_reader(reader_thread, 2.0)
     stream = getattr(process, "stdout", None)
     if stream is not None:
         try:
@@ -597,8 +608,7 @@ def _finalize_piped_process(
                 stream.close()
         except (OSError, ValueError, AttributeError):
             pass
-    if reader_thread is not None and reader_thread is not threading.current_thread():
-        reader_thread.join(timeout=0.5)
+    _safe_join_reader(reader_thread, 0.5)
 
 
 class VideoOptimizerStudio:
@@ -6511,8 +6521,9 @@ class VideoOptimizerStudio:
                 clean = line.strip()
                 if clean:
                     recent.append(clean); self._log(clean)
-        thread = threading.Thread(target=reader, daemon=True); thread.start()
+        thread = threading.Thread(target=reader, daemon=True)
         try:
+            thread.start()
             while process.poll() is None:
                 if self._cancelled:
                     terminate_process_tree(process, self._log); break
@@ -6527,6 +6538,8 @@ class VideoOptimizerStudio:
             self._push_progress(base + weight)
         finally:
             _finalize_piped_process(process, thread, self._log)
+            if self._process is process:
+                self._process = None
 
     def _prepare_reactive_audio(self, audio: str, focus: str, use_cpu: bool, cpu_threads: int) -> str:
         selected = stems_for_focus(focus)
@@ -6591,8 +6604,8 @@ class VideoOptimizerStudio:
                 name="cinepulse-demucs-output",
                 daemon=True,
             )
-            reader_thread.start()
             try:
+                reader_thread.start()
                 while process.poll() is None:
                     if self._cancelled:
                         terminate_process_tree(process, self._log)
@@ -6627,6 +6640,8 @@ class VideoOptimizerStudio:
                     )
             finally:
                 _finalize_piped_process(process, reader_thread, self._log)
+                if self._process is process:
+                    self._process = None
                 safe_rmtree(demucs_staging)
 
         stems = [locate(name) for name in selected]
@@ -6899,8 +6914,8 @@ class VideoOptimizerStudio:
                             self._log(clean)
 
                 reader_thread = threading.Thread(target=reader, daemon=True)
-                reader_thread.start()
                 try:
+                    reader_thread.start()
                     while process.poll() is None:
                         if self._cancelled:
                             terminate_process_tree(process, self._log)
@@ -6927,6 +6942,8 @@ class VideoOptimizerStudio:
                             )
                 finally:
                     _finalize_piped_process(process, reader_thread, self._log)
+                    if self._process is process:
+                        self._process = None
                 neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
                 if len(frames) != desired:
@@ -7028,10 +7045,9 @@ class VideoOptimizerStudio:
     def _run_ffmpeg(self, command: list[str], duration: float, base: float, weight: float) -> None:
         """Run FFmpeg without letting a blocked stdout pipe stall cancellation.
 
-        Progress parsing is performed on the render worker while a daemon reader
-        drains FFmpeg output. The worker therefore keeps polling the process and
-        can enforce cancellation even when Windows pipe EOF is delayed by a shim
-        or descendant process.
+        Every lifecycle edge lives under the same cleanup boundary: even thread
+        creation, progress callbacks or logging failures after Popen must reap
+        the grouped child and close its captured pipe.
         """
         if self._cancelled:
             raise InterruptedError
@@ -7050,12 +7066,9 @@ class VideoOptimizerStudio:
                 for raw in process.stdout:
                     lines.put(raw)
             except (OSError, ValueError):
-                # Cancellation may close the pipe from the worker thread after
-                # the process has already been terminated.
                 return
 
         reader_thread = threading.Thread(target=reader, daemon=True)
-        reader_thread.start()
 
         def drain_output() -> None:
             while True:
@@ -7075,35 +7088,35 @@ class VideoOptimizerStudio:
                     except ValueError:
                         pass
 
-        while process.poll() is None:
-            drain_output()
-            if self._cancelled:
-                terminate_process_tree(process, self._log, grace_seconds=2.0)
-                break
-            time.sleep(0.05)
-
-        drain_output()
         try:
-            code = process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            terminate_process_tree(process, self._log, grace_seconds=1.0)
-            try:
-                code = process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError("FFmpeg não encerrou após cancelamento forçado.") from exc
-        finally:
-            try:
-                process.stdout.close()
-            except (OSError, ValueError):
-                pass
-            reader_thread.join(timeout=1.0)
-            drain_output()
+            reader_thread.start()
+            while process.poll() is None:
+                drain_output()
+                if self._cancelled:
+                    terminate_process_tree(process, self._log, grace_seconds=2.0)
+                    break
+                time.sleep(0.05)
 
-        if self._cancelled:
-            raise InterruptedError
-        if code:
-            raise RuntimeError("A etapa de vídeo falhou.\n\n" + "\n".join(recent))
-        self._push_progress(base + weight)
+            drain_output()
+            try:
+                code = process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                terminate_process_tree(process, self._log, grace_seconds=1.0)
+                try:
+                    code = process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("FFmpeg não encerrou após cancelamento forçado.") from exc
+
+            if self._cancelled:
+                raise InterruptedError
+            if code:
+                raise RuntimeError("A etapa de vídeo falhou.\n\n" + "\n".join(recent))
+            self._push_progress(base + weight)
+        finally:
+            _finalize_piped_process(process, reader_thread, self._log)
+            if self._process is process:
+                self._process = None
+            drain_output()
 
     def _verify_output(
         self, path: str, duration: float, width: int, height: int, fps: int,
