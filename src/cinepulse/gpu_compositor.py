@@ -25,6 +25,7 @@ from typing import Iterable, Literal
 
 from .gpu_media import CREATE_NO_WINDOW
 from .path_transaction import serialized_path_mutation
+from .source_identity import file_content_identity
 
 
 COMPOSITOR_SCHEMA = 7
@@ -100,14 +101,10 @@ def _layer_contract_payload(layer: OverlayLayer) -> dict[str, object]:
         resolved = source.resolve()
     except OSError:
         resolved = source
-    identity: dict[str, object] = {"path": str(resolved)}
     try:
-        stat = source.stat()
-        identity["size"] = int(stat.st_size)
-        identity["mtime"] = int(stat.st_mtime_ns)
+        identity = file_content_identity(source)
     except OSError:
-        identity["size"] = 0
-        identity["mtime"] = 0
+        identity = {"path": str(resolved), "unreadable": True}
     payload["source"] = identity
     return payload
 
@@ -161,9 +158,16 @@ def _ffmpeg_binary_identity(ffmpeg: str) -> str:
     try:
         resolved = path.resolve(strict=True)
         stat = resolved.stat()
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
     except OSError:
         return "unresolved"
-    return f"{resolved.name}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+    return (
+        f"{resolved.name}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}:"
+        f"{digest.hexdigest()}"
+    )
 
 
 def detect_gpu_compositor_capabilities(ffmpeg: str) -> GpuCompositorCapabilities:
