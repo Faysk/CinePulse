@@ -243,18 +243,23 @@ def _limit_policy_by_live_vram(
     uhd: bool,
     free_vram_mb: float | None,
     gpu_index: int = 0,
+    extreme_8k: bool = False,
 ) -> tuple[RifePolicy, bool, str]:
     """Compatibility selector for the 1.2.4 full-utilization policy.
 
     Live free VRAM is intentionally ignored. Exact tuned evidence may still be
-    reused when already present, otherwise RIFE starts from a fixed aggressive
-    policy: 3:3:3 below UHD and 2:2:2 at UHD. A concrete failure may later
-    trigger the conservative fallback; telemetry never pre-throttles the run.
+    reused when already present. Unproven 8K starts from the recovery-safe
+    1:1:1 policy required by the physical acceptance contract; smaller workloads
+    retain the full-utilization defaults. A concrete failure may later trigger
+    the conservative fallback; telemetry never pre-throttles the run.
     """
     del free_vram_mb
     index = max(0, int(gpu_index))
     if tuned is not None:
         return tuned, True, "full-utilization mode: tuned policy used without live VRAM gating"
+    if extreme_8k:
+        selected = fallback_policy(uhd=True, gpu_index=index)
+        return selected, False, "8K recovery-safe policy: unproven concurrency stays at 1:1:1"
     selected = RifePolicy("2:2:2" if uhd else "3:3:3", index)
     return selected, False, "full-utilization mode: fixed aggressive policy; live VRAM ignored"
 
@@ -422,6 +427,7 @@ def run_safe_rife(
         raise ValueError("RIFE recebeu menos de dois PNGs válidos")
     width, height = validate_png(input_frames[0])
     uhd = max(width, height) >= 3840 or width * height >= 3840 * 2160
+    extreme_8k = max(width, height) >= 7680 or width * height >= 7680 * 4320
     tuning_key: RifeTuningKey | None = None
     tuning_store: RifeTuningStore | None = None
     selected_policy: RifePolicy | None = None
@@ -440,6 +446,7 @@ def run_safe_rife(
             uhd=uhd,
             free_vram_mb=None,
             gpu_index=active_gpu_index,
+            extreme_8k=extreme_8k,
         )
         if jobs_override:
             override_policy = RifePolicy(jobs_override, active_gpu_index)
