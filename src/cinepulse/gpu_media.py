@@ -28,10 +28,10 @@ from .path_transaction import serialized_path_mutation
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
-# Schema 2 intentionally invalidates H5 records written before non-zero seek
-# alignment became a mandatory acceptance gate. Old evidence was correct for
-# frame-zero playback but is insufficient for CinePulse's chunked runtime.
-GPU_MEDIA_SCHEMA = 3
+# Schema 4 binds the corrected CUDA transfer layout as well as the mandatory
+# non-zero seek alignment gate. Older records cannot authorize a different
+# hardware-download contract.
+GPU_MEDIA_SCHEMA = 4
 DEFAULT_PSNR_FLOOR_DB = 55.0
 DEFAULT_SSIM_FLOOR = 0.999
 DECODE_PSNR_FLOOR_DB = 80.0
@@ -282,6 +282,18 @@ class GpuMediaPolicy:
         return f"{self.scaler}=w={max(1, int(width))}:h={max(1, int(height))}{suffix}"
 
 
+def cuda_hwdownload_filter(profile: ColorProfile) -> str:
+    """Return the proven CUDA download chain for the initial H5 envelope.
+
+    NVDEC exposes 8-bit 4:2:0 CUDA surfaces through an NV12 transfer layout on
+    the pinned Windows FFmpeg build. Download as NV12 first, then convert to
+    planar yuv420p after the frame is back in system memory.
+    """
+    if profile.hdr or profile.bit_depth > 8 or profile.pixel_format != "yuv420p":
+        raise ValueError("initial CUDA download envelope supports SDR yuv420p 8-bit only")
+    return "hwdownload,format=nv12,format=yuv420p"
+
+
 @dataclass(frozen=True)
 class GpuMediaEvidence:
     policy: GpuMediaPolicy
@@ -457,6 +469,10 @@ def safe_candidate_policies(
         profile.primaries, profile.transfer, profile.space, profile.range
     )):
         return ()
+    try:
+        cuda_hwdownload_filter(profile)
+    except ValueError:
+        return ()
     decoder = capabilities.decoder_for(codec)
     if not decoder:
         return ()
@@ -505,6 +521,10 @@ def select_proven_policy(
     if any(value in {"", "unknown", "unspecified", "reserved"} for value in (
         profile.primaries, profile.transfer, profile.space, profile.range
     )):
+        return None
+    try:
+        cuda_hwdownload_filter(profile)
+    except ValueError:
         return None
     return store.lookup(key, capabilities)
 
