@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.23 — 2026-09-28
+
+- fecha a issue #94 no updater portátil: antes do handoff, `pending-update.json` passa a ter schema, versão e origem revalidados contra a atualização preparada;
+- exige que a origem preparada exista e permaneça dentro de `.runtime/updates`, recusando descritores stale ou apontando para fora da área privada;
+- calcula o SHA-256 dos bytes exatos do descritor aprovado e faz o helper PowerShell recalcular esse hash antes de relançar o CinePulse; qualquer troca entre staging e relaunch aborta com fail-closed;
+- mantém o fluxo MSI inalterado, inclusive a revalidação do SHA-256 do pacote antes do handoff;
+- adiciona regressões para hash do descritor, versão divergente e origem fora da área privada;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.22 — 2026-09-28
 
 - fecha os deltas corrigíveis por código encontrados após a publicação da 1.2.21 e revalidados diretamente na `main`;
