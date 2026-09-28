@@ -22,6 +22,10 @@ O decoder base, encoder e decoder pool são criados dentro de uma única frontei
 
 O JobStore usa a transação cross-process e preserva CAS/revision como segunda defesa. O store Preview do TensorRT usa a mesma serialização em `record` e `invalidate`.
 
+## Demucs multi-GPU
+
+A release também inclui a correção #78, já presente na `main`: o bootstrap não fixa mais `CUDA_VISIBLE_DEVICES=0`, preserva `CUDA_DEVICE_ORDER=PCI_BUS_ID` e o Demucs recebe explicitamente o `HardwareProfile.gpu_index` como `--device cuda:N`. Jobs CPU continuam em `--device cpu`.
+
 ## Cobertura
 
 A suíte adiciona regressões para falha em `Thread.start()` em VFX/Aurora/Studio, spawn parcial do Overlay Composer e concorrência real de quatro subprocessos escrevendo no mesmo path sem lost update.
