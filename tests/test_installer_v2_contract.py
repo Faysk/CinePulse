@@ -94,6 +94,15 @@ def test_bootstrap_does_not_redirect_installed_runtime_to_user_profile() -> None
     assert "$TempRoot = Join-Path $ProjectRoot 'temp'" in text
 
 
+def test_bootstrap_preserves_multi_gpu_visibility() -> None:
+    environment = _text("installer/CinePulse-Environment.cmd")
+    start = _text("installer/Start-CinePulse.ps1")
+    assert "CUDA_VISIBLE_DEVICES" not in environment
+    assert "CUDA_VISIBLE_DEVICES" not in start
+    assert "CUDA_DEVICE_ORDER=PCI_BUS_ID" in environment
+    assert "$env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'" in start
+
+
 def test_msi_exposes_user_selectable_install_directory() -> None:
     wxs = _text("installer/wix/Product.wxs")
     build = _text("scripts/Build-Msi.ps1")
