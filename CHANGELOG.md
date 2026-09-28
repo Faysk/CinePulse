@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.27 — 2026-09-28
+
+- corrige #118: o updater portátil deixa de aceitar `source` apontando para o staging privado de outra versão;
+- `_validate_portable_pending_handoff()` agora exige que a origem esteja em `.runtime/updates/<versão preparada>` ou abaixo desse diretório;
+- preserva a rejeição específica para paths realmente fora de `.runtime/updates` e mantém o binding SHA-256 do descriptor introduzido na 1.2.25;
+- adiciona regressão focada para descriptor/version válidos com origem cross-version;
+- incorpora sem regressão o hotfix de CI da 1.2.26;
+- mantém o aceite físico NVIDIA/8K/120 separado em #4.
+
+## 1.2.26 — 2026-09-28
+
+- corrige #113: o teste do handoff do updater deixa de substituir `subprocess.Popen` globalmente;
+- o mock passa a ficar isolado na referência `subprocess` de `cinepulse.update_manager`, impedindo que telemetria NVIDIA concorrente (`nvidia-smi`) contamine a contagem de chamadas;
+- preserva a asserção forte de exatamente um handoff PowerShell do updater, sem relaxar o contrato para esconder flakiness;
+- revalida o Quality matrix no Windows/Python 3.14.7 que expôs a regressão na 1.2.25;
+- não altera a lógica runtime do updater; é um hotfix de confiabilidade dos gates de release/CI;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
+## 1.2.25 — 2026-09-28
+
+- corrige #111: fecha o TOCTOU residual entre a verificação de `pending-update.json` no helper e a leitura posterior pelo aplicador portátil;
+- o helper propaga `CINEPULSE_EXPECTED_PENDING_SHA256` para o processo relançado;
+- o aplicador lê o descriptor uma única vez como bytes, valida SHA-256 quando há digest herdado e interpreta exatamente esses mesmos bytes;
+- o bootstrap limpa o digest herdado após a tentativa de apply, evitando estado residual no processo;
+- o smoke Windows prova que digest divergente falha antes de qualquer mutação de payload e que digest correto preserva rollback/retry e apply final;
+- mantém o hardening de timeout da 1.2.24 e o aceite físico NVIDIA/8K/120 separado em #4.
+
 ## 1.2.24 — 2026-09-28
 
 - corrige #95: `path_mutation_transaction(..., timeout=...)` passa a aplicar um único orçamento de timeout à aquisição completa, incluindo contenção entre threads do mesmo processo;

@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$Version = '1.2.24'
+    [string]$Version = '1.2.27'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,7 +49,33 @@ try {
     $Pending = Join-Path $Target '.runtime\pending-update.json'
     @{ schema = 1; version = $Version; source = $Stage } | ConvertTo-Json |
         Set-Content -LiteralPath $Pending -Encoding UTF8
+    $ExpectedPendingSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Pending).Hash.ToLowerInvariant()
 
+    # Prove that a descriptor changed after helper verification is rejected
+    # before any managed payload mutation begins.
+    $env:CINEPULSE_EXPECTED_PENDING_SHA256 = ('0' * 64)
+    $DigestFailureObserved = $false
+    try {
+        & (Join-Path $Target 'installer\Start-CinePulse.ps1') -ApplyUpdateOnly
+    } catch {
+        $DigestFailureObserved = $true
+        Write-Host "CINEPULSE_UPDATE_DESCRIPTOR_TAMPER_OBSERVED $($_.Exception.Message)"
+    } finally {
+        Remove-Item Env:CINEPULSE_EXPECTED_PENDING_SHA256 -ErrorAction SilentlyContinue
+    }
+    if (-not $DigestFailureObserved) { throw 'Digest divergente do descritor pendente não foi bloqueado.' }
+    if ((Get-Content -LiteralPath (Join-Path $Target 'README.md') -Raw).Trim() -ne $OldReadme) {
+        throw 'Falha de digest alterou o payload antes da validação do descritor.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $Target 'future-root-file.txt')) {
+        throw 'Falha de digest aplicou arquivo novo antes da validação do descritor.'
+    }
+    if (-not (Test-Path -LiteralPath $Pending)) {
+        throw 'Falha de digest removeu o descritor pendente necessário para retry.'
+    }
+    Write-Host 'CINEPULSE_UPDATE_DESCRIPTOR_BINDING_OK mismatch=blocked payload=untouched'
+
+    $env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256
     $env:CINEPULSE_CI_UPDATE_FAIL_AFTER_COPY = '1'
     $FailureObserved = $false
     try {
@@ -78,6 +104,7 @@ try {
     }
     Write-Host 'CINEPULSE_UPDATE_ROLLBACK_FAULT_OK old=restored future=removed mutable=preserved pending=kept'
 
+    $env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256
     & (Join-Path $Target 'installer\Start-CinePulse.ps1') -ApplyUpdateOnly
     if (-not $?) { throw 'Aplicação isolada falhou.' }
     if (-not (Test-Path -LiteralPath (Join-Path $Target 'data\preserve-me.txt'))) {
@@ -98,5 +125,6 @@ try {
     Write-Host 'CINEPULSE_UPDATE_APPLY_SMOKE_OK mutable-data=preserved managed-tree=replaced'
 } finally {
     Remove-Item Env:CINEPULSE_CI_UPDATE_FAIL_AFTER_COPY -ErrorAction SilentlyContinue
+    Remove-Item Env:CINEPULSE_EXPECTED_PENDING_SHA256 -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $SmokeRoot) { Remove-Item -LiteralPath $SmokeRoot -Recurse -Force }
 }

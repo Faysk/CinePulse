@@ -286,7 +286,7 @@ class UpdateManagerTests(unittest.TestCase):
             with (
                 patch("cinepulse.update_manager._powershell_executable", return_value="powershell.exe"),
                 patch("cinepulse.update_manager.tempfile.gettempdir", return_value=str(root)),
-                patch("cinepulse.update_manager.subprocess.Popen") as popen,
+                patch("cinepulse.update_manager.subprocess") as subprocess_api,
             ):
                 helper = launch_staged(info, pending, app_root, 123)
 
@@ -294,7 +294,12 @@ class UpdateManagerTests(unittest.TestCase):
             self.assertIn(expected_pending_sha256, script)
             self.assertIn("Get-FileHash -Algorithm SHA256 -LiteralPath $Pending", script)
             self.assertIn("if ($ActualPendingSha256 -ne $ExpectedPendingSha256) { exit 24 }", script)
-            popen.assert_called_once()
+            self.assertIn("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256", script)
+            self.assertLess(
+                script.index("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256"),
+                script.index("Start-Process -FilePath $Launcher"),
+            )
+            subprocess_api.Popen.assert_called_once()
 
     def test_portable_launch_rejects_descriptor_for_different_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -324,11 +329,11 @@ class UpdateManagerTests(unittest.TestCase):
             source.mkdir(parents=True)
             pending = app_root / ".runtime" / "pending-update.json"
             pending.write_text(
-                json.dumps({"schema": 1, "version": "1.2.24", "source": str(source)}),
+                json.dumps({"schema": 1, "version": "1.2.27", "source": str(source)}),
                 encoding="utf-8",
             )
             info = UpdateInfo(
-                "1.2.24",
+                "1.2.27",
                 "https://example.invalid/CinePulse.zip",
                 "a" * 64,
                 package_kind="portable",

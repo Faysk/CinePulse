@@ -89,6 +89,8 @@ function Apply-PendingUpdate {
         & $Applier -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
     } catch {
         throw "Aplicador transacional de atualização falhou. $($_.Exception.Message)"
+    } finally {
+        Remove-Item Env:CINEPULSE_EXPECTED_PENDING_SHA256 -ErrorAction SilentlyContinue
     }
 }
 
