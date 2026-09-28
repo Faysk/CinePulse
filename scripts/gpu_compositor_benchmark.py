@@ -328,7 +328,7 @@ def main() -> int:
             "-map", "[vfinal]", "-an",
             "-t", f"{benchmark_duration:.6f}",
             "-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrap",
-            "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "gbr", "-color_range", "pc",
+            "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "pc",
             str(candidate),
         ]
         candidate_seconds, _ = run(candidate_cmd, args.timeout)
