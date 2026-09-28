@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.21 — 2026-09-28
+
+- consolida o hardening final pós-1.2.19 com identidade de conteúdo para caches, evidências e histórico, evitando reutilização após substituições de arquivo com mesmo tamanho/mtime;
+- torna publicação de caches de música/visualizer, checkpoints e evidências concorrentes segura e durável;
+- fecha ciclos de vida de subprocessos FFmpeg/IA/recovery/Preview em saídas excepcionais, impedindo filhos e pipes órfãos;
+- endurece recovery RIFE com promoção crash-safe, checkpoints serializados e identidade de cache compartilhada com o render normal;
+- reforça ownership de render, recuperação de comandos de worker após crash e validação estrita de payloads/protocolos;
+- endurece downloads/extração de componentes experimentais com limites de bytes, headroom reavaliado e rejeição de estruturas inseguras;
+- mantém aceitação física NVIDIA/8K separada e pendente na issue #4; os gates hospedados não são usados como prova física de GPU.
+
 ## 1.2.19 — 2026-09-21
 
 - Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
