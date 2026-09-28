@@ -128,10 +128,10 @@ function Set-DedicatedGpuPreference {
         Write-Host 'GPU NVIDIA não detectada; o CinePulse continua disponível em CPU/Vulkan compatível.'
         return
     }
-    # Do not write Windows-wide GPU preference registry entries.  Keep the
-    # project isolated and express CUDA selection only in this process tree.
+    # Do not write Windows-wide GPU preference registry entries. Keep PCI bus
+    # ordering deterministic while leaving every CUDA adapter visible; each
+    # processing stage selects its adapter explicitly.
     $env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'
-    $env:CUDA_VISIBLE_DEVICES = '0'
     $env:CINEPULSE_PREFER_DEDICATED_GPU = '1'
     Write-Host 'CINEPULSE_DEDICATED_GPU_PREFERRED NVIDIA=OK scope=process-only'
 }
