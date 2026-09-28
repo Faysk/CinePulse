@@ -127,6 +127,11 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("artifacts/gpu/resident-encode-4k60.json", text)
         self.assertIn("--resident-base", text)
         self.assertIn("artifacts/gpu/composer-h6-resident.json", text)
+        self.assertEqual(
+            4,
+            text.count("$global:LASTEXITCODE = 0"),
+            "Allowed GPU benchmark exit code 2 must not leak into the GitHub Actions step result.",
+        )
         self.assertGreaterEqual(
             text.count("colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"),
             3,

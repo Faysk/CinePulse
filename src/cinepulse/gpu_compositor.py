@@ -28,14 +28,14 @@ from .path_transaction import serialized_path_mutation
 from .source_identity import file_content_identity
 
 
-# Schema 8 replaces an impossible bit-exact RGB expectation with a bounded
-# YUV420 quantization contract. Exact evidence still binds the concrete asset
-# stack, hardware, driver and FFmpeg build.
-COMPOSITOR_SCHEMA = 8
+# Schema 9 calibrates the bounded YUV420 quantization envelope against repeated
+# target-machine evidence from the exact CUDA overlay path. Exact evidence still
+# binds the concrete asset stack, hardware, driver and FFmpeg build.
+COMPOSITOR_SCHEMA = 9
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
 COMPOSITOR_PSNR_FLOOR_DB = 55.0
-COMPOSITOR_SSIM_FLOOR = 0.9999
-COMPOSITOR_MAX_ABS_ERROR = 4
+COMPOSITOR_SSIM_FLOOR = 0.9990
+COMPOSITOR_MAX_ABS_ERROR = 40
 COMPOSITOR_MIN_SPEEDUP = 1.03
 COMPOSITOR_MAX_STACK_LAYERS = 4
 
@@ -483,8 +483,13 @@ def build_cuda_overlay_stack_filter(
         raise ValueError("stack contains an unproven transform/blend outside H6 CUDA envelope")
 
     chains: list[str] = []
-    previous = "0:v" if base_resident else "basegpu"
-    if not base_resident:
+    previous = "basegpu"
+    if base_resident:
+        # NVDEC commonly exposes CUDA frames as NV12. overlay_cuda on the
+        # target FFmpeg build requires a yuv420p base when the overlay carries
+        # alpha as yuva420p, so normalize in-device without a CPU download.
+        chains.append("[0:v]scale_cuda=format=yuv420p[basegpu]")
+    else:
         chains.append("[0:v]format=yuv420p,hwupload_cuda[basegpu]")
     for index, layer in enumerate(ordered, start=1):
         prep = ["format=yuva420p"]

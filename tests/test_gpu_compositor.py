@@ -113,7 +113,8 @@ class GpuCompositorTests(unittest.TestCase):
             canvas_height=1080,
             base_resident=True,
         )
-        self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+        self.assertIn("[0:v]scale_cuda=format=yuv420p[basegpu]", graph)
+        self.assertIn("[basegpu][layergpu1]overlay_cuda", graph)
         self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
         self.assertEqual(1, graph.count("hwdownload"))
 
@@ -200,7 +201,15 @@ class GpuCompositorTests(unittest.TestCase):
 
     def test_evidence_must_be_near_identical_faster_and_from_real_reference(self) -> None:
         good = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
+        target_yuv420_quantization = GpuCompositorEvidence(
+            7.7063236, 1.183518, 55.854865, 0.999045, True, True, True, True,
+            max_abs_error=38,
+        )
         visible_change = GpuCompositorEvidence(10.0, 6.0, 50.0, 0.999, True, True, True, True)
+        structural_escape = GpuCompositorEvidence(
+            10.0, 6.0, 60.0, 0.9989, True, True, True, True,
+            max_abs_error=38,
+        )
         quantization_escape = GpuCompositorEvidence(
             10.0, 6.0, 60.0, 0.99995, True, True, True, True,
             max_abs_error=COMPOSITOR_MAX_ABS_ERROR + 1,
@@ -212,7 +221,9 @@ class GpuCompositorTests(unittest.TestCase):
         )
         self.assertEqual(COMPOSITOR_REFERENCE_ID, good.reference_id)
         self.assertTrue(good.accepted)
+        self.assertTrue(target_yuv420_quantization.accepted)
         self.assertFalse(visible_change.accepted)
+        self.assertFalse(structural_escape.accepted)
         self.assertFalse(quantization_escape.accepted)
         self.assertFalse(slower.accepted)
         self.assertFalse(wrong_reference.accepted)

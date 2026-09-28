@@ -152,7 +152,7 @@ jobs:
           python scripts/gpu_media_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --seek-seconds 1 --seek-clip-seconds 1 --timeout 300 | Tee-Object -FilePath $Evidence
           $NvdecExit = $LASTEXITCODE
           if ($NvdecExit -ne 0 -and $NvdecExit -ne 2) { throw "Physical NVDEC benchmark failed with code $NvdecExit." }
-          if ($NvdecExit -eq 2) { Write-Host 'CINEPULSE_NVDEC_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if ($NvdecExit -eq 2) { Write-Host 'CINEPULSE_NVDEC_NOT_PROMOTED exact candidate did not clear all parity/performance gates.'; $global:LASTEXITCODE = 0 }
           if (-not (Test-Path -LiteralPath $Evidence)) { throw 'NVDEC physical evidence report was not created.' }
       - name: Physical resident NVDEC CUDA NVENC acceptance
         shell: pwsh
@@ -173,13 +173,13 @@ jobs:
           python scripts/gpu_resident_encode_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --width 1920 --height 1080 --bitrate-kbps 12000 --maxrate-kbps 24000 --bufsize-kbps 48000 --gop 30 --timeout 300 | Tee-Object -FilePath $Evidence1080
           $Resident1080Exit = $LASTEXITCODE
           if ($Resident1080Exit -ne 0 -and $Resident1080Exit -ne 2) { throw "Resident 1080p60 benchmark failed with code $Resident1080Exit." }
-          if ($Resident1080Exit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_1080_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if ($Resident1080Exit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_1080_NOT_PROMOTED exact candidate did not clear all parity/performance gates.'; $global:LASTEXITCODE = 0 }
 
           # Exact CinePulse 4K60 streaming contract: 48 Mbps, GOP 30.
           python scripts/gpu_resident_encode_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --width 3840 --height 2160 --bitrate-kbps 48000 --maxrate-kbps 96000 --bufsize-kbps 192000 --gop 30 --timeout 300 | Tee-Object -FilePath $Evidence4K
           $Resident4KExit = $LASTEXITCODE
           if ($Resident4KExit -ne 0 -and $Resident4KExit -ne 2) { throw "Resident 4K60 benchmark failed with code $Resident4KExit." }
-          if ($Resident4KExit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_4K_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if ($Resident4KExit -eq 2) { Write-Host 'CINEPULSE_RESIDENT_4K_NOT_PROMOTED exact candidate did not clear all parity/performance gates.'; $global:LASTEXITCODE = 0 }
 
           if (-not (Test-Path -LiteralPath $Evidence1080)) { throw 'Resident 1080p60 evidence report was not created.' }
           if (-not (Test-Path -LiteralPath $Evidence4K)) { throw 'Resident 4K60 evidence report was not created.' }
@@ -243,7 +243,7 @@ jobs:
           python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --resident-base --timeout 300 | Tee-Object -FilePath $ResidentEvidence
           $ResidentExit = $LASTEXITCODE
           if ($ResidentExit -ne 0 -and $ResidentExit -ne 2) { throw "Physical Composer NVDEC-resident benchmark failed with code $ResidentExit." }
-          if ($ResidentExit -eq 2) { Write-Host 'CINEPULSE_COMPOSER_RESIDENT_NOT_PROMOTED exact candidate did not clear all parity/performance gates.' }
+          if ($ResidentExit -eq 2) { Write-Host 'CINEPULSE_COMPOSER_RESIDENT_NOT_PROMOTED exact candidate did not clear all parity/performance gates.'; $global:LASTEXITCODE = 0 }
           if (-not (Test-Path -LiteralPath $Cache)) { throw 'Composer GPU evidence cache was not created.' }
           if (-not (Test-Path -LiteralPath $Evidence)) { throw 'Composer GPU evidence report was not created.' }
           if (-not (Test-Path -LiteralPath $ResidentEvidence)) { throw 'Composer resident GPU evidence report was not created.' }

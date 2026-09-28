@@ -310,6 +310,13 @@ def main() -> int:
     caps = detect_gpu_compositor_capabilities(ffmpeg)
     if not cuda_stack_eligible(layers, caps):
         raise SystemExit("layer stack is outside the bounded H6 CUDA envelope")
+    if args.resident_base and not caps.scale_cuda:
+        print(json.dumps({
+            "physical_acceptance": "rejected",
+            "reason": "resident CUDA base normalization requires scale_cuda",
+            "base_mode": "nvdec-resident",
+        }, indent=2))
+        return 2
     hardware = detect_hardware(args.gpu_index)
     if not hardware.gpu:
         raise SystemExit("NVIDIA GPU required; no H6 physical evidence recorded")
