@@ -52,6 +52,7 @@ class GpuEncodeTests(unittest.TestCase):
             NvencContract(**{**original.__dict__, "gop": 60}),
             NvencContract(**{**original.__dict__, "bframes": 3}),
             NvencContract(**{**original.__dict__, "gpu_index": 1}),
+            NvencContract(**{**original.__dict__, "cuda_frames": True}),
         ]
         self.assertTrue(all(original.token() != item.token() for item in variants))
 
@@ -65,6 +66,14 @@ class GpuEncodeTests(unittest.TestCase):
             "-multipass fullres", "-b_ref_mode middle", "-g 30", "-bf 2",
         ):
             self.assertIn(value, joined)
+
+    def test_resident_nvenc_uses_cuda_pixel_format_but_keeps_output_contract(self) -> None:
+        value = NvencContract(**{**contract().__dict__, "cuda_frames": True})
+        args = value.ffmpeg_args()
+        self.assertEqual("cuda", args[args.index("-pix_fmt") + 1])
+        self.assertEqual("yuv420p", value.pixel_format)
+        software = value.ffmpeg_args(cuda_frames=False)
+        self.assertEqual("yuv420p", software[software.index("-pix_fmt") + 1])
 
     def test_nvenc_args_select_exact_adapter(self) -> None:
         value = NvencContract(

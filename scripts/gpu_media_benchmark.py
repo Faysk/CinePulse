@@ -25,6 +25,7 @@ from cinepulse.gpu_media import (
     GpuMediaKey,
     GpuMediaPolicy,
     GpuMediaTuningStore,
+    cuda_hwdownload_filter,
     detect_gpu_media_capabilities,
     safe_candidate_policies,
 )
@@ -217,7 +218,7 @@ def _build_candidate(
     filters: list[str] = []
     if policy.scaler:
         filters.append(policy.scale_filter(width, height))
-    filters.append(f"hwdownload,format={profile.pixel_format}")
+    filters.append(cuda_hwdownload_filter(profile))
     command += ["-vf", ",".join(filters), "-c:v", "ffv1", "-level", "3", "-c:a", "copy"]
     command += _color_args(profile) + [str(output)]
     return command

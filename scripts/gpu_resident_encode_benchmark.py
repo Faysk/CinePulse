@@ -95,7 +95,7 @@ def baseline_command(ffmpeg: str, source: Path, output: Path, *, contract: Nvenc
     filters = []
     if width > 0 and height > 0: filters.append(f"zscale=w={width}:h={height}:dither=error_diffusion")
     filters.append(f"format={contract.pixel_format}")
-    command += ["-map", "0:v:0", "-map", "0:a?", "-vf", ",".join(filters)] + contract.ffmpeg_args()
+    command += ["-map", "0:v:0", "-map", "0:a?", "-vf", ",".join(filters)] + contract.ffmpeg_args(cuda_frames=False)
     return command + color_args(profile) + ["-c:a", "copy", str(output)]
 
 
@@ -157,7 +157,7 @@ def main() -> int:
         bufsize_kbps=args.bufsize_kbps, lookahead=args.lookahead, bframes=args.bframes, tune=args.tune,
         spatial_aq=args.spatial_aq, temporal_aq=args.temporal_aq, aq_strength=args.aq_strength,
         multipass=args.multipass, b_ref_mode=args.b_ref_mode, gop=args.gop,
-        gpu_index=gpu_index,
+        gpu_index=gpu_index, cuda_frames=True,
     )
     key = ResidentEncodeKey(hardware.gpu, hardware.driver or "unknown-driver", caps.fingerprint, codec,
                             source_w, source_h, width, height, profile.pixel_format, profile.primaries,

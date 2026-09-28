@@ -82,7 +82,7 @@ from .rife_engine import (
 from .pipeline_budget import derive_pipeline_budget
 from .adaptive_runtime import AdaptiveRuntimeController, RuntimePressureDecision
 from .gpu_media import (
-    GpuMediaKey, GpuMediaPolicy, GpuMediaTuningStore, detect_gpu_media_capabilities,
+    GpuMediaKey, GpuMediaPolicy, GpuMediaTuningStore, cuda_hwdownload_filter, detect_gpu_media_capabilities,
     invalidate_on_runtime_failure as invalidate_gpu_media_policy,
     select_proven_policy as select_gpu_media_policy,
 )
@@ -6117,7 +6117,7 @@ class VideoOptimizerStudio:
                 command += policy.input_args()
             command += ["-i", video, "-map", "0:v:0", "-an"]
             if policy is not None and gpu_media_profile is not None:
-                filters = f"hwdownload,format={gpu_media_profile.pixel_format},fps={source_fps:.8f}"
+                filters = f"{cuda_hwdownload_filter(gpu_media_profile)},fps={source_fps:.8f}"
             else:
                 filters = f"fps={source_fps:.8f}"
             command += [

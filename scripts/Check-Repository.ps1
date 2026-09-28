@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $Failures = [System.Collections.Generic.List[string]]::new()
-$IgnoredRoots = @('.git', '.runtime', '.venv', 'components', 'data')
+$IgnoredRoots = @('.git', '.runtime', '.venv', '.tmp_quality_review', 'components', 'data', 'cache', 'temp', 'artifacts', 'dist')
 $MaxBytes = 90MB
 
 Get-ChildItem -LiteralPath $ProjectRoot -File -Recurse -Force | ForEach-Object {

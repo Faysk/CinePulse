@@ -31,7 +31,8 @@ class H5GpuMediaRuntimeContractTests(unittest.TestCase):
 
     def test_cuda_frames_are_downloaded_without_gpu_color_conversion(self) -> None:
         self.assertIn("policy.input_args()", self.block)
-        self.assertIn("hwdownload,format={gpu_media_profile.pixel_format},fps=", self.block)
+        self.assertIn("cuda_hwdownload_filter(gpu_media_profile)", self.block)
+        self.assertNotIn("hwdownload,format={gpu_media_profile.pixel_format}", self.block)
         self.assertNotIn("colorspace_cuda", self.block)
         self.assertNotIn("tonemap_cuda", self.block)
 
