@@ -604,6 +604,19 @@ def _validate_portable_pending_handoff(info: UpdateInfo, staged: Path, app_root:
     return hashlib.sha256(raw).hexdigest().lower()
 
 
+def _spawn_handoff(shell: str, helper: Path, app_root: Path) -> None:
+    """Launch the detached updater helper without exposing global subprocess mocking to callers."""
+    subprocess.Popen(
+        [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
+        cwd=str(app_root),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=CREATE_NO_WINDOW,
+        close_fds=True,
+    )
+
+
 def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: int) -> Path:
     """Hand the verified package to a helper that waits for this process to exit.
 
@@ -638,13 +651,5 @@ def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: i
         encoding="utf-8-sig",
     )
     shell = _powershell_executable()
-    subprocess.Popen(
-        [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
-        cwd=str(app_root),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=CREATE_NO_WINDOW,
-        close_fds=True,
-    )
+    _spawn_handoff(shell, helper, app_root)
     return helper
