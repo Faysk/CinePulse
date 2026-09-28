@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.28 — 2026-09-28
+
+- fecha #4 com aceite físico canônico no `main` pelo workflow `GPU Acceptance` #907 (run `36470808107`) em NVIDIA GeForce RTX 4070 Laptop GPU 8 GB, driver 617.14;
+- corrige o contrato do workflow físico para aceitar exit code 2 como **não promovido** sem converter um benchmark fail-closed em falha espúria do job;
+- corrige o caminho NVDEC/CUDA/NVENC: preserva metadata BT.709, normaliza transfer/layout de superfícies e mantém seleção explícita do adaptador;
+- corrige o Composer CUDA físico: referência mantém metadata de cor, o envelope YUV420 passa a refletir a quantização observada e o caminho NVDEC-resident normaliza NV12 → yuv420p em GPU via `scale_cuda` antes de `overlay_cuda`;
+- valida fisicamente Composer cpu-upload e NVDEC-resident com PSNR 55.854865 dB, SSIM 0.999045 e `max_abs_error=38`, mantendo o cache/evidência preso ao hardware, driver, FFmpeg e stack exatos;
+- valida Real-ESRGAN, RIFE, GPU gate e recovery RIFE 8K UHD; o recovery mantém política segura `jobs=1:1:1` quando concorrência maior não está provada;
+- promove, conforme a regra de graduação de #4, os contratos 8K/120 neural/GPU e recovery cobertos pelo aceite físico; 10K/12K e 144/240/480 fps continuam experimentais;
+- mantém fail-closed qualquer rota que não cumpra seu próprio threshold: o NVDEC puro e o resident 4K60 não são promovidos nesta release.
+
 ## 1.2.27 — 2026-09-28
 
 - corrige #118: o updater portátil deixa de aceitar `source` apontando para o staging privado de outra versão;
