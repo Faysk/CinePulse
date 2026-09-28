@@ -126,6 +126,14 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("artifacts/gpu/resident-encode-4k60.json", text)
         self.assertIn("--resident-base", text)
         self.assertIn("artifacts/gpu/composer-h6-resident.json", text)
+        self.assertGreaterEqual(
+            text.count("colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"),
+            3,
+        )
+        self.assertGreaterEqual(
+            text.count("setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709"),
+            3,
+        )
         for path in (
             "scripts/hardware_benchmark.py",
             "src/cinepulse/performance_policy.py",
