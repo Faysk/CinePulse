@@ -7055,7 +7055,6 @@ class VideoOptimizerStudio:
                 return
 
         reader_thread = threading.Thread(target=reader, daemon=True)
-        reader_thread.start()
 
         def drain_output() -> None:
             while True:
@@ -7075,35 +7074,35 @@ class VideoOptimizerStudio:
                     except ValueError:
                         pass
 
-        while process.poll() is None:
-            drain_output()
-            if self._cancelled:
-                terminate_process_tree(process, self._log, grace_seconds=2.0)
-                break
-            time.sleep(0.05)
-
-        drain_output()
         try:
-            code = process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            terminate_process_tree(process, self._log, grace_seconds=1.0)
-            try:
-                code = process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError("FFmpeg não encerrou após cancelamento forçado.") from exc
-        finally:
-            try:
-                process.stdout.close()
-            except (OSError, ValueError):
-                pass
-            reader_thread.join(timeout=1.0)
-            drain_output()
+            reader_thread.start()
+            while process.poll() is None:
+                drain_output()
+                if self._cancelled:
+                    terminate_process_tree(process, self._log, grace_seconds=2.0)
+                    break
+                time.sleep(0.05)
 
-        if self._cancelled:
-            raise InterruptedError
-        if code:
-            raise RuntimeError("A etapa de vídeo falhou.\n\n" + "\n".join(recent))
-        self._push_progress(base + weight)
+            drain_output()
+            try:
+                code = process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                terminate_process_tree(process, self._log, grace_seconds=1.0)
+                try:
+                    code = process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("FFmpeg não encerrou após cancelamento forçado.") from exc
+
+            if self._cancelled:
+                raise InterruptedError
+            if code:
+                raise RuntimeError("A etapa de vídeo falhou.\n\n" + "\n".join(recent))
+            self._push_progress(base + weight)
+        finally:
+            _finalize_piped_process(process, reader_thread, self._log)
+            if self._process is process:
+                self._process = None
+            drain_output()
 
     def _verify_output(
         self, path: str, duration: float, width: int, height: int, fps: int,
