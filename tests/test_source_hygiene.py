@@ -32,6 +32,16 @@ class SourceHygieneTests(unittest.TestCase):
                 text.extend(item.read_text(encoding="utf-8") for item in path.rglob("*.py"))
         self.assertNotIn("GPU automática", "\n".join(text))
 
+    def test_bootstrap_does_not_pin_cuda_to_adapter_zero(self) -> None:
+        bootstrap_paths = (
+            ROOT / "installer" / "Start-CinePulse.ps1",
+            ROOT / "installer" / "CinePulse-Environment.cmd",
+        )
+        for path in bootstrap_paths:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("CUDA_VISIBLE_DEVICES", text, str(path))
+            self.assertIn("CUDA_DEVICE_ORDER", text, str(path))
+
 
 if __name__ == "__main__":
     unittest.main()
