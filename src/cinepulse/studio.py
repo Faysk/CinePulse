@@ -63,7 +63,8 @@ from .realesrgan_tuning import RealEsrganPolicy
 from .matroska_quality import inspect_matroska_segment
 from .media_profile import ColorProfile
 from .delivery import (
-    DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, build_delivery_plan, suggested_extension, detect_ffmpeg_encoders,
+    DELIVERY_PROFILES, PROFILE_AUTO, DeliveryPlan, bounded_encoder_threads, build_delivery_plan,
+    suggested_extension, detect_ffmpeg_encoders,
 )
 from .color_pipeline import ColorPipeline, build_color_pipeline
 from .render_plan import FrameSpec, PlanInput, RenderPlan, build_render_plan, risks_as_warnings, spatial_scale_factor
@@ -5224,8 +5225,11 @@ class VideoOptimizerStudio:
                     if audio_filter:
                         command += ["-af", audio_filter]
                     command += delivery_plan.audio_args()
+                encode_threads = stage_threads(
+                    "encode", gpu_active=not settings.use_cpu and self._nvenc
+                )
                 command += [
-                    "-threads", str(stage_threads("encode", gpu_active=not settings.use_cpu and self._nvenc)),
+                    "-threads", str(bounded_encoder_threads(baseline_video_args, encode_threads)),
                     "-frames:v", str(final_target_frames),
                 ]
                 command += delivery_plan.muxer_args()
@@ -5252,6 +5256,10 @@ class VideoOptimizerStudio:
                     )
                     cpu_fallback_command = list(baseline_command)
                     cpu_fallback_command[start:start + len(baseline_video_args)] = cpu_video_args
+                    fallback_threads_index = cpu_fallback_command.index("-threads")
+                    cpu_fallback_command[fallback_threads_index + 1] = str(
+                        bounded_encoder_threads(cpu_video_args, encode_threads)
+                    )
                 resident_route = None
                 resident_store = ResidentEncodeStore(PATHS.cache / "hardware" / "resident-encode.json")
                 try:
