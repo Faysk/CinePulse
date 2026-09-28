@@ -81,7 +81,8 @@ class ComposerAutoExportTests(unittest.TestCase):
             self.assertIn("-hwaccel_output_format", command)
             self.assertIn("h264_cuvid", command)
             graph = command[command.index("-filter_complex") + 1]
-            self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+            self.assertIn("[0:v]scale_cuda=format=yuv420p[basegpu]", graph)
+            self.assertIn("[basegpu][layergpu1]overlay_cuda", graph)
             self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
 
     def test_still_background_stays_cpu_without_gpu_attempt(self) -> None:
