@@ -589,7 +589,11 @@ def _finalize_piped_process(
     if process.poll() is None:
         terminate_process_tree(process, log, grace_seconds=2.0)
     if reader_thread is not None and reader_thread is not threading.current_thread():
-        reader_thread.join(timeout=2.0)
+        try:
+            reader_thread.join(timeout=2.0)
+        except RuntimeError:
+            # Thread.start() can fail before the thread becomes joinable.
+            pass
     stream = getattr(process, "stdout", None)
     if stream is not None:
         try:
@@ -598,7 +602,10 @@ def _finalize_piped_process(
         except (OSError, ValueError, AttributeError):
             pass
     if reader_thread is not None and reader_thread is not threading.current_thread():
-        reader_thread.join(timeout=0.5)
+        try:
+            reader_thread.join(timeout=0.5)
+        except RuntimeError:
+            pass
 
 
 class VideoOptimizerStudio:
