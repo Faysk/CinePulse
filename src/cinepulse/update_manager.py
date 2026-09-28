@@ -598,6 +598,9 @@ def _validate_portable_pending_handoff(info: UpdateInfo, staged: Path, app_root:
     updates_root = (runtime_root / "updates").resolve()
     if updates_root != source and updates_root not in source.parents:
         raise ValueError("A origem da atualização portátil está fora da área privada de updates.")
+    version_root = (updates_root / info.version.strip()).resolve()
+    if version_root != source and version_root not in source.parents:
+        raise ValueError("A origem da atualização portátil não corresponde ao staging da versão preparada.")
     if not source.is_dir():
         raise FileNotFoundError(f"Origem preparada da atualização portátil não encontrada: {source}")
     return hashlib.sha256(raw).hexdigest().lower()
