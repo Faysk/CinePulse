@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.24 — 2026-09-28
+
+- corrige #95: `path_mutation_transaction(..., timeout=...)` passa a aplicar um único orçamento de timeout à aquisição completa, incluindo contenção entre threads do mesmo processo;
+- a espera no `RLock` local respeita o limite configurado e somente o tempo restante é repassado ao named mutex do Windows ou `flock` no POSIX;
+- preserva reentrância na mesma thread e o contrato cross-process introduzido na 1.2.22;
+- adiciona regressão real com duas threads para provar que uma transação concorrente expira dentro do orçamento em vez de aguardar indefinidamente;
+- mantém integralmente o hardening do updater publicado na 1.2.23 (#97/#103);
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.23 — 2026-09-28
 
 - corrige #97: o handoff do updater portátil passa a validar schema, versão e origem de `pending-update.json` antes de fechar a aplicação;
