@@ -68,7 +68,9 @@ def stem_cache_key(
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
 
-def build_demucs_command(\n    python: Path, model_repo: Path, output: Path, audio: Path, use_cpu: bool, gpu_index: int = 0,\n) -> list[str]:
+def build_demucs_command(
+    python: Path, model_repo: Path, output: Path, audio: Path, use_cpu: bool, gpu_index: int = 0,
+) -> list[str]:
     if not python.is_file() or not (model_repo / "htdemucs_ft.yaml").is_file():
         raise FileNotFoundError("Ambiente ou modelo local do Demucs não encontrado.")
     return [
