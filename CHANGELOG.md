@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.24 — 2026-09-28
+
+- fecha #98: Real-ESRGAN e Demucs passam a iniciar a reader thread dentro da fronteira de cleanup do subprocesso;
+- falha em `Thread.start()` após `Popen()` encerra o filho já criado, fecha stdout, preserva a exceção original e limpa `self._process`;
+- adiciona regressões específicas para reader-start failure nas duas rotas neurais;
+- preserva integralmente o hardening do handoff do updater portátil publicado na 1.2.23;
+- o aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.23 — 2026-09-28
 
 - corrige #97: o handoff do updater portátil passa a validar schema, versão e origem de `pending-update.json` antes de fechar a aplicação;
