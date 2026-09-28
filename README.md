@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.21`. Consolida o hardening pós-1.2.19: promoção e persistência mais duráveis, ownership de render entre instâncias, lifecycle determinístico de subprocessos e caches/evidências vinculados ao conteúdo real dos arquivos, com publicação concorrente segura.
+> Estado Stable: `1.2.22`. Corrige a seleção multi-GPU do Demucs: o bootstrap deixa de ocultar adaptadores CUDA secundários e a separação de stems usa explicitamente o `gpu_index` escolhido pelo hardware profile, preservando `cpu` nos jobs CPU.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 
