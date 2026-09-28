@@ -113,6 +113,7 @@ def _mux_command(request: ComposerExportRequest, visual: Path, target: Path) -> 
         *bounded_audio_input_args(str(audio), duration),
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c:v", "copy", "-c:a", "copy",
+        "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "pc",
         "-frames:v", str(frames),
         str(target),
     ]
