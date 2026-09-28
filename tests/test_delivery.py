@@ -9,6 +9,7 @@ from cinepulse.delivery import (
     PROFILE_MASTER,
     PROFILE_STREAMING,
     PROFILE_WEB,
+    bounded_encoder_threads,
     build_delivery_plan,
     default_profile_for_suffix,
     required_suffix_for_profile,
@@ -101,6 +102,11 @@ class DeliveryPlanTests(unittest.TestCase):
         args = plan.audio_args()
         self.assertNotIn("-ac", args)
         self.assertNotIn("-ar", args)
+
+    def test_libx265_threads_are_bounded_without_throttling_other_encoders(self):
+        self.assertEqual(16, bounded_encoder_threads(["-c:v", "libx265"], 28))
+        self.assertEqual(8, bounded_encoder_threads(["-c:v", "libx265"], 8))
+        self.assertEqual(28, bounded_encoder_threads(["-c:v", "hevc_nvenc"], 28))
 
     def test_missing_required_encoder_blocks_when_capabilities_are_known(self):
         plan = build_delivery_plan(
