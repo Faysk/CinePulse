@@ -147,7 +147,7 @@ jobs:
           $Cache = Join-Path $PWD 'cache/hardware/gpu-media-tuning.json'
           $Evidence = Join-Path $PWD 'artifacts/gpu/nvdec-benchmark.json'
           New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
-          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -c:v libx264 -preset fast -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -vf 'setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p' -c:v libx264 -preset fast -x264-params 'colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited' -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create bounded NVDEC physical sample.' }
           python scripts/gpu_media_benchmark.py --input $Source --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --seek-seconds 1 --seek-clip-seconds 1 --timeout 300 | Tee-Object -FilePath $Evidence
           $NvdecExit = $LASTEXITCODE
@@ -166,7 +166,7 @@ jobs:
           $Evidence1080 = Join-Path $PWD 'artifacts/gpu/resident-encode-1080p60.json'
           $Evidence4K = Join-Path $PWD 'artifacts/gpu/resident-encode-4k60.json'
           New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
-          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -c:v libx264 -preset fast -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=60' -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 4 -vf 'setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p' -c:v libx264 -preset fast -x264-params 'colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited' -pix_fmt yuv420p -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -c:a aac -b:a 192k $Source
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create resident-delivery physical sample.' }
 
           # Exact CinePulse 1080p60 streaming contract: 12 Mbps, GOP 30.
@@ -234,7 +234,7 @@ jobs:
           $Evidence = Join-Path $PWD 'artifacts/gpu/composer-h6.json'
           $ResidentEvidence = Join-Path $PWD 'artifacts/gpu/composer-h6-resident.json'
           New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
-          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'format=yuv420p' -c:v libx264 -preset fast -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p' -c:v libx264 -preset fast -x264-params 'colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited' -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 H.264 base sample.' }
           & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'color=c=red@0.55:s=512x288:d=1' -frames:v 1 -vf 'format=rgba' $Layer
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 alpha layer.' }
