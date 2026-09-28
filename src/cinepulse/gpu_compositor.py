@@ -483,8 +483,13 @@ def build_cuda_overlay_stack_filter(
         raise ValueError("stack contains an unproven transform/blend outside H6 CUDA envelope")
 
     chains: list[str] = []
-    previous = "0:v" if base_resident else "basegpu"
-    if not base_resident:
+    previous = "basegpu"
+    if base_resident:
+        # NVDEC commonly exposes CUDA frames as NV12. overlay_cuda on the
+        # target FFmpeg build requires a yuv420p base when the overlay carries
+        # alpha as yuva420p, so normalize in-device without a CPU download.
+        chains.append("[0:v]scale_cuda=format=yuv420p[basegpu]")
+    else:
         chains.append("[0:v]format=yuv420p,hwupload_cuda[basegpu]")
     for index, layer in enumerate(ordered, start=1):
         prep = ["format=yuva420p"]

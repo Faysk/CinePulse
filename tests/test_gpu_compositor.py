@@ -113,7 +113,8 @@ class GpuCompositorTests(unittest.TestCase):
             canvas_height=1080,
             base_resident=True,
         )
-        self.assertIn("[0:v][layergpu1]overlay_cuda", graph)
+        self.assertIn("[0:v]scale_cuda=format=yuv420p[basegpu]", graph)
+        self.assertIn("[basegpu][layergpu1]overlay_cuda", graph)
         self.assertNotIn("[0:v]format=yuv420p,hwupload_cuda[basegpu]", graph)
         self.assertEqual(1, graph.count("hwdownload"))
 
