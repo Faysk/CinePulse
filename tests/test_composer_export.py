@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
 import tempfile
@@ -178,6 +179,38 @@ class ComposerExportTests(unittest.TestCase):
                 resolved = _resolve_audio_envelopes(request, injected, lambda _message: None)
             self.assertEqual(injected, resolved)
             loader.assert_not_called()
+
+    def test_encoder_spawn_failure_reaps_already_started_base_decoder(self) -> None:
+        class RunningProcess:
+            def __init__(self) -> None:
+                self.stdout = io.BytesIO()
+                self.stderr = io.BytesIO()
+                self.stdin = None
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request = self.request(root)
+            request.source.write_bytes(b"source")
+            base = RunningProcess()
+            with (
+                patch("cinepulse.composer_export._validate_media", return_value={"logo": object()}),
+                patch("cinepulse.composer_export.validate_composer_resources"),
+                patch("cinepulse.composer_export._resolve_audio_envelopes", return_value={}),
+                patch(
+                    "cinepulse.composer_export.subprocess.Popen",
+                    side_effect=[base, OSError("encoder spawn failed")],
+                ),
+                patch("cinepulse.composer_export.terminate_process_tree") as terminate,
+            ):
+                with self.assertRaisesRegex(OSError, "encoder spawn failed"):
+                    export_composer_reference(request)
+
+            terminate.assert_called_once()
+            self.assertTrue(base.stdout.closed)
+            self.assertTrue(base.stderr.closed)
 
     def test_empty_project_and_hdr_reject_before_output_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
