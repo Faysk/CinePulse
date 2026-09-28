@@ -286,7 +286,7 @@ class UpdateManagerTests(unittest.TestCase):
             with (
                 patch("cinepulse.update_manager._powershell_executable", return_value="powershell.exe"),
                 patch("cinepulse.update_manager.tempfile.gettempdir", return_value=str(root)),
-                patch("cinepulse.update_manager.subprocess.Popen") as popen,
+                patch("cinepulse.update_manager._spawn_handoff") as spawn_handoff,
             ):
                 helper = launch_staged(info, pending, app_root, 123)
 
@@ -299,7 +299,7 @@ class UpdateManagerTests(unittest.TestCase):
                 script.index("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256"),
                 script.index("Start-Process -FilePath $Launcher"),
             )
-            popen.assert_called_once()
+            spawn_handoff.assert_called_once_with("powershell.exe", helper, app_root.resolve())
 
     def test_portable_launch_rejects_descriptor_for_different_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
