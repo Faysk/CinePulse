@@ -12,6 +12,7 @@ from cinepulse.gpu_media import (
     GpuMediaKey,
     GpuMediaPolicy,
     GpuMediaTuningStore,
+    cuda_hwdownload_filter,
     detect_gpu_media_capabilities,
     gpu_media_vram_floor_mb,
     safe_candidate_policies,
@@ -170,6 +171,18 @@ class GpuMediaTests(unittest.TestCase):
         self.assertEqual(1, len(values))
         self.assertEqual("h264_cuvid", values[0].decoder)
         self.assertIsNone(values[0].scaler)
+
+    def test_cuda_download_uses_nv12_transfer_then_planar_conversion(self) -> None:
+        self.assertEqual(
+            "hwdownload,format=nv12,format=yuv420p",
+            cuda_hwdownload_filter(sdr_profile()),
+        )
+
+    def test_initial_h5_envelope_rejects_unproven_sdr10_download(self) -> None:
+        sdr10 = ColorProfile("bt709", "bt709", "bt709", "tv", "yuv420p10le", 10, False)
+        self.assertEqual((), safe_candidate_policies(capabilities(), codec="hevc", profile=sdr10))
+        with self.assertRaises(ValueError):
+            cuda_hwdownload_filter(sdr10)
 
     def test_scaler_is_candidate_only_when_explicitly_requested(self) -> None:
         values = safe_candidate_policies(
