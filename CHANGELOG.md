@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.21 — 2026-09-28
+
+- consolida o hardening de lifecycle/cache/identity já integrado pela #76 e fecha os últimos deltas seguros da auditoria #7;
+- VFX e Aurora passam a reap/fechar FFmpeg mesmo quando a thread leitora falha antes de iniciar;
+- o caminho FFmpeg principal do Studio coloca criação/início da thread, espera, cancelamento e cleanup sob uma única fronteira de lifecycle e sempre limpa a referência foreground;
+- Overlay Composer passa a reap o decoder base se o spawn do encoder ou a criação do decoder pool falhar, sem deixar processo/pipe órfão;
+- mutações duráveis por path usam transação reentrante entre processos: named mutex no Windows e flock no POSIX, evitando lost update entre Studio/CLIs concorrentes;
+- JobStore migra do lock privado somente em-processo para a transação cross-process, preservando CAS/revision como segunda defesa;
+- registros Preview de TensorRT também serializam record/invalidate para não sobrescrever evidência concorrente;
+- adiciona regressões para falha de Thread.start(), spawn parcial do Composer e concorrência real entre subprocessos;
+- aceite físico NVIDIA/8K/120 continua deliberadamente fora deste fechamento e permanece rastreado pela #4.
+
 ## 1.2.19 — 2026-09-21
 
 - Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
