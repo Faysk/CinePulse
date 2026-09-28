@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.23 — 2026-09-28
+
+- corrige `path_mutation_transaction(..., timeout=N)` para que o timeout cubra também a contenção entre threads do mesmo processo;
+- usa um único deadline monotônico para o `RLock` local e o mutex/flock cross-process, evitando renovar o orçamento depois da espera local;
+- preserva reentrância da mesma thread e a serialização cross-process sem lost update;
+- adiciona regressão determinística que prova `TimeoutError` antes da liberação do holder;
+- mantém o aceite físico NVIDIA/8K/120 separado na issue #4.
+
 ## 1.2.22 — 2026-09-28
 
 - fecha os deltas corrigíveis por código encontrados após a publicação da 1.2.21 e revalidados diretamente na `main`;
