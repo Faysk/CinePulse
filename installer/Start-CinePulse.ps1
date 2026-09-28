@@ -89,6 +89,8 @@ function Apply-PendingUpdate {
         & $Applier -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
     } catch {
         throw "Aplicador transacional de atualização falhou. $($_.Exception.Message)"
+    } finally {
+        Remove-Item Env:CINEPULSE_EXPECTED_PENDING_SHA256 -ErrorAction SilentlyContinue
     }
 }
 
@@ -129,9 +131,9 @@ function Set-DedicatedGpuPreference {
         return
     }
     # Do not write Windows-wide GPU preference registry entries.  Keep the
-    # project isolated and express CUDA selection only in this process tree.
+    # project isolated, keep every CUDA adapter visible, and pin engines explicitly.
     $env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'
-    $env:CUDA_VISIBLE_DEVICES = '0'
+    Remove-Item Env:CUDA_VISIBLE_DEVICES -ErrorAction SilentlyContinue
     $env:CINEPULSE_PREFER_DEDICATED_GPU = '1'
     Write-Host 'CINEPULSE_DEDICATED_GPU_PREFERRED NVIDIA=OK scope=process-only'
 }

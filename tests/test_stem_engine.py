@@ -26,8 +26,15 @@ class StemEngineTests(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             (repo / "htdemucs_ft.yaml").write_text("models: []", encoding="utf-8")
-            command = build_demucs_command(python, repo, root / "out", root / "music.wav", use_cpu=False)
-            self.assertEqual("cuda", command[command.index("--device") + 1])
+            command = build_demucs_command(
+                python, repo, root / "out", root / "music.wav", use_cpu=False, gpu_index=1,
+            )
+            self.assertEqual("cuda:1", command[command.index("--device") + 1])
+
+            cpu_command = build_demucs_command(
+                python, repo, root / "out", root / "music.wav", use_cpu=True, gpu_index=1,
+            )
+            self.assertEqual("cpu", cpu_command[cpu_command.index("--device") + 1])
 
     def test_cache_changes_when_demucs_runtime_or_weights_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

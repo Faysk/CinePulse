@@ -578,18 +578,6 @@ class ScrollableTab(ttk.Frame):
             return
 
 
-def _safe_join_reader(reader_thread: threading.Thread | None, timeout: float) -> None:
-    if reader_thread is None or reader_thread is threading.current_thread():
-        return
-    try:
-        reader_thread.join(timeout=timeout)
-    except RuntimeError:
-        # Thread.start() itself may fail under resource exhaustion. Cleanup must
-        # still reap the already spawned external process without masking the
-        # original exception by trying to join an unstarted Python thread.
-        pass
-
-
 def _finalize_piped_process(
     process: subprocess.Popen | None,
     reader_thread: threading.Thread | None,
@@ -600,7 +588,12 @@ def _finalize_piped_process(
         return
     if process.poll() is None:
         terminate_process_tree(process, log, grace_seconds=2.0)
-    _safe_join_reader(reader_thread, 2.0)
+    if reader_thread is not None and reader_thread is not threading.current_thread():
+        try:
+            reader_thread.join(timeout=2.0)
+        except RuntimeError:
+            # Thread.start() can fail before the thread becomes joinable.
+            pass
     stream = getattr(process, "stdout", None)
     if stream is not None:
         try:
@@ -608,7 +601,11 @@ def _finalize_piped_process(
                 stream.close()
         except (OSError, ValueError, AttributeError):
             pass
-    _safe_join_reader(reader_thread, 0.5)
+    if reader_thread is not None and reader_thread is not threading.current_thread():
+        try:
+            reader_thread.join(timeout=0.5)
+        except RuntimeError:
+            pass
 
 
 class VideoOptimizerStudio:
@@ -6577,7 +6574,9 @@ class VideoOptimizerStudio:
             demucs_staging = cache_root / f".demucs-partial-{os.getpid()}-{time.time_ns()}"
             safe_rmtree(demucs_staging)
             demucs_staging.mkdir(parents=True, exist_ok=True)
-            command = build_demucs_command(ai_suite.VENV_PYTHON, model_repo, demucs_staging, source, use_cpu)
+            command = build_demucs_command(
+                ai_suite.VENV_PYTHON, model_repo, demucs_staging, source, use_cpu, self._hardware.gpu_index,
+            )
             self._log("Comando Demucs: " + subprocess.list2cmdline(command))
             process = subprocess.Popen(
                 command,
@@ -6914,8 +6913,8 @@ class VideoOptimizerStudio:
                             self._log(clean)
 
                 reader_thread = threading.Thread(target=reader, daemon=True)
+                reader_thread.start()
                 try:
-                    reader_thread.start()
                     while process.poll() is None:
                         if self._cancelled:
                             terminate_process_tree(process, self._log)
@@ -6942,8 +6941,6 @@ class VideoOptimizerStudio:
                             )
                 finally:
                     _finalize_piped_process(process, reader_thread, self._log)
-                    if self._process is process:
-                        self._process = None
                 neural_elapsed = max(1e-6, time.monotonic() - neural_started)
                 frames = sorted(outgoing.glob("*.png"))
                 if len(frames) != desired:
@@ -7045,9 +7042,10 @@ class VideoOptimizerStudio:
     def _run_ffmpeg(self, command: list[str], duration: float, base: float, weight: float) -> None:
         """Run FFmpeg without letting a blocked stdout pipe stall cancellation.
 
-        Every lifecycle edge lives under the same cleanup boundary: even thread
-        creation, progress callbacks or logging failures after Popen must reap
-        the grouped child and close its captured pipe.
+        Progress parsing is performed on the render worker while a daemon reader
+        drains FFmpeg output. The worker therefore keeps polling the process and
+        can enforce cancellation even when Windows pipe EOF is delayed by a shim
+        or descendant process.
         """
         if self._cancelled:
             raise InterruptedError
@@ -7066,6 +7064,8 @@ class VideoOptimizerStudio:
                 for raw in process.stdout:
                     lines.put(raw)
             except (OSError, ValueError):
+                # Cancellation may close the pipe from the worker thread after
+                # the process has already been terminated.
                 return
 
         reader_thread = threading.Thread(target=reader, daemon=True)

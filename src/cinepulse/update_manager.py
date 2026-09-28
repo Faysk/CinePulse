@@ -518,7 +518,14 @@ def _powershell_executable() -> str:
     return candidate
 
 
-def _handoff_script(info: UpdateInfo, staged: Path, app_root: Path, current_pid: int) -> str:
+def _handoff_script(
+    info: UpdateInfo,
+    staged: Path,
+    app_root: Path,
+    current_pid: int,
+    *,
+    pending_sha256: str | None = None,
+) -> str:
     root = app_root.expanduser().resolve()
     wait = max(1, int(current_pid))
     common = [
@@ -553,10 +560,51 @@ def _handoff_script(info: UpdateInfo, staged: Path, app_root: Path, current_pid:
             f"$Launcher = {_ps_literal(launcher)}",
             "if (-not (Test-Path -LiteralPath $Pending)) { exit 22 }",
             "if (-not (Test-Path -LiteralPath $Launcher)) { exit 23 }",
-            "Start-Process -FilePath $Launcher -WorkingDirectory $AppRoot",
         ]
+        if pending_sha256 is not None:
+            normalized_pending_sha256 = pending_sha256.strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", normalized_pending_sha256):
+                raise ValueError("SHA-256 inválido para o descritor da atualização portátil.")
+            common += [
+                f"$ExpectedPendingSha256 = {_ps_literal(normalized_pending_sha256)}",
+                "$ActualPendingSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Pending).Hash.ToLowerInvariant()",
+                "if ($ActualPendingSha256 -ne $ExpectedPendingSha256) { exit 24 }",
+                "$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256",
+            ]
+        common += ["Start-Process -FilePath $Launcher -WorkingDirectory $AppRoot"]
     common += ["Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue"]
     return "\n".join(common) + "\n"
+
+
+def _validate_portable_pending_handoff(info: UpdateInfo, staged: Path, app_root: Path) -> str:
+    runtime_root = (Path(app_root).expanduser().resolve() / ".runtime").resolve()
+    if staged.name != "pending-update.json":
+        raise ValueError("A atualização portátil exige o descritor pending-update.json.")
+    if runtime_root != staged and runtime_root not in staged.parents:
+        raise ValueError("O descritor da atualização portátil está fora do runtime do CinePulse.")
+    try:
+        raw = staged.read_bytes()
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("O descritor da atualização portátil está ilegível ou inválido.") from exc
+    if not isinstance(payload, dict) or payload.get("schema") != 1:
+        raise ValueError("O descritor da atualização portátil possui schema inválido.")
+    version = str(payload.get("version") or "").strip()
+    if version != info.version.strip():
+        raise ValueError("O descritor da atualização portátil não corresponde à versão preparada.")
+    source_value = str(payload.get("source") or "").strip()
+    if not source_value:
+        raise ValueError("O descritor da atualização portátil não informa a origem preparada.")
+    source = Path(source_value).expanduser().resolve()
+    updates_root = (runtime_root / "updates").resolve()
+    if updates_root != source and updates_root not in source.parents:
+        raise ValueError("A origem da atualização portátil está fora da área privada de updates.")
+    version_root = (updates_root / info.version.strip()).resolve()
+    if version_root != source and version_root not in source.parents:
+        raise ValueError("A origem da atualização portátil não corresponde ao staging da versão preparada.")
+    if not source.is_dir():
+        raise FileNotFoundError(f"Origem preparada da atualização portátil não encontrada: {source}")
+    return hashlib.sha256(raw).hexdigest().lower()
 
 
 def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: int) -> Path:
@@ -572,6 +620,7 @@ def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: i
     if not staged.exists():
         raise FileNotFoundError(f"Pacote de atualização preparado não encontrado: {staged}")
     app_root = Path(app_root).expanduser().resolve()
+    pending_sha256: str | None = None
     if info.package_kind == "msi":
         expected_name = info.asset_name or f"CinePulse-{info.version.strip()}-Setup.msi"
         if staged.suffix.lower() != ".msi" or staged.name != expected_name:
@@ -582,16 +631,15 @@ def launch_staged(info: UpdateInfo, staged: Path, app_root: Path, current_pid: i
         if _sha256_file(staged) != info.sha256.strip().lower():
             raise RuntimeError("O pacote MSI preparado mudou após a verificação; a instalação foi bloqueada.")
     else:
-        if staged.name != "pending-update.json":
-            raise ValueError("A atualização portátil exige o descritor pending-update.json.")
-        runtime_root = (app_root / ".runtime").resolve()
-        if runtime_root != staged and runtime_root not in staged.parents:
-            raise ValueError("O descritor da atualização portátil está fora do runtime do CinePulse.")
+        pending_sha256 = _validate_portable_pending_handoff(info, staged, app_root)
 
     helper_root = Path(tempfile.gettempdir()) / "CinePulseUpdater" / "handoff"
     helper_root.mkdir(parents=True, exist_ok=True)
     helper = helper_root / f"apply-{info.version}-{os.getpid()}.ps1"
-    helper.write_text(_handoff_script(info, staged, Path(app_root), current_pid), encoding="utf-8-sig")
+    helper.write_text(
+        _handoff_script(info, staged, Path(app_root), current_pid, pending_sha256=pending_sha256),
+        encoding="utf-8-sig",
+    )
     shell = _powershell_executable()
     subprocess.Popen(
         [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper)],

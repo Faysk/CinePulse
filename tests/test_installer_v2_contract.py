@@ -85,6 +85,15 @@ def test_environment_routes_temp_and_dependency_caches_below_root() -> None:
         assert token in text
 
 
+def test_bootstrap_keeps_all_cuda_adapters_visible() -> None:
+    environment = _text("installer/CinePulse-Environment.cmd")
+    bootstrap = _text("installer/Start-CinePulse.ps1")
+    assert 'set "CUDA_DEVICE_ORDER=PCI_BUS_ID"' in environment
+    assert 'set "CUDA_VISIBLE_DEVICES=0"' not in environment
+    assert "CUDA_VISIBLE_DEVICES = '0'" not in bootstrap
+    assert "$env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'" in bootstrap
+
+
 def test_bootstrap_does_not_redirect_installed_runtime_to_user_profile() -> None:
     text = _text("installer/Start-CinePulse.ps1")
     assert "$UserDataRoot" not in text

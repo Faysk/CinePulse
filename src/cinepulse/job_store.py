@@ -21,7 +21,6 @@ class ManifestStoreError(ManifestError):
     pass
 
 
-
 def _json_bytes(manifest: RenderJobManifest) -> bytes:
     return (
         json.dumps(

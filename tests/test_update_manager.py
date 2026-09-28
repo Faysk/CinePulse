@@ -264,6 +264,104 @@ class UpdateManagerTests(unittest.TestCase):
         self.assertNotIn("msiexec.exe", script)
         self.assertLess(script.index("Wait-Process"), script.index("Start-Process"))
 
+    def test_portable_launch_binds_handoff_to_verified_pending_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_root = root / "app"
+            source = app_root / ".runtime" / "updates" / "1.2.23" / "extracted" / "CinePulse"
+            source.mkdir(parents=True)
+            pending = app_root / ".runtime" / "pending-update.json"
+            pending.write_text(
+                json.dumps({"schema": 1, "version": "1.2.23", "source": str(source)}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (app_root / "CinePulse.cmd").write_text("@echo off\n", encoding="utf-8")
+            info = UpdateInfo(
+                "1.2.23",
+                "https://example.invalid/CinePulse.zip",
+                "a" * 64,
+                package_kind="portable",
+            )
+            expected_pending_sha256 = hashlib.sha256(pending.read_bytes()).hexdigest()
+            with (
+                patch("cinepulse.update_manager._powershell_executable", return_value="powershell.exe"),
+                patch("cinepulse.update_manager.tempfile.gettempdir", return_value=str(root)),
+                patch("cinepulse.update_manager.subprocess") as subprocess_api,
+            ):
+                helper = launch_staged(info, pending, app_root, 123)
+
+            script = helper.read_text(encoding="utf-8-sig")
+            self.assertIn(expected_pending_sha256, script)
+            self.assertIn("Get-FileHash -Algorithm SHA256 -LiteralPath $Pending", script)
+            self.assertIn("if ($ActualPendingSha256 -ne $ExpectedPendingSha256) { exit 24 }", script)
+            self.assertIn("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256", script)
+            self.assertLess(
+                script.index("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256"),
+                script.index("Start-Process -FilePath $Launcher"),
+            )
+            subprocess_api.Popen.assert_called_once()
+
+    def test_portable_launch_rejects_descriptor_for_different_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_root = root / "app"
+            source = app_root / ".runtime" / "updates" / "1.2.24" / "extracted" / "CinePulse"
+            source.mkdir(parents=True)
+            pending = app_root / ".runtime" / "pending-update.json"
+            pending.write_text(
+                json.dumps({"schema": 1, "version": "1.2.24", "source": str(source)}),
+                encoding="utf-8",
+            )
+            info = UpdateInfo(
+                "1.2.23",
+                "https://example.invalid/CinePulse.zip",
+                "a" * 64,
+                package_kind="portable",
+            )
+            with self.assertRaisesRegex(ValueError, "não corresponde à versão preparada"):
+                launch_staged(info, pending, app_root, 123)
+
+    def test_portable_launch_rejects_source_from_another_version_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_root = root / "app"
+            source = app_root / ".runtime" / "updates" / "9.9.9" / "extracted" / "CinePulse"
+            source.mkdir(parents=True)
+            pending = app_root / ".runtime" / "pending-update.json"
+            pending.write_text(
+                json.dumps({"schema": 1, "version": "1.2.27", "source": str(source)}),
+                encoding="utf-8",
+            )
+            info = UpdateInfo(
+                "1.2.27",
+                "https://example.invalid/CinePulse.zip",
+                "a" * 64,
+                package_kind="portable",
+            )
+            with self.assertRaisesRegex(ValueError, "staging da versão preparada"):
+                launch_staged(info, pending, app_root, 123)
+
+    def test_portable_launch_rejects_source_outside_private_updates_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_root = root / "app"
+            outside = root / "outside" / "CinePulse"
+            outside.mkdir(parents=True)
+            pending = app_root / ".runtime" / "pending-update.json"
+            pending.parent.mkdir(parents=True)
+            pending.write_text(
+                json.dumps({"schema": 1, "version": "1.2.23", "source": str(outside)}),
+                encoding="utf-8",
+            )
+            info = UpdateInfo(
+                "1.2.23",
+                "https://example.invalid/CinePulse.zip",
+                "a" * 64,
+                package_kind="portable",
+            )
+            with self.assertRaisesRegex(ValueError, "fora da área privada de updates"):
+                launch_staged(info, pending, app_root, 123)
+
     def test_zip_rejects_expanded_size_over_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -512,6 +512,7 @@ def render_vfx_intermediate(
             try:
                 reader.join(timeout=2)
             except RuntimeError:
+                # Thread.start() can itself fail; cleanup must still reap FFmpeg.
                 pass
             try:
                 if process.stdout is not None and not process.stdout.closed:
