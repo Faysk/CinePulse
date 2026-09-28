@@ -6518,8 +6518,9 @@ class VideoOptimizerStudio:
                 clean = line.strip()
                 if clean:
                     recent.append(clean); self._log(clean)
-        thread = threading.Thread(target=reader, daemon=True); thread.start()
+        thread = threading.Thread(target=reader, daemon=True)
         try:
+            thread.start()
             while process.poll() is None:
                 if self._cancelled:
                     terminate_process_tree(process, self._log); break
@@ -6534,6 +6535,8 @@ class VideoOptimizerStudio:
             self._push_progress(base + weight)
         finally:
             _finalize_piped_process(process, thread, self._log)
+            if self._process is process:
+                self._process = None
 
     def _prepare_reactive_audio(self, audio: str, focus: str, use_cpu: bool, cpu_threads: int) -> str:
         selected = stems_for_focus(focus)
@@ -6600,8 +6603,8 @@ class VideoOptimizerStudio:
                 name="cinepulse-demucs-output",
                 daemon=True,
             )
-            reader_thread.start()
             try:
+                reader_thread.start()
                 while process.poll() is None:
                     if self._cancelled:
                         terminate_process_tree(process, self._log)
@@ -6636,6 +6639,8 @@ class VideoOptimizerStudio:
                     )
             finally:
                 _finalize_piped_process(process, reader_thread, self._log)
+                if self._process is process:
+                    self._process = None
                 safe_rmtree(demucs_staging)
 
         stems = [locate(name) for name in selected]
