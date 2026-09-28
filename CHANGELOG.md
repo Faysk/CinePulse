@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.22 — 2026-09-28
+
+- corrige o Demucs em máquinas multi-GPU para usar explicitamente o adaptador selecionado pelo `HardwareProfile.gpu_index`;
+- o comando Demucs passa a emitir `--device cuda:N` no caminho GPU e mantém `--device cpu` sem alteração no caminho CPU;
+- o bootstrap mantém `CUDA_DEVICE_ORDER=PCI_BUS_ID`, mas deixa de fixar `CUDA_VISIBLE_DEVICES=0`, preservando adaptadores CUDA adicionais;
+- adiciona regressões para GPU 1, fallback CPU e contrato de visibilidade CUDA do bootstrap;
+- o aceite físico de capacidades GPU extremas continua separado na #4; esta correção valida o contrato multi-GPU por CI e release gates.
+
 ## 1.2.21 — 2026-09-28
 
 - consolida os hardenings acumulados depois da 1.2.19 e publica esse conjunto como a nova Stable;
