@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.23 — 2026-09-28
+
+- endurece o handoff do updater Portable: antes do relaunch, `pending-update.json` precisa ter schema, versão e origem compatíveis com a atualização preparada;
+- restringe a origem do descritor portátil à área privada `.runtime/updates` e exige que a árvore preparada ainda exista;
+- vincula o helper PowerShell ao SHA-256 exato do descritor validado e aborta se ele mudar antes de iniciar `CinePulse.cmd`;
+- mantém o fluxo MSI inalterado, incluindo a revalidação do SHA-256 do próprio pacote;
+- adiciona regressões para troca de versão, schema inválido, origem fora da área privada e mutação do descritor no handoff;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.22 — 2026-09-28
 
 - fecha os deltas corrigíveis por código encontrados após a publicação da 1.2.21 e revalidados diretamente na `main`;
