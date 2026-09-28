@@ -294,6 +294,11 @@ class UpdateManagerTests(unittest.TestCase):
             self.assertIn(expected_pending_sha256, script)
             self.assertIn("Get-FileHash -Algorithm SHA256 -LiteralPath $Pending", script)
             self.assertIn("if ($ActualPendingSha256 -ne $ExpectedPendingSha256) { exit 24 }", script)
+            self.assertIn("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256", script)
+            self.assertLess(
+                script.index("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256"),
+                script.index("Start-Process -FilePath $Launcher"),
+            )
             popen.assert_called_once()
 
     def test_portable_launch_rejects_descriptor_for_different_version(self) -> None:
