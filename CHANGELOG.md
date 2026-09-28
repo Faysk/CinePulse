@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.27 — 2026-09-28
+
+- corrige #118: o updater portátil deixa de aceitar `source` apontando para o staging privado de outra versão;
+- `_validate_portable_pending_handoff()` agora exige que a origem esteja em `.runtime/updates/<versão preparada>` ou abaixo desse diretório;
+- preserva a rejeição específica para paths realmente fora de `.runtime/updates` e mantém o binding SHA-256 do descriptor introduzido na 1.2.25;
+- adiciona regressão focada para descriptor/version válidos com origem cross-version;
+- incorpora sem regressão o hotfix de CI da 1.2.26;
+- mantém o aceite físico NVIDIA/8K/120 separado em #4.
+
 ## 1.2.26 — 2026-09-28
 
 - corrige #113: o teste do handoff do updater deixa de substituir `subprocess.Popen` globalmente;
