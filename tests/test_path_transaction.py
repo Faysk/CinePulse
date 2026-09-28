@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 from cinepulse.path_transaction import path_mutation_transaction
@@ -21,6 +22,44 @@ class PathTransactionTests(unittest.TestCase):
                 with path_mutation_transaction(target, timeout=2.0):
                     target.write_text("ok", encoding="utf-8")
             self.assertEqual("ok", target.read_text(encoding="utf-8"))
+
+    def test_timeout_covers_same_process_thread_contention(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "state.json"
+            holder_ready = threading.Event()
+            release_holder = threading.Event()
+            waiter_finished = threading.Event()
+            outcome: dict[str, str] = {}
+
+            def holder() -> None:
+                with path_mutation_transaction(target, timeout=2.0):
+                    holder_ready.set()
+                    release_holder.wait(timeout=2.0)
+
+            def waiter() -> None:
+                try:
+                    with path_mutation_transaction(target, timeout=0.05):
+                        outcome["result"] = "acquired"
+                except TimeoutError:
+                    outcome["result"] = "timeout"
+                finally:
+                    waiter_finished.set()
+
+            holder_thread = threading.Thread(target=holder)
+            waiter_thread = threading.Thread(target=waiter)
+            holder_thread.start()
+            self.assertTrue(holder_ready.wait(timeout=1.0))
+            waiter_thread.start()
+
+            finished_before_release = waiter_finished.wait(timeout=0.5)
+            release_holder.set()
+            holder_thread.join(timeout=1.0)
+            waiter_thread.join(timeout=1.0)
+
+            self.assertTrue(finished_before_release)
+            self.assertEqual("timeout", outcome.get("result"))
+            self.assertFalse(holder_thread.is_alive())
+            self.assertFalse(waiter_thread.is_alive())
 
     def test_transaction_serializes_real_processes_without_lost_updates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
