@@ -92,6 +92,35 @@ class AuroraProcessLifecycleTests(unittest.TestCase):
         self.assertIsNone(changed[-1])
         self.assertEqual(1.0, progress[-1])
 
+    def test_reader_thread_start_failure_reaps_process_and_closes_pipes(self) -> None:
+        process = _FakeProcess(returncode=0, running=True)
+        changed = []
+
+        def terminate(target, *_args, **_kwargs):
+            target._running = False
+
+        with (
+            patch("cinepulse.aurora._decode_audio", return_value=np.zeros(16, dtype=np.float32)),
+            patch("cinepulse.aurora._analyze_audio", return_value=self._analysis()),
+            patch(
+                "cinepulse.aurora.AuroraFrameGenerator",
+                return_value=type("Generator", (), {"make": lambda self, *_args: b"frame"})(),
+            ),
+            patch("cinepulse.aurora.subprocess.Popen", return_value=process),
+            patch("cinepulse.aurora.threading.Thread.start", side_effect=RuntimeError("thread start failed")),
+            patch("cinepulse.aurora.terminate_process_tree", side_effect=terminate) as kill,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                aurora.render_reactive_intermediate(
+                    "ffmpeg", "master.mp4", "audio.wav", "out.mp4", 1.0,
+                    lambda _value: None, lambda: False, changed.append,
+                )
+
+        kill.assert_called_once()
+        self.assertTrue(process.stdin.closed)
+        self.assertTrue(process.stdout.closed)
+        self.assertIsNone(changed[-1])
+
     def test_cancellation_terminates_tree_and_closes_pipes(self) -> None:
         process = _FakeProcess(returncode=0, running=True)
         changed = []
