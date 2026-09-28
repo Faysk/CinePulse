@@ -321,6 +321,26 @@ class UpdateManagerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "não corresponde à versão preparada"):
                 launch_staged(info, pending, app_root, 123)
 
+    def test_portable_launch_rejects_source_from_another_version_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_root = root / "app"
+            source = app_root / ".runtime" / "updates" / "9.9.9" / "extracted" / "CinePulse"
+            source.mkdir(parents=True)
+            pending = app_root / ".runtime" / "pending-update.json"
+            pending.write_text(
+                json.dumps({"schema": 1, "version": "1.2.27", "source": str(source)}),
+                encoding="utf-8",
+            )
+            info = UpdateInfo(
+                "1.2.27",
+                "https://example.invalid/CinePulse.zip",
+                "a" * 64,
+                package_kind="portable",
+            )
+            with self.assertRaisesRegex(ValueError, "staging da versão preparada"):
+                launch_staged(info, pending, app_root, 123)
+
     def test_portable_launch_rejects_source_outside_private_updates_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
