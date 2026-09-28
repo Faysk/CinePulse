@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.23 — 2026-09-28
+
+- corrige #97: o handoff do updater portátil passa a validar schema, versão e origem de `pending-update.json` antes de fechar a aplicação;
+- a origem preparada precisa continuar confinada em `.runtime/updates` e existir como diretório;
+- o helper PowerShell recebe o SHA-256 dos bytes exatos do descritor aprovado e recalcula o digest imediatamente antes do relaunch, abortando se o estado tiver mudado;
+- preserva sem alteração o caminho MSI, que já revalida o hash do pacote preparado;
+- adiciona regressões para descriptor válido, versão divergente e origem fora da área privada de updates;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.22 — 2026-09-28
 
 - fecha os deltas corrigíveis por código encontrados após a publicação da 1.2.21 e revalidados diretamente na `main`;
