@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.22 — 2026-09-28
+
+- fecha os deltas corrigíveis por código encontrados após a publicação da 1.2.21 e revalidados diretamente na `main`;
+- VFX e Aurora passam a iniciar a reader thread dentro da fronteira de cleanup; falha em `Thread.start()` não deixa FFmpeg/pipes fora do reap;
+- o runner FFmpeg principal do Studio recebe a mesma proteção e o finalizador tolera thread nunca iniciada sem mascarar a exceção original;
+- Overlay Composer passa a limpar o decoder já aberto quando o encoder ou o decoder pool falha durante setup;
+- mutações duráveis por path passam a ser serializadas entre processos: named mutex no Windows e `flock` no POSIX, mantendo reentrância por thread;
+- JobStore adota a transação cross-process sem remover CAS/revision, e registros Preview de TensorRT serializam `record`/`invalidate`;
+- adiciona regressões para reader-start failure, spawn parcial do Composer e concorrência real entre subprocessos;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.21 — 2026-09-28
 
 - consolida os hardenings acumulados depois da 1.2.19 e publica esse conjunto como a nova Stable;
