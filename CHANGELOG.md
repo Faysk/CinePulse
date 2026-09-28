@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.26 — 2026-09-28
+
+- corrige #118: o updater portátil deixa de aceitar `source` apontando para o staging privado de outra versão;
+- `_validate_portable_pending_handoff()` agora exige que a origem esteja em `.runtime/updates/<versão preparada>` ou abaixo desse diretório;
+- preserva a rejeição específica para paths realmente fora de `.runtime/updates` e mantém o binding SHA-256 do descriptor introduzido na 1.2.25;
+- adiciona regressão focada para descriptor/version válidos com origem cross-version;
+- mantém o aceite físico NVIDIA/8K/120 separado em #4.
+
 ## 1.2.25 — 2026-09-28
 
 - corrige #111: fecha o TOCTOU residual entre a verificação de `pending-update.json` no helper e a leitura posterior pelo aplicador portátil;
