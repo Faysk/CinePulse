@@ -67,6 +67,14 @@ class RifeSafeRunnerTests(unittest.TestCase):
         self.assertEqual(selected, RifePolicy("2:2:2", 2))
         self.assertFalse(measured)
 
+    def test_extreme_8k_selector_starts_recovery_safe_policy(self) -> None:
+        selected, measured, reason = _limit_policy_by_live_vram(
+            None, uhd=True, free_vram_mb=None, gpu_index=0, extreme_8k=True
+        )
+        self.assertEqual(selected, RifePolicy("1:1:1", 0))
+        self.assertFalse(measured)
+        self.assertIn("8K recovery-safe", reason)
+
     def test_existing_tuned_policy_is_not_live_vram_gated(self) -> None:
         tuned = RifePolicy("3:3:3", 1)
         selected, measured, reason = _limit_policy_by_live_vram(
