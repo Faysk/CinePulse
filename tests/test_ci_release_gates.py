@@ -161,6 +161,11 @@ class CiReleaseGateTests(unittest.TestCase):
         ):
             self.assertIn(path, text, f"GPU acceptance must trigger for {path}")
 
+    def test_repository_hygiene_ignores_mutable_runtime_roots(self) -> None:
+        text = (ROOT / "scripts/Check-Repository.ps1").read_text(encoding="utf-8-sig")
+        for root in ("cache", "temp", "artifacts", "dist", "components", "data"):
+            self.assertIn(f"'{root}'", text)
+
     def test_release_gate_documents_phase9_contract(self) -> None:
         text = (ROOT / "scripts/release_gate.py").read_text(encoding="utf-8")
         self.assertIn("CORE_INTEGRITY_PHASE9_CI_RELEASE_GATES.md", text)
