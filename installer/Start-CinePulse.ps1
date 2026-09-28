@@ -131,7 +131,8 @@ function Set-DedicatedGpuPreference {
     # Do not write Windows-wide GPU preference registry entries.  Keep the
     # project isolated and express CUDA selection only in this process tree.
     $env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'
-    $env:CUDA_VISIBLE_DEVICES = '0'
+    # Keep all adapters visible. HardwareProfile selects the physical GPU and
+    # neural stages pin that index explicitly instead of globally masking CUDA.
     $env:CINEPULSE_PREFER_DEDICATED_GPU = '1'
     Write-Host 'CINEPULSE_DEDICATED_GPU_PREFERRED NVIDIA=OK scope=process-only'
 }
