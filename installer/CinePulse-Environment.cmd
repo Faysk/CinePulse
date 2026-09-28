@@ -22,7 +22,7 @@ set "PYTHONNOUSERSITE=1"
 set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 set "PYTHONUTF8=1"
 set "CUDA_DEVICE_ORDER=PCI_BUS_ID"
-set "CUDA_VISIBLE_DEVICES=0"
+rem Keep all CUDA adapters visible; CinePulse pins the selected physical GPU per stage.
 set "CINEPULSE_PREFER_DEDICATED_GPU=1"
 
 for %%D in (
