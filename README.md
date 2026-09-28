@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.19`. Mantém a integridade frame-bound da 1.2.18 e endurece a Restauração Preview: toda saída é sondada por FFprobe antes da promoção e precisa preservar geometria, contagem exata de quadros, presença de áudio e timeline compatível. A reconstrução temporal deixa de usar `-shortest`, limita somente o input de áudio e exige processar todos os quadros da fonte.
+> Estado Stable: `1.2.21`. Consolida o hardening pós-1.2.19: promoção e persistência mais duráveis, ownership de render entre instâncias, lifecycle determinístico de subprocessos e caches/evidências vinculados ao conteúdo real dos arquivos, com publicação concorrente segura.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

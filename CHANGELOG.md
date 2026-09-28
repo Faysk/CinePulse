@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.21 — 2026-09-28
+
+- consolida os hardenings acumulados depois da 1.2.19 e publica esse conjunto como a nova Stable;
+- ownership de render passa a ser exclusivo entre instâncias e comandos de worker abandonados por crash podem ser recuperados sem executar trabalho estrangeiro;
+- promoção de saída, pending update, checkpoints, evidências de policy e estado de componentes passam por publicação crash-safe/durável, com serialização onde havia risco de read-modify-write concorrente;
+- discovery de recovery permanece estritamente read-only e a promoção de recovery/RIFE fica protegida contra crash durante a troca do artefato final;
+- processos FFmpeg/Aurora/Preview, prefetch e subprocessos neurais do Studio/recovery são reapados deterministicamente também em exceções, reduzindo handles/pipes órfãos;
+- caches de mídia/Real-ESRGAN, Composer, envelopes musicais, visualizer, restauração e fingerprints TensorRT passam a depender da identidade de conteúdo, não só de path/tamanho/mtime;
+- publicação de caches de música/visualizer usa temporários únicos e promoção atômica para suportar concorrência sem colisão;
+- bootstrap/component readiness e arquivos experimentais passam a validar a árvore instalada/conteúdo; archives experimentais rejeitam estruturas inseguras e downloads respeitam limites explícitos;
+- verificação de delivery continua autoritativa depois do commit final e o histórico preserva identidade content-aware da fonte;
+- amplia a suíte de regressão para lifecycle excepcional, concorrência de checkpoints/cache e invalidação por substituição de conteúdo com metadados iguais.
+
 ## 1.2.19 — 2026-09-21
 
 - Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
