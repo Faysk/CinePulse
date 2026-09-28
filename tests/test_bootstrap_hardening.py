@@ -116,6 +116,11 @@ class BootstrapHardeningTests(unittest.TestCase):
             self.assertIn(marker, text)
         self.assertIn("importlib.metadata as m, platform, torch", text)
 
+    def test_cuda_bootstrap_keeps_all_adapters_visible(self) -> None:
+        text = START.read_text(encoding="utf-8-sig")
+        self.assertIn("$env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'", text)
+        self.assertNotIn("$env:CUDA_VISIBLE_DEVICES", text)
+
     def test_no_temporary_audit_writer_or_patch_helpers_ship(self) -> None:
         for path in (
             ROOT / ".github" / "workflows" / "audit-updater-patch.yml",
