@@ -6,15 +6,15 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.27`. Reforça o updater portátil: além do binding criptográfico do descriptor, a origem preparada agora precisa pertencer ao staging da mesma versão declarada, bloqueando referências cross-version.
+> Estado Stable: `1.2.28`. Consolida as correções do pipeline NVIDIA e fecha o aceite físico #4 no `main`: Composer CUDA/NVDEC-resident, Real-ESRGAN, RIFE, GPU gate e recovery RIFE 8K UHD foram validados na RTX 4070 Laptop alvo.
 
-> Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
+> Aceite físico NVIDIA: os contratos 8K/120 neural/GPU e recovery cobertos por #4 foram validados no runner físico RTX 4070 Laptop pelo GPU Acceptance #907. A evidência vale para os contratos/hardware medidos e não é uma promessa genérica de desempenho. 10K/12K e 144/240/480 fps continuam **Preview/Experimental** até terem sua própria matriz física.
 
 ## O que já funciona no Stable
 
 - loop de vídeo durante toda a música, removendo o áudio original do clipe;
 - vídeo original ou formatos 16:9, 9:16, IMAX digital e Cinema Wide;
-- perfil estável com teto de contrato em 8K/120 fps; 8K/120 é classificado como carga extrema e sua aceitação física depende do hardware/runner validado, enquanto 10K/12K e 144/240/480 fps permanecem experimentais e bloqueados no perfil estável;
+- perfil estável com teto de contrato em 8K/120 fps; a matriz neural/GPU e recovery de #4 tem aceite físico concluído na RTX 4070 Laptop alvo, enquanto 10K/12K e 144/240/480 fps permanecem experimentais e bloqueados no perfil estável;
 - preview de 1 a 30 segundos e comparação A/B;
 - upscale Lanczos e Real-ESRGAN;
 - interpolação FFmpeg, GPU NVIDIA quando disponível e modo CPU;
