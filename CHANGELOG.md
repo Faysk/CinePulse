@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.25 — 2026-09-28
+
+- corrige #111: fecha o TOCTOU residual entre a verificação de `pending-update.json` no helper e a leitura posterior pelo aplicador portátil;
+- o helper propaga `CINEPULSE_EXPECTED_PENDING_SHA256` para o processo relançado;
+- o aplicador lê o descriptor uma única vez como bytes, valida SHA-256 quando há digest herdado e interpreta exatamente esses mesmos bytes;
+- o bootstrap limpa o digest herdado após a tentativa de apply, evitando estado residual no processo;
+- o smoke Windows prova que digest divergente falha antes de qualquer mutação de payload e que digest correto preserva rollback/retry e apply final;
+- mantém o hardening de timeout da 1.2.24 e o aceite físico NVIDIA/8K/120 separado em #4.
+
 ## 1.2.24 — 2026-09-28
 
 - corrige #95: `path_mutation_transaction(..., timeout=...)` passa a aplicar um único orçamento de timeout à aquisição completa, incluindo contenção entre threads do mesmo processo;
