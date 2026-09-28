@@ -69,6 +69,7 @@ def cinepulse_hevc_nvenc_contract(
         gop=max(12, cadence // 2),
         bframes=2,
         gpu_index=max(0, int(gpu_index)),
+        cuda_frames=True,
     )
 
 
