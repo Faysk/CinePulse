@@ -124,6 +124,8 @@ def _studio() -> VideoOptimizerStudio:
     studio._cancelled = False
     studio._log = lambda *_args, **_kwargs: None
     studio._set_stage = lambda *_args, **_kwargs: None
+    studio._hardware = SimpleNamespace(gpu_index=0)
+    studio._process = None
     return studio
 
 
@@ -166,6 +168,58 @@ def _demucs_paths(root: Path):
     python.parent.mkdir(parents=True)
     python.write_bytes(b"python")
     return models, ai_root, python
+
+
+def test_demucs_reader_start_failure_reaps_child_and_clears_foreground_process() -> None:
+    class LiveDemucsProcess(FakeDemucsProcess):
+        def __init__(self, command, **kwargs):
+            super().__init__(command, valid=True, returncode=0, **kwargs)
+            self.running = True
+
+        def poll(self):
+            return None if self.running else 0
+
+        def wait(self):
+            self.running = False
+            return 0
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "music.wav"
+        source.write_bytes(b"audio")
+        cache = root / "cache"
+        models, ai_root, python = _demucs_paths(root)
+        captured = {}
+
+        def popen(command, **kwargs):
+            process = LiveDemucsProcess(command, **kwargs)
+            captured["process"] = process
+            return process
+
+        def terminate(target, _log=None, *, grace_seconds=0):
+            del _log, grace_seconds
+            target.running = False
+
+        studio = _studio()
+        with (
+            patch("cinepulse.studio.PATHS", SimpleNamespace(cache=cache)),
+            patch("cinepulse.studio.ai_suite.MODELS", models),
+            patch("cinepulse.studio.ai_suite.AI_ROOT", ai_root),
+            patch("cinepulse.studio.ai_suite.VENV_PYTHON", python),
+            patch("cinepulse.studio.stem_cache_key", return_value="fixed-key"),
+            patch("cinepulse.studio.subprocess.Popen", side_effect=popen),
+            patch("cinepulse.studio.threading.Thread.start", side_effect=RuntimeError("thread start failed")),
+            patch("cinepulse.studio.terminate_process_tree", side_effect=terminate) as kill,
+        ):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "thread start failed"):
+                studio._prepare_reactive_audio(str(source), "Graves", False, 4)
+
+        process = captured["process"]
+        kill.assert_called_once()
+        assert process.stdout.closed
+        assert studio._process is None
+        cache_root = cache / "stems" / "fixed-key"
+        assert not list(cache_root.glob(".demucs-partial-*"))
 
 
 def test_demucs_stems_are_promoted_only_after_complete_success() -> None:
