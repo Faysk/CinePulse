@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.26 — 2026-09-28
+
+- corrige #113: o teste do handoff do updater deixa de substituir `subprocess.Popen` globalmente;
+- o mock passa a ficar isolado na referência `subprocess` de `cinepulse.update_manager`, impedindo que telemetria NVIDIA concorrente (`nvidia-smi`) contamine a contagem de chamadas;
+- preserva a asserção forte de exatamente um handoff PowerShell do updater, sem relaxar o contrato para esconder flakiness;
+- revalida o Quality matrix no Windows/Python 3.14.7 que expôs a regressão na 1.2.25;
+- não altera a lógica runtime do updater; é um hotfix de confiabilidade dos gates de release/CI;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.25 — 2026-09-28
 
 - corrige #111: fecha o TOCTOU residual entre a verificação de `pending-update.json` no helper e a leitura posterior pelo aplicador portátil;
