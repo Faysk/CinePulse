@@ -68,12 +68,20 @@ def stem_cache_key(
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
 
-def build_demucs_command(python: Path, model_repo: Path, output: Path, audio: Path, use_cpu: bool) -> list[str]:
+def build_demucs_command(
+    python: Path,
+    model_repo: Path,
+    output: Path,
+    audio: Path,
+    use_cpu: bool,
+    gpu_index: int | None = None,
+) -> list[str]:
     if not python.is_file() or not (model_repo / "htdemucs_ft.yaml").is_file():
         raise FileNotFoundError("Ambiente ou modelo local do Demucs não encontrado.")
+    device = "cpu" if use_cpu else ("cuda" if gpu_index is None else f"cuda:{max(0, int(gpu_index))}")
     return [
         str(python), "-m", "demucs", "-n", "htdemucs_ft", "--repo", str(model_repo),
-        "--device", "cpu" if use_cpu else "cuda", "--shifts", "1", "--overlap", "0.25",
+        "--device", device, "--shifts", "1", "--overlap", "0.25",
         "--int24", "-j", "1", "-o", str(output), str(audio),
     ]
 
