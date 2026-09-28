@@ -97,8 +97,22 @@ jobs:
       - name: GPU inventory
         shell: pwsh
         run: |
-          nvidia-smi
+          $ErrorActionPreference = 'Stop'
+          $EvidenceDir = Join-Path $PWD 'artifacts/gpu'
+          New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
+          nvidia-smi | Tee-Object -FilePath (Join-Path $EvidenceDir 'nvidia-smi.txt')
           if ($LASTEXITCODE -ne 0) { throw 'NVIDIA driver/GPU unavailable.' }
+          $Metadata = [ordered]@{
+            repository = '${{ github.repository }}'
+            workflow_run_id = '${{ github.run_id }}'
+            workflow_run_attempt = '${{ github.run_attempt }}'
+            commit_sha = '${{ github.sha }}'
+            ref = '${{ github.ref }}'
+            runner_name = '${{ runner.name }}'
+            runner_os = '${{ runner.os }}'
+            runner_arch = '${{ runner.arch }}'
+          }
+          $Metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $EvidenceDir 'acceptance-metadata.json') -Encoding utf8
       - name: Install hash-locked audit runtime
         shell: pwsh
         run: |
@@ -245,6 +259,7 @@ jobs:
           path: |
             artifacts/ci/*.json
             artifacts/gpu/*.json
+            artifacts/gpu/nvidia-smi.txt
             cache/hardware/realesrgan-tuning.json
             cache/hardware/gpu-media-tuning.json
             cache/hardware/resident-encode.json
