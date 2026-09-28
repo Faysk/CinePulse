@@ -110,7 +110,12 @@ def path_mutation_transaction(path: Path, *, timeout: float = 30.0) -> Iterator[
     target = Path(path)
     key = _path_key(target)
     lock = path_mutation_lock(target)
-    with lock:
+    requested_timeout = max(0.0, float(timeout))
+    deadline = time.monotonic() + requested_timeout
+    local_timeout = min(requested_timeout, threading.TIMEOUT_MAX)
+    if not lock.acquire(timeout=local_timeout):
+        raise TimeoutError(f"timed out waiting for CinePulse path mutation lock: {key}")
+    try:
         depths = getattr(_THREAD_STATE, "depths", None)
         if depths is None:
             depths = {}
@@ -121,14 +126,19 @@ def path_mutation_transaction(path: Path, *, timeout: float = 30.0) -> Iterator[
             try:
                 yield
             finally:
-                remaining = int(depths.get(key, 1)) - 1
-                if remaining:
-                    depths[key] = remaining
+                remaining_depth = int(depths.get(key, 1)) - 1
+                if remaining_depth:
+                    depths[key] = remaining_depth
                 else:
                     depths.pop(key, None)
             return
 
-        resource = _acquire_windows_mutex(key, timeout) if os.name == "nt" else _acquire_posix_lock(key, timeout)
+        remaining_timeout = max(0.0, deadline - time.monotonic())
+        resource = (
+            _acquire_windows_mutex(key, remaining_timeout)
+            if os.name == "nt"
+            else _acquire_posix_lock(key, remaining_timeout)
+        )
         depths[key] = 1
         try:
             yield
@@ -138,6 +148,8 @@ def path_mutation_transaction(path: Path, *, timeout: float = 30.0) -> Iterator[
                 _release_windows_mutex(resource)
             else:
                 _release_posix_lock(resource)
+    finally:
+        lock.release()
 
 
 def serialized_path_mutation(method: Callable[_P, _R]) -> Callable[_P, _R]:
