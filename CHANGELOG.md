@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.22 — 2026-09-28
+
+- corrige a seleção de GPU do Demucs em máquinas com múltiplos adaptadores NVIDIA;
+- remove o pinning global `CUDA_VISIBLE_DEVICES=0` do bootstrap, mantendo `CUDA_DEVICE_ORDER=PCI_BUS_ID`;
+- propaga `HardwareProfile.gpu_index` para a separação de stems e usa `--device cuda:<índice>`;
+- jobs configurados para CPU continuam usando `--device cpu`;
+- adiciona regressões para GPU secundária e para impedir que o bootstrap volte a ocultar adaptadores CUDA.
+
 ## 1.2.21 — 2026-09-28
 
 - consolida os hardenings acumulados depois da 1.2.19 e publica esse conjunto como a nova Stable;
