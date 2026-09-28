@@ -80,7 +80,37 @@ function Test-PackageManifest {
     return $Manifest
 }
 
-$Pending = Get-Content -LiteralPath $PendingFile -Raw | ConvertFrom-Json
+$PendingBytes = [IO.File]::ReadAllBytes($PendingFile)
+$ExpectedPendingSha256 = ([string]$env:CINEPULSE_EXPECTED_PENDING_SHA256).Trim().ToLowerInvariant()
+if ($ExpectedPendingSha256) {
+    if ($ExpectedPendingSha256 -notmatch '^[0-9a-f]{64}$') {
+        throw 'SHA-256 esperado do descritor pendente é inválido.'
+    }
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $ActualHashBytes = $Hasher.ComputeHash($PendingBytes)
+    } finally {
+        $Hasher.Dispose()
+    }
+    $ActualPendingSha256 = -join ($ActualHashBytes | ForEach-Object { $_.ToString('x2') })
+    if ($ActualPendingSha256 -ne $ExpectedPendingSha256) {
+        throw 'O descritor da atualização portátil mudou após a verificação do handoff.'
+    }
+}
+$Offset = 0
+if (
+    $PendingBytes.Length -ge 3 -and
+    $PendingBytes[0] -eq 0xEF -and
+    $PendingBytes[1] -eq 0xBB -and
+    $PendingBytes[2] -eq 0xBF
+) { $Offset = 3 }
+$Utf8 = [Text.UTF8Encoding]::new($false, $true)
+try {
+    $PendingText = $Utf8.GetString($PendingBytes, $Offset, $PendingBytes.Length - $Offset)
+    $Pending = $PendingText | ConvertFrom-Json
+} catch {
+    throw 'A atualização pendente possui JSON inválido.'
+}
 if ($Pending.schema -ne 1 -or -not $Pending.source -or -not $Pending.version) {
     throw 'A atualização pendente possui metadados inválidos.'
 }
