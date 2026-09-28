@@ -3,6 +3,7 @@
 ## 1.2.22 — 2026-09-28
 
 - fecha os deltas corrigíveis por código encontrados após a publicação da 1.2.21 e revalidados diretamente na `main`;
+- incorpora a correção #78 já mergeada na `main`: o bootstrap deixa de ocultar GPUs CUDA secundárias e o Demucs passa a respeitar `HardwareProfile.gpu_index` com `--device cuda:N`;
 - VFX e Aurora passam a iniciar a reader thread dentro da fronteira de cleanup; falha em `Thread.start()` não deixa FFmpeg/pipes fora do reap;
 - o runner FFmpeg principal do Studio recebe a mesma proteção e o finalizador tolera thread nunca iniciada sem mascarar a exceção original;
 - Overlay Composer passa a limpar o decoder já aberto quando o encoder ou o decoder pool falha durante setup;
