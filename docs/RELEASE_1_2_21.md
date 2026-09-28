@@ -25,7 +25,7 @@ Esta release conclui a parte corrigível por código da auditoria final #7 e con
 
 ## Validação
 
-A PR desta release executa os gates de Quality/Recovery/Installer/Release Candidate/Publish Release no head exato. A publicação Stable só ocorre após merge na main e reexecução do publisher.
+A primeira rodada do Publish preflight encontrou e bloqueou corretamente um `join()` de thread ainda não iniciada no finalizador FFmpeg do Studio. O finalizador agora tolera esse estado, reap o processo, fecha o pipe e preserva a exceção original. A PR desta release executa novamente Quality/Recovery/Installer/Release Candidate/Publish Release no head corrigido; a publicação Stable só ocorre após merge na main e reexecução do publisher.
 
 ## Escopo físico
 
