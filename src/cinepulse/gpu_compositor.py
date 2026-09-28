@@ -28,10 +28,14 @@ from .path_transaction import serialized_path_mutation
 from .source_identity import file_content_identity
 
 
-COMPOSITOR_SCHEMA = 7
+# Schema 8 replaces an impossible bit-exact RGB expectation with a bounded
+# YUV420 quantization contract. Exact evidence still binds the concrete asset
+# stack, hardware, driver and FFmpeg build.
+COMPOSITOR_SCHEMA = 8
 COMPOSITOR_REFERENCE_ID = "composer-numpy-rgba-v1"
-COMPOSITOR_PSNR_FLOOR_DB = 80.0
-COMPOSITOR_SSIM_FLOOR = 0.999999
+COMPOSITOR_PSNR_FLOOR_DB = 55.0
+COMPOSITOR_SSIM_FLOOR = 0.9999
+COMPOSITOR_MAX_ABS_ERROR = 4
 COMPOSITOR_MIN_SPEEDUP = 1.03
 COMPOSITOR_MAX_STACK_LAYERS = 4
 
@@ -250,6 +254,7 @@ class GpuCompositorEvidence:
     alpha_contract_ok: bool
     audio_sync_ok: bool
     reference_id: str = COMPOSITOR_REFERENCE_ID
+    max_abs_error: int = 0
 
     @property
     def speedup(self) -> float:
@@ -264,6 +269,7 @@ class GpuCompositorEvidence:
             and self.speedup >= COMPOSITOR_MIN_SPEEDUP
             and self.psnr_db >= COMPOSITOR_PSNR_FLOOR_DB
             and self.ssim >= COMPOSITOR_SSIM_FLOOR
+            and 0 <= int(self.max_abs_error) <= COMPOSITOR_MAX_ABS_ERROR
             and self.frame_count_ok
             and self.metadata_ok
             and self.alpha_contract_ok
