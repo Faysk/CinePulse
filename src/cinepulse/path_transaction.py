@@ -102,15 +102,20 @@ def path_mutation_transaction(path: Path, *, timeout: float = 30.0) -> Iterator[
     stores. Atomic replace prevents torn files but does not make
     read-modify-write atomic; this transaction closes that lost-update window.
 
-    The OS lock is acquired only by the outermost call on a thread so nested
-    store methods remain reentrant. Windows uses a named mutex (released by the
-    kernel on process death); POSIX uses flock on a hashed file in the system
-    temp directory.
+    The timeout is one end-to-end acquisition budget shared by the in-process
+    lock and the OS lock. The OS lock is acquired only by the outermost call on
+    a thread so nested store methods remain reentrant. Windows uses a named
+    mutex (released by the kernel on process death); POSIX uses flock on a
+    hashed file in the system temp directory.
     """
     target = Path(path)
     key = _path_key(target)
+    timeout_seconds = max(0.0, min(float(timeout), threading.TIMEOUT_MAX))
+    deadline = time.monotonic() + timeout_seconds
     lock = path_mutation_lock(target)
-    with lock:
+    if not lock.acquire(timeout=timeout_seconds):
+        raise TimeoutError(f"timed out waiting for CinePulse path mutation lock: {key}")
+    try:
         depths = getattr(_THREAD_STATE, "depths", None)
         if depths is None:
             depths = {}
@@ -128,7 +133,12 @@ def path_mutation_transaction(path: Path, *, timeout: float = 30.0) -> Iterator[
                     depths.pop(key, None)
             return
 
-        resource = _acquire_windows_mutex(key, timeout) if os.name == "nt" else _acquire_posix_lock(key, timeout)
+        remaining_timeout = max(0.0, deadline - time.monotonic())
+        resource = (
+            _acquire_windows_mutex(key, remaining_timeout)
+            if os.name == "nt"
+            else _acquire_posix_lock(key, remaining_timeout)
+        )
         depths[key] = 1
         try:
             yield
@@ -138,6 +148,8 @@ def path_mutation_transaction(path: Path, *, timeout: float = 30.0) -> Iterator[
                 _release_windows_mutex(resource)
             else:
                 _release_posix_lock(resource)
+    finally:
+        lock.release()
 
 
 def serialized_path_mutation(method: Callable[_P, _R]) -> Callable[_P, _R]:

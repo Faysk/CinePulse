@@ -1,23 +1,28 @@
 # CinePulse 1.2.24
 
-A 1.2.24 publica a correção da issue #98 sobre lifecycle excepcional das rotas neurais do Studio.
+A 1.2.24 é um hotfix de persistência sobre a Stable 1.2.23. Ela fecha a lacuna encontrada na issue #95 no lock cross-process por path sem alterar o hardening do updater introduzido na 1.2.23.
 
-## Real-ESRGAN
+## Timeout end-to-end
 
-A thread que drena stdout agora é iniciada dentro da mesma fronteira `try/finally` que protege o subprocesso. Se `Thread.start()` falhar depois que o `Popen()` já criou o filho, o processo é reaped, stdout é fechado, a exceção original permanece visível e `self._process` é limpo.
+`path_mutation_transaction(path, timeout=...)` agora trata o valor informado como um único orçamento para toda a aquisição:
 
-## Demucs
+- a contenção no `threading.RLock` do processo respeita o timeout;
+- chamadas aninhadas na mesma thread continuam reentrantes;
+- somente o tempo restante é repassado ao named mutex do Windows ou ao `flock` POSIX;
+- o contrato existente de `TimeoutError` é preservado quando qualquer camada esgota o orçamento.
 
-A separação de stems recebe o mesmo contrato de cleanup. Uma falha ao iniciar a reader thread não deixa o processo Demucs órfão nem uma referência foreground presa.
+Antes deste hotfix, uma segunda thread podia ficar presa no lock local por tempo indefinido e só então começar a contar o timeout do lock do sistema operacional.
 
 ## Cobertura
 
-A suíte inclui regressões que simulam `Thread.start()` falhando depois da criação do subprocesso em Real-ESRGAN e Demucs, verificando reap do filho, fechamento do pipe e limpeza de `self._process`.
+A suíte adiciona uma regressão com duas threads reais. Uma mantém o path ocupado enquanto a segunda tenta entrar com orçamento curto; a segunda deve expirar dentro desse orçamento e nunca aguardar a liberação do holder.
 
-## Base
+Os testes existentes de reentrância e serialização entre processos permanecem ativos para garantir que a correção não enfraqueça o contrato introduzido na 1.2.22.
 
-A release parte da Stable 1.2.23 e preserva o hardening do handoff do updater portátil já publicado nessa versão.
+## Compatibilidade
+
+A 1.2.24 parte diretamente da 1.2.23 e preserva a vinculação criptográfica do `pending-update.json` implementada em #97/#103.
 
 ## Escopo físico
 
-A issue #4 continua separada como fonte de verdade para aceite físico NVIDIA/8K/120. Esta release não promove capacidades Preview sem evidência física válida.
+A issue #4 continua sendo a fonte de verdade para aceite físico NVIDIA/8K/120 e graduation de caminhos Preview. A 1.2.24 não altera esse status.
