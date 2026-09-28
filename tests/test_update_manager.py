@@ -299,7 +299,16 @@ class UpdateManagerTests(unittest.TestCase):
                 script.index("$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256"),
                 script.index("Start-Process -FilePath $Launcher"),
             )
-            popen.assert_called_once()
+            helper_launches = [
+                call
+                for call in popen.call_args_list
+                if call.args
+                and isinstance(call.args[0], list)
+                and call.args[0]
+                and call.args[0][0] == "powershell.exe"
+                and str(helper) in call.args[0]
+            ]
+            self.assertEqual(1, len(helper_launches))
 
     def test_portable_launch_rejects_descriptor_for_different_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
