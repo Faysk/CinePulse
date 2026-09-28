@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.20 — 2026-09-28
+
+- hardening acumulado pós-1.2.19 torna estado, checkpoints, cache, promoção de componentes e saídas finais mais resistentes a crashes e concorrência;
+- recovery mantém discovery read-only, reforça promoção crash-safe e reaproveita somente evidências/cache ligados à identidade real do conteúdo;
+- processos FFmpeg/neural/background passam a ser encerrados e coletados de forma determinística também em saídas excepcionais e cancelamentos;
+- updater/installer reforçam integridade de estado, arquivos instalados, downloads experimentais e estruturas de archive antes de qualquer promoção;
+- caches de mídia, música, visualizer, compositor, Real-ESRGAN, TensorRT e restauração passam a invalidar quando o conteúdo muda mesmo com metadados preservados;
+- bootstrap deixa de forçar `CUDA_VISIBLE_DEVICES=0`, preservando todos os adaptadores CUDA visíveis em máquinas multi-GPU;
+- Demucs recebe explicitamente o `gpu_index` selecionado pelo CinePulse e usa `cuda:<índice>`, mantendo `cpu` inalterado quando solicitado;
+- adiciona regressões para pinning multi-GPU do Demucs e para impedir que o bootstrap volte a ocultar GPUs secundárias.
+
 ## 1.2.19 — 2026-09-21
 
 - Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
