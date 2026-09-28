@@ -115,6 +115,7 @@ class CiReleaseGateTests(unittest.TestCase):
         self.assertIn("scripts/gpu_compositor_benchmark.py", text)
         self.assertIn("cache/hardware/gpu-compositor.json", text)
         self.assertIn("artifacts/gpu/composer-h6.json", text)
+        self.assertIn("colorchannelmixer=aa=0.55", text)
         self.assertIn("Physical NVDEC decode acceptance", text)
         self.assertIn("scripts/gpu_media_benchmark.py", text)
         self.assertIn("cache/hardware/gpu-media-tuning.json", text)
@@ -165,6 +166,13 @@ class CiReleaseGateTests(unittest.TestCase):
         text = (ROOT / "scripts/Check-Repository.ps1").read_text(encoding="utf-8-sig")
         for root in ("cache", "temp", "artifacts", "dist", "components", "data"):
             self.assertIn(f"'{root}'", text)
+
+    def test_stable_msi_semver_parser_uses_strictmode_safe_optional_groups(self) -> None:
+        text = (ROOT / "scripts/Build-Msi.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("$Matches['stage']", text)
+        self.assertIn("$Matches['serial']", text)
+        self.assertNotIn("$Matches.stage", text)
+        self.assertNotIn("$Matches.serial", text)
 
     def test_release_gate_documents_phase9_contract(self) -> None:
         text = (ROOT / "scripts/release_gate.py").read_text(encoding="utf-8")
