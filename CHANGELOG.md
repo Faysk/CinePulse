@@ -1,12 +1,48 @@
 # Changelog
 
+## 1.2.27 — 2026-09-28
+
+- corrige #118: o updater portátil deixa de aceitar `source` apontando para o staging privado de outra versão;
+- `_validate_portable_pending_handoff()` agora exige que a origem esteja em `.runtime/updates/<versão preparada>` ou abaixo desse diretório;
+- preserva a rejeição específica para paths realmente fora de `.runtime/updates` e mantém o binding SHA-256 do descriptor introduzido na 1.2.25;
+- adiciona regressão focada para descriptor/version válidos com origem cross-version;
+- incorpora sem regressão o hotfix de CI da 1.2.26;
+- mantém o aceite físico NVIDIA/8K/120 separado em #4.
+
+## 1.2.26 — 2026-09-28
+
+- corrige #113: o teste do handoff do updater deixa de substituir `subprocess.Popen` globalmente;
+- o mock passa a ficar isolado na referência `subprocess` de `cinepulse.update_manager`, impedindo que telemetria NVIDIA concorrente (`nvidia-smi`) contamine a contagem de chamadas;
+- preserva a asserção forte de exatamente um handoff PowerShell do updater, sem relaxar o contrato para esconder flakiness;
+- revalida o Quality matrix no Windows/Python 3.14.7 que expôs a regressão na 1.2.25;
+- não altera a lógica runtime do updater; é um hotfix de confiabilidade dos gates de release/CI;
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
+## 1.2.25 — 2026-09-28
+
+- corrige #111: fecha o TOCTOU residual entre a verificação de `pending-update.json` no helper e a leitura posterior pelo aplicador portátil;
+- o helper propaga `CINEPULSE_EXPECTED_PENDING_SHA256` para o processo relançado;
+- o aplicador lê o descriptor uma única vez como bytes, valida SHA-256 quando há digest herdado e interpreta exatamente esses mesmos bytes;
+- o bootstrap limpa o digest herdado após a tentativa de apply, evitando estado residual no processo;
+- o smoke Windows prova que digest divergente falha antes de qualquer mutação de payload e que digest correto preserva rollback/retry e apply final;
+- mantém o hardening de timeout da 1.2.24 e o aceite físico NVIDIA/8K/120 separado em #4.
+
+## 1.2.24 — 2026-09-28
+
+- corrige #95: `path_mutation_transaction(..., timeout=...)` passa a aplicar um único orçamento de timeout à aquisição completa, incluindo contenção entre threads do mesmo processo;
+- a espera no `RLock` local respeita o limite configurado e somente o tempo restante é repassado ao named mutex do Windows ou `flock` no POSIX;
+- preserva reentrância na mesma thread e o contrato cross-process introduzido na 1.2.22;
+- adiciona regressão real com duas threads para provar que uma transação concorrente expira dentro do orçamento em vez de aguardar indefinidamente;
+- mantém integralmente o hardening do updater publicado na 1.2.23 (#97/#103);
+- aceite físico NVIDIA/8K/120 continua separado na issue #4.
+
 ## 1.2.23 — 2026-09-28
 
-- fecha a issue #94 no updater portátil: antes do handoff, `pending-update.json` passa a ter schema, versão e origem revalidados contra a atualização preparada;
-- exige que a origem preparada exista e permaneça dentro de `.runtime/updates`, recusando descritores stale ou apontando para fora da área privada;
-- calcula o SHA-256 dos bytes exatos do descritor aprovado e faz o helper PowerShell recalcular esse hash antes de relançar o CinePulse; qualquer troca entre staging e relaunch aborta com fail-closed;
-- mantém o fluxo MSI inalterado, inclusive a revalidação do SHA-256 do pacote antes do handoff;
-- adiciona regressões para hash do descritor, versão divergente e origem fora da área privada;
+- corrige #97: o handoff do updater portátil passa a validar schema, versão e origem de `pending-update.json` antes de fechar a aplicação;
+- a origem preparada precisa continuar confinada em `.runtime/updates` e existir como diretório;
+- o helper PowerShell recebe o SHA-256 dos bytes exatos do descritor aprovado e recalcula o digest imediatamente antes do relaunch, abortando se o estado tiver mudado;
+- preserva sem alteração o caminho MSI, que já revalida o hash do pacote preparado;
+- adiciona regressões para descriptor válido, versão divergente e origem fora da área privada de updates;
 - aceite físico NVIDIA/8K/120 continua separado na issue #4.
 
 ## 1.2.22 — 2026-09-28

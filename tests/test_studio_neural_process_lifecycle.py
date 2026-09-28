@@ -49,8 +49,10 @@ def _studio() -> VideoOptimizerStudio:
     app._cancelled = False
     app._events = queue.Queue()
     app._process = None
+    app._hardware = type("Hardware", (), {"gpu_index": 0})()
     app._log = lambda _message: None
     app._push_progress = lambda _value: None
+    app._set_stage = lambda *_args: None
     return app
 
 
@@ -80,6 +82,64 @@ class StudioNeuralProcessLifecycleTests(unittest.TestCase):
             app._run_ai(["realesrgan"], Path(temporary), 1, 0.0, 1.0)
 
         self.assertTrue(process.stdout.closed)
+
+    def test_realesrgan_reader_start_failure_reaps_child_and_clears_foreground_process(self) -> None:
+        app = _studio()
+        process = _FakeProcess(running=True)
+
+        def terminate(target, _log=None, *, grace_seconds=0):
+            del _log, grace_seconds
+            target._running = False
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                patch("cinepulse.studio.subprocess.Popen", return_value=process),
+                patch("cinepulse.studio.threading.Thread.start", side_effect=RuntimeError("thread start failed")),
+                patch("cinepulse.studio.terminate_process_tree", side_effect=terminate) as kill,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                    app._run_ai(["realesrgan"], Path(temporary), 1, 0.0, 1.0)
+
+        kill.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+        self.assertIsNone(app._process)
+
+    def test_demucs_reader_start_failure_reaps_child_and_clears_foreground_process(self) -> None:
+        app = _studio()
+        process = _FakeProcess(running=True)
+
+        def terminate(target, _log=None, *, grace_seconds=0):
+            del _log, grace_seconds
+            target._running = False
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_paths = type("Paths", (), {"cache": root / "cache"})()
+            fake_ai_suite = type(
+                "AiSuite",
+                (),
+                {
+                    "MODELS": root / "models",
+                    "AI_ROOT": root / "ai",
+                    "VENV_PYTHON": "python",
+                },
+            )()
+            with (
+                patch("cinepulse.studio.PATHS", fake_paths),
+                patch("cinepulse.studio.ai_suite", fake_ai_suite),
+                patch("cinepulse.studio.stems_for_focus", return_value=("vocals",)),
+                patch("cinepulse.studio.stem_cache_key", return_value="reader-start-failure"),
+                patch("cinepulse.studio.build_demucs_command", return_value=["demucs"]),
+                patch("cinepulse.studio.subprocess.Popen", return_value=process),
+                patch("cinepulse.studio.threading.Thread.start", side_effect=RuntimeError("thread start failed")),
+                patch("cinepulse.studio.terminate_process_tree", side_effect=terminate) as kill,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                    app._prepare_reactive_audio(str(root / "source.wav"), "vocals", False, 2)
+
+        kill.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+        self.assertIsNone(app._process)
 
     def test_ffmpeg_reader_start_failure_reaps_child_and_clears_foreground_process(self) -> None:
         app = _studio()

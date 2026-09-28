@@ -6,7 +6,7 @@
 
 CinePulse transforma clipes curtos e músicas em vídeos contínuos, melhora vídeos existentes e cria VFX sincronizados com o áudio. O processamento acontece localmente e o usuário escolhe entre velocidade, qualidade e uso de recursos.
 
-> Estado Stable: `1.2.23`. Fecha a janela de integridade do updater portátil: o handoff valida o descritor preparado e vincula o relaunch ao SHA-256 exato de `pending-update.json`. O aceite físico NVIDIA/8K/120 continua separado na issue #4.
+> Estado Stable: `1.2.27`. Reforça o updater portátil: além do binding criptográfico do descriptor, a origem preparada agora precisa pertencer ao staging da mesma versão declarada, bloqueando referências cross-version.
 
 > Recursos marcados como **Preview/Experimental** podem estar presentes na mesma distribuição sem transformar CI hospedado em prova física de RTX, CUDA/TensorRT, 8K/120 ou 12K/120. Essas capacidades continuam exigindo o gate de hardware real antes de qualquer selo de desempenho.
 

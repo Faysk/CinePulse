@@ -569,6 +569,7 @@ def _handoff_script(
                 f"$ExpectedPendingSha256 = {_ps_literal(normalized_pending_sha256)}",
                 "$ActualPendingSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Pending).Hash.ToLowerInvariant()",
                 "if ($ActualPendingSha256 -ne $ExpectedPendingSha256) { exit 24 }",
+                "$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256",
             ]
         common += ["Start-Process -FilePath $Launcher -WorkingDirectory $AppRoot"]
     common += ["Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue"]
@@ -577,9 +578,10 @@ def _handoff_script(
 
 def _validate_portable_pending_handoff(info: UpdateInfo, staged: Path, app_root: Path) -> str:
     runtime_root = (Path(app_root).expanduser().resolve() / ".runtime").resolve()
-    expected_pending = (runtime_root / "pending-update.json").resolve()
-    if staged != expected_pending:
-        raise ValueError("A atualização portátil exige o descritor .runtime/pending-update.json exato.")
+    if staged.name != "pending-update.json":
+        raise ValueError("A atualização portátil exige o descritor pending-update.json.")
+    if runtime_root != staged and runtime_root not in staged.parents:
+        raise ValueError("O descritor da atualização portátil está fora do runtime do CinePulse.")
     try:
         raw = staged.read_bytes()
         payload = json.loads(raw.decode("utf-8-sig"))
@@ -597,6 +599,9 @@ def _validate_portable_pending_handoff(info: UpdateInfo, staged: Path, app_root:
     updates_root = (runtime_root / "updates").resolve()
     if updates_root != source and updates_root not in source.parents:
         raise ValueError("A origem da atualização portátil está fora da área privada de updates.")
+    version_root = (updates_root / info.version.strip()).resolve()
+    if version_root != source and version_root not in source.parents:
+        raise ValueError("A origem da atualização portátil não corresponde ao staging da versão preparada.")
     if not source.is_dir():
         raise FileNotFoundError(f"Origem preparada da atualização portátil não encontrada: {source}")
     return hashlib.sha256(raw).hexdigest().lower()

@@ -1,34 +1,30 @@
 # CinePulse 1.2.23
 
-A 1.2.23 fecha a issue #94 e endurece a fronteira entre o staging verificado do updater portátil e o relaunch que aplica a atualização.
+A 1.2.23 fecha uma janela de integridade no handoff do updater portátil descoberta após a Stable 1.2.22.
 
-## Updater portátil fail-closed
+## Handoff vinculado ao descritor verificado
 
-Antes do handoff, `launch_staged()` agora exige exatamente `.runtime/pending-update.json`, relê os bytes do descritor e valida:
+Antes de encerrar o CinePulse, `launch_staged()` agora lê e valida o `pending-update.json` preparado. O descritor precisa usar schema 1, corresponder exatamente à versão do update em andamento e apontar para uma origem existente dentro de `.runtime/updates`.
 
-- schema 1;
-- versão igual ao `UpdateInfo` aprovado;
-- origem presente;
-- origem confinada a `.runtime/updates`;
-- diretório de origem realmente existente.
+Depois da validação, o CinePulse calcula o SHA-256 dos bytes exatos do descritor e grava esse digest no helper PowerShell de handoff.
 
-Depois dessa validação, o CinePulse calcula o SHA-256 dos bytes exatos do descritor e embute esse digest no helper PowerShell.
-
-Quando o processo principal termina, o helper usa `Get-FileHash -Algorithm SHA256` imediatamente antes do relaunch. Se `pending-update.json` mudou no intervalo, o helper aborta em vez de iniciar o bootstrap com estado diferente daquele que foi aprovado.
+Quando o processo principal termina, o helper recalcula o SHA-256 de `pending-update.json` imediatamente antes do relaunch. Se o descritor tiver mudado, o update é abortado em vez de iniciar a transação portátil com um estado diferente daquele aprovado.
 
 ## Compatibilidade
 
-O fluxo MSI permanece inalterado e continua revalidando o SHA-256 do pacote preparado antes do handoff.
+O fluxo MSI não muda: ele continua validando nome, confinamento e SHA-256 do pacote MSI preparado antes do handoff.
+
+O formato do `pending-update.json` também permanece schema 1; não há migração de estado para usuários existentes.
 
 ## Cobertura
 
 A suíte inclui regressões para:
 
-- descritor válido vinculado ao hash entregue ao helper;
-- versão divergente entre descritor e atualização;
-- origem do descritor fora da área privada de updates;
-- ordem da verificação de hash antes de `Start-Process`.
+- handoff portátil válido contendo o digest esperado;
+- descriptor de versão divergente;
+- origem fora da área privada `.runtime/updates`;
+- presença da verificação `Get-FileHash -Algorithm SHA256` no helper.
 
-## Escopo físico
+Closes #97.
 
-A issue #4 continua sendo a fonte de verdade para aceite físico NVIDIA/8K/120. Esta release não promove capacidade física com base apenas em CI hospedado.
+A aceitação física NVIDIA/8K/120 permanece acompanhada separadamente pela issue #4.
