@@ -18,6 +18,7 @@ EFFECT_HEIGHT = 180
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 from .audio_mastering import bounded_audio_input_args, frame_bound_duration
+from .delivery import bounded_encoder_threads
 from .gpu_failure import looks_like_gpu_runtime_failure
 from .process_control import popen_group_kwargs, terminate_process_tree
 from .music_envelope import (
@@ -413,12 +414,18 @@ def render_vfx_intermediate(
             "-g", "30", "-bf", "2", "-pix_fmt", output_pixel_format,
         ]
 
+    encoder_threads = bounded_encoder_threads(primary_video_args, cpu_threads)
+    if fallback_video_args:
+        encoder_threads = min(
+            encoder_threads,
+            bounded_encoder_threads(fallback_video_args, cpu_threads),
+        )
     command_suffix = [
         "-color_primaries", output_primaries,
         "-color_trc", output_transfer,
         "-colorspace", output_space,
         "-color_range", "pc" if output_range in {"pc", "full"} else "tv",
-        "-threads", str(max(1, cpu_threads)),
+        "-threads", str(encoder_threads),
     ]
     if final_delivery:
         if final_audio_source:

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Sequence
 from functools import lru_cache
 import subprocess
 
@@ -39,6 +39,16 @@ DELIVERY_PROFILES = (
 )
 
 SUPPORTED_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm")
+X265_MAX_FRAME_THREADS = 16
+
+
+def bounded_encoder_threads(video_args: Sequence[str], requested_threads: int) -> int:
+    """Keep FFmpeg encoder thread requests inside backend-specific hard limits."""
+    threads = max(1, int(requested_threads))
+    if "libx265" in video_args:
+        return min(threads, X265_MAX_FRAME_THREADS)
+    return threads
+
 
 Severity = Literal["warning", "error"]
 
