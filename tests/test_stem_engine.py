@@ -18,7 +18,7 @@ class StemEngineTests(unittest.TestCase):
         self.assertEqual(("bass", "drums"), stems_for_focus("Graves e batidas"))
         self.assertEqual((), stems_for_focus("Todos equilibrados"))
 
-    def test_command_uses_local_model_and_device(self) -> None:
+    def test_command_uses_selected_cuda_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             python = root / "python.exe"
@@ -26,8 +26,33 @@ class StemEngineTests(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             (repo / "htdemucs_ft.yaml").write_text("models: []", encoding="utf-8")
-            command = build_demucs_command(python, repo, root / "out", root / "music.wav", use_cpu=False)
-            self.assertEqual("cuda", command[command.index("--device") + 1])
+            command = build_demucs_command(
+                python,
+                repo,
+                root / "out",
+                root / "music.wav",
+                use_cpu=False,
+                gpu_index=1,
+            )
+            self.assertEqual("cuda:1", command[command.index("--device") + 1])
+
+    def test_command_keeps_cpu_device_when_gpu_index_is_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            python = root / "python.exe"
+            python.write_bytes(b"exe")
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "htdemucs_ft.yaml").write_text("models: []", encoding="utf-8")
+            command = build_demucs_command(
+                python,
+                repo,
+                root / "out",
+                root / "music.wav",
+                use_cpu=True,
+                gpu_index=1,
+            )
+            self.assertEqual("cpu", command[command.index("--device") + 1])
 
     def test_cache_changes_when_demucs_runtime_or_weights_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
