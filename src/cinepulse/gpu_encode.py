@@ -26,9 +26,9 @@ from typing import Literal
 from .path_transaction import serialized_path_mutation
 
 
-# Schema 4 invalidates H5 records created before the complete encoder-quality
-# contract also bound the exact NVENC adapter index.
-GPU_ENCODE_SCHEMA = 4
+# Schema 5 binds whether NVENC receives CUDA hardware frames. Older resident
+# records used software pixel-format arguments on a CUDA feed and are invalid.
+GPU_ENCODE_SCHEMA = 5
 Codec = Literal["h264_nvenc", "hevc_nvenc", "av1_nvenc"]
 RateControl = Literal["constqp", "vbr", "cbr"]
 
@@ -67,6 +67,7 @@ class NvencContract:
     b_ref_mode: str = ""
     gop: int | None = None
     gpu_index: int = 0
+    cuda_frames: bool = False
 
     def __post_init__(self) -> None:
         if not self.preset.strip():
@@ -96,11 +97,12 @@ class NvencContract:
         raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
-    def ffmpeg_args(self) -> list[str]:
+    def ffmpeg_args(self, *, cuda_frames: bool | None = None) -> list[str]:
         args = ["-c:v", self.encoder, "-gpu", str(int(self.gpu_index)), "-preset", self.preset]
         if self.tune:
             args += ["-tune", self.tune]
-        args += ["-rc", self.rate_control, "-pix_fmt", self.pixel_format]
+        resident = self.cuda_frames if cuda_frames is None else bool(cuda_frames)
+        args += ["-rc", self.rate_control, "-pix_fmt", "cuda" if resident else self.pixel_format]
         if self.profile:
             args += ["-profile:v", self.profile]
         if self.qp is not None:
