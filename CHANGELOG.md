@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.20 — 2026-09-28
+
+- o handoff do updater portátil passa a vincular o relaunch ao SHA-256 exato de `pending-update.json`, abortando se o descritor mudar entre staging e fechamento da aplicação;
+- `launch_staged` valida schema, versão, origem e confinamento da origem dentro de `.runtime/updates` antes de entregar o update ao helper;
+- adiciona regressões para descritor de versão divergente e para a verificação de hash no helper PowerShell;
+- inclui os hardenings acumulados após 1.2.19 para lifecycle de subprocessos, identidade de caches/evidências, checkpoints crash-safe, recuperação e integridade de componentes experimentais.
+
 ## 1.2.19 — 2026-09-21
 
 - Restauração Preview passa a exigir FFprobe para validar a saída antes da promoção atômica;
