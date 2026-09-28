@@ -569,6 +569,7 @@ def _handoff_script(
                 f"$ExpectedPendingSha256 = {_ps_literal(normalized_pending_sha256)}",
                 "$ActualPendingSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Pending).Hash.ToLowerInvariant()",
                 "if ($ActualPendingSha256 -ne $ExpectedPendingSha256) { exit 24 }",
+                "$env:CINEPULSE_EXPECTED_PENDING_SHA256 = $ExpectedPendingSha256",
             ]
         common += ["Start-Process -FilePath $Launcher -WorkingDirectory $AppRoot"]
     common += ["Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue"]
