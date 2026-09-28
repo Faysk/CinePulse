@@ -78,10 +78,14 @@ def option_map(args: list[str]) -> dict[str, str]:
 
 
 class GpuDeliveryTests(unittest.TestCase):
-    def test_contract_options_are_identical_to_delivery_plan_hevc_nvenc(self) -> None:
-        expected = plan().video_args(use_cpu=False, nvenc_available=True, bitrate_mbps=80, fps=60)
-        actual = cinepulse_hevc_nvenc_contract(pixel_format="yuv420p", bitrate_mbps=80, fps=60).ffmpeg_args()
-        self.assertEqual(option_map(expected), option_map(actual))
+    def test_contract_options_match_delivery_quality_with_cuda_frame_transport(self) -> None:
+        expected = option_map(plan().video_args(use_cpu=False, nvenc_available=True, bitrate_mbps=80, fps=60))
+        contract = cinepulse_hevc_nvenc_contract(pixel_format="yuv420p", bitrate_mbps=80, fps=60)
+        actual = option_map(contract.ffmpeg_args())
+        self.assertEqual("cuda", actual.pop("-pix_fmt"))
+        self.assertEqual("yuv420p", expected.pop("-pix_fmt"))
+        self.assertEqual(expected, actual)
+        self.assertTrue(contract.cuda_frames)
 
     def test_contract_parity_includes_nonzero_gpu_index(self) -> None:
         expected = plan().video_args(
@@ -90,7 +94,11 @@ class GpuDeliveryTests(unittest.TestCase):
         actual = cinepulse_hevc_nvenc_contract(
             pixel_format="yuv420p", bitrate_mbps=80, fps=60, gpu_index=2
         ).ffmpeg_args()
-        self.assertEqual(option_map(expected), option_map(actual))
+        expected_map = option_map(expected)
+        actual_map = option_map(actual)
+        self.assertEqual("cuda", actual_map.pop("-pix_fmt"))
+        self.assertEqual("yuv420p", expected_map.pop("-pix_fmt"))
+        self.assertEqual(expected_map, actual_map)
 
     def test_exact_evidence_allows_simple_same_aspect_resident_route(self) -> None:
         store = Store(True)
