@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cinepulse.gpu_compositor import (
+    COMPOSITOR_MAX_ABS_ERROR,
     COMPOSITOR_MAX_STACK_LAYERS,
     COMPOSITOR_REFERENCE_ID,
     GpuCompositorCapabilities,
@@ -200,6 +201,10 @@ class GpuCompositorTests(unittest.TestCase):
     def test_evidence_must_be_near_identical_faster_and_from_real_reference(self) -> None:
         good = GpuCompositorEvidence(10.0, 6.0, 90.0, 1.0, True, True, True, True)
         visible_change = GpuCompositorEvidence(10.0, 6.0, 50.0, 0.999, True, True, True, True)
+        quantization_escape = GpuCompositorEvidence(
+            10.0, 6.0, 60.0, 0.99995, True, True, True, True,
+            max_abs_error=COMPOSITOR_MAX_ABS_ERROR + 1,
+        )
         slower = GpuCompositorEvidence(10.0, 10.0, 90.0, 1.0, True, True, True, True)
         wrong_reference = GpuCompositorEvidence(
             10.0, 6.0, 90.0, 1.0, True, True, True, True,
@@ -208,6 +213,7 @@ class GpuCompositorTests(unittest.TestCase):
         self.assertEqual(COMPOSITOR_REFERENCE_ID, good.reference_id)
         self.assertTrue(good.accepted)
         self.assertFalse(visible_change.accepted)
+        self.assertFalse(quantization_escape.accepted)
         self.assertFalse(slower.accepted)
         self.assertFalse(wrong_reference.accepted)
 

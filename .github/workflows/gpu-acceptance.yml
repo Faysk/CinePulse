@@ -236,7 +236,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $Root, (Split-Path -Parent $Cache) | Out-Null
           & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 3 -vf 'setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p' -c:v libx264 -preset fast -x264-params 'colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited' -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv $Base
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 H.264 base sample.' }
-          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'color=c=red@0.55:s=512x288:d=1' -frames:v 1 -vf 'format=rgba' $Layer
+          & $Ffmpeg -y -hide_banner -loglevel error -f lavfi -i 'color=c=red:s=512x288:d=1' -frames:v 1 -vf 'format=rgba,colorchannelmixer=aa=0.55' $Layer
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create Composer H6 alpha layer.' }
           python scripts/gpu_compositor_benchmark.py --base $Base --layer $Layer --kind png --cache $Cache --ffmpeg $Ffmpeg --ffprobe $Ffprobe --duration 2 --timeout 300 | Tee-Object -FilePath $Evidence
           if ($LASTEXITCODE -ne 0) { throw 'Physical Composer CUDA upload-path acceptance failed.' }

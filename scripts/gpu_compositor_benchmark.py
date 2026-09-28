@@ -18,8 +18,11 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
+
 from cinepulse.composer_export import ComposerBaseProfile, ComposerExportRequest, export_composer_reference
 from cinepulse.gpu_compositor import (
+    COMPOSITOR_MAX_ABS_ERROR,
     COMPOSITOR_MAX_STACK_LAYERS,
     COMPOSITOR_REFERENCE_ID,
     GpuCompositorEvidence,
@@ -102,10 +105,86 @@ def duration(payload: dict) -> float | None:
 
 
 def signature(stream: dict) -> tuple[object, ...]:
-    return tuple(stream.get(name) for name in (
-        "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries",
-        "avg_frame_rate", "r_frame_rate",
-    ))
+    pixel_format = str(stream.get("pix_fmt") or "").lower()
+    color_space = str(stream.get("color_space") or "").lower()
+    if (
+        pixel_format.startswith("gbr")
+        or pixel_format in {"rgb24", "rgba", "bgra", "argb", "abgr"}
+    ) and color_space in {"", "unknown", "unspecified", "reserved", "gbr"}:
+        color_space = "gbr"
+    return (
+        stream.get("width"),
+        stream.get("height"),
+        stream.get("pix_fmt"),
+        stream.get("color_range"),
+        color_space,
+        stream.get("color_transfer"),
+        stream.get("color_primaries"),
+        stream.get("avg_frame_rate"),
+        stream.get("r_frame_rate"),
+    )
+
+
+def _read_exact(stream, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = int(size)
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def max_abs_rgba_error(
+    ffmpeg: str,
+    baseline: Path,
+    candidate: Path,
+    *,
+    width: int,
+    height: int,
+) -> int:
+    frame_bytes = max(1, int(width)) * max(1, int(height)) * 4
+    command = [
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-i", None, "-map", "0:v:0", "-an", "-sn",
+        "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1",
+    ]
+    processes: list[subprocess.Popen] = []
+    try:
+        for path in (baseline, candidate):
+            current = [str(path) if value is None else value for value in command]
+            process = subprocess.Popen(
+                current,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            processes.append(process)
+        assert processes[0].stdout is not None and processes[1].stdout is not None
+        maximum = 0
+        while True:
+            left = _read_exact(processes[0].stdout, frame_bytes)
+            right = _read_exact(processes[1].stdout, frame_bytes)
+            if not left and not right:
+                break
+            if len(left) != frame_bytes or len(right) != frame_bytes:
+                raise RuntimeError("RGBA parity decode ended on mismatched/partial frames")
+            a = np.frombuffer(left, dtype=np.uint8).astype(np.int16)
+            b = np.frombuffer(right, dtype=np.uint8).astype(np.int16)
+            maximum = max(maximum, int(np.max(np.abs(a - b))))
+        for process in processes:
+            if process.wait(timeout=30) != 0:
+                raise RuntimeError("RGBA parity decode failed")
+        return maximum
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
 
 
 def metric(ffmpeg: str, baseline: Path, candidate: Path, name: str, timeout: float) -> float:
@@ -346,6 +425,9 @@ def main() -> int:
         )
         psnr = metric(ffmpeg, baseline, candidate, "psnr", args.timeout)
         ssim = metric(ffmpeg, baseline, candidate, "ssim", args.timeout)
+        max_abs_error = max_abs_rgba_error(
+            ffmpeg, baseline, candidate, width=width, height=height
+        )
         evidence = GpuCompositorEvidence(
             baseline_seconds=baseline_seconds,
             candidate_seconds=candidate_seconds,
@@ -353,9 +435,10 @@ def main() -> int:
             ssim=ssim,
             frame_count_ok=frame_count_ok,
             metadata_ok=metadata_ok,
-            alpha_contract_ok=psnr >= 80.0 and ssim >= 0.999999,
+            alpha_contract_ok=max_abs_error <= COMPOSITOR_MAX_ABS_ERROR,
             audio_sync_ok=audio_sync_ok,
             reference_id=COMPOSITOR_REFERENCE_ID,
+            max_abs_error=max_abs_error,
         )
         recorded = GpuCompositorStore(args.cache).record(key, evidence)
 
@@ -376,6 +459,9 @@ def main() -> int:
         "speedup": evidence.speedup,
         "psnr_db": evidence.psnr_db,
         "ssim": evidence.ssim,
+        "max_abs_error": evidence.max_abs_error,
+        "baseline_signature": list(signature(bv)),
+        "candidate_signature": list(signature(cv)),
         "frame_count_ok": evidence.frame_count_ok,
         "metadata_ok": evidence.metadata_ok,
         "audio_sync_ok": evidence.audio_sync_ok,

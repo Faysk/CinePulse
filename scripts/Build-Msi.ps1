@@ -22,8 +22,9 @@ function ConvertTo-MsiVersion {
     $Major = [int]$Matches.major
     $Minor = [int]$Matches.minor
     $Patch = [int]$Matches.patch
-    $Stage = $Matches.stage
-    $Serial = if ($Matches.serial) { [int]$Matches.serial } else { 0 }
+    $Stage = $Matches['stage']
+    $SerialText = $Matches['serial']
+    $Serial = if ($SerialText) { [int]$SerialText } else { 0 }
     $Channel = switch -Regex ($Stage) {
         '^(alpha|a)$' { 100 + [Math]::Min($Serial, 99); break }
         '^(beta|b)$' { 300 + [Math]::Min($Serial, 99); break }
