@@ -6564,7 +6564,9 @@ class VideoOptimizerStudio:
             demucs_staging = cache_root / f".demucs-partial-{os.getpid()}-{time.time_ns()}"
             safe_rmtree(demucs_staging)
             demucs_staging.mkdir(parents=True, exist_ok=True)
-            command = build_demucs_command(\n                ai_suite.VENV_PYTHON, model_repo, demucs_staging, source, use_cpu, self._hardware.gpu_index,\n            )
+            command = build_demucs_command(
+                ai_suite.VENV_PYTHON, model_repo, demucs_staging, source, use_cpu, self._hardware.gpu_index,
+            )
             self._log("Comando Demucs: " + subprocess.list2cmdline(command))
             process = subprocess.Popen(
                 command,
